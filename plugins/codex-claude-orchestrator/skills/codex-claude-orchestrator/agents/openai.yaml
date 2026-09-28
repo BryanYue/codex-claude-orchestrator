@@ -1,0 +1,6 @@
+interface:
+  display_name: "Codex–Claude 协作"
+  short_description: "按项目规格推进任务，由 Codex 监督 Claude，查看简洁进度并核验结果"
+  default_prompt: "使用 $codex-claude-orchestrator 让当前项目采用协作流程，以后按规格和已确认计划自然推进。"
+policy:
+  allow_implicit_invocation: true

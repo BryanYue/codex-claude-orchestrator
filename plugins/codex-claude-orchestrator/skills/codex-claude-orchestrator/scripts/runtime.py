@@ -1,0 +1,1165 @@
+"""In-process registry for supervised bridge runs; intended for asyncio.to_thread callers."""
+from __future__ import annotations
+
+import fcntl
+import hashlib
+import json
+import os
+import secrets
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from pathlib import Path
+from typing import Any
+
+try:
+    from . import bridge
+    from .events import append, latest, latest_meaningful, read, statistics
+except ImportError:  # executed from the scripts directory by the MCP server
+    import bridge  # type: ignore
+    from events import append, latest, latest_meaningful, read, statistics  # type: ignore
+
+
+ACTIVE = {"starting", "running", "executing", "collecting", "cancelling"}
+FINAL = {"reported", "blocked", "failed", "cancelled", "timeout", "unknown"}
+PHASES = {"preflight", "starting", "executing", "collecting", "reported", "blocked", "failed", "cancelled", "timeout", "unknown", "cancelling"}
+_NO_REGISTRY_CHANGE = object()
+_LOCAL_LANES: dict[str, Any] = {}
+_LOCAL_LANES_GUARD = threading.RLock()
+
+
+def workspace_changes(before: Any, after: Any) -> dict[str, Any]:
+    """Compare recorded observations, never assign authorship from Git dirtiness."""
+    result = {"status": "unknown", "changed_files": None,
+              "preexisting_dirty_files": None, "worktree_dirty_files": None,
+              "coverage": "snapshot evidence unavailable",
+              "attribution": "observed between snapshots; not proof of which actor changed a file"}
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return result
+    if before.get("kind") == "artifacts" and after.get("kind") == "artifacts":
+        result.update(status="observed", changes=bridge.artifact_snapshot_difference(before, after),
+                      coverage="declared file contents and directory structure; other file contents not inspected")
+        return result
+    required = ("head", "status_entries", "diff_hash", "dirty_content_hashes", "guarded_content_hashes")
+    if not all(all(key in snap for key in required) for snap in (before, after)):
+        return result
+    def paths(snap):
+        return {entry[key] for entry in snap["status_entries"] for key in ("path", "original") if entry.get(key)}
+    old_paths, new_paths = paths(before), paths(after)
+    result.update(preexisting_dirty_files=sorted(old_paths), worktree_dirty_files=sorted(new_paths),
+                  coverage="Git status, dirty and declared file hashes; ignored files not enumerated; intermediate edits not observed")
+    old = {**before["dirty_content_hashes"], **before["guarded_content_hashes"]}
+    new = {**after["dirty_content_hashes"], **after["guarded_content_hashes"]}
+    changed = old_paths ^ new_paths
+    changed.update(path for path in old.keys() | new.keys() if old.get(path) != new.get(path))
+    statuses = lambda snap: {entry["path"]: (entry["xy"], entry.get("original")) for entry in snap["status_entries"]}
+    old_status, new_status = statuses(before), statuses(after)
+    changed.update(path for path in old_status.keys() | new_status.keys() if old_status.get(path) != new_status.get(path))
+    result["observed_changed_files"] = sorted(changed)
+    # A HEAD change or an otherwise unlocated index-only diff cannot be mapped
+    # to a complete path list using these snapshots. Never turn it into zero.
+    if before["head"] != after["head"] or (before["diff_hash"] != after["diff_hash"] and not changed):
+        result["coverage"] += "; HEAD/index change cannot be fully attributed to paths"
+        return result
+    result.update(status="observed", changed_files=sorted(changed))
+    return result
+
+
+class Runtime:
+    """Thread-safe owner of bridge subprocesses; this is not a persistent daemon."""
+    def __init__(self, state_root: Path):
+        self.state_root = Path(state_root).expanduser().resolve()
+        self.runs_root = self.state_root / "runs"
+        self.packets_root = self.state_root / "packets"
+        self.logs_root = self.state_root / "bridge-logs"
+        for directory in (self.state_root, self.runs_root, self.packets_root, self.logs_root):
+            directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.registry_path = self.state_root / "registry.json"
+        self.registry_lock_path = self.state_root / "registry.lock"
+        self.owner_id = secrets.token_urlsafe(12)
+        self._guard = threading.RLock()
+        self._workers: dict[str, tuple[subprocess.Popen[str], Any]] = {}
+        self._closing = False
+        self._reconcile_incomplete()
+
+    def _registry(self) -> dict[str, Any]:
+        if not self.registry_path.exists():
+            return {"runs": {}}
+        return json.loads(self.registry_path.read_text(encoding="utf-8"))
+
+    def _update(self, mutate):
+        with self.registry_lock_path.open("a+") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            data = self._registry()
+            result = mutate(data)
+            if result is _NO_REGISTRY_CHANGE:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+                return None
+            tmp = self.registry_path.with_name(f".registry.{secrets.token_hex(6)}.tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            os.replace(tmp, self.registry_path)
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+            return result
+
+    def _lane_lock(self, cwd: str):
+        cwd = str(Path(cwd).resolve())
+        with _LOCAL_LANES_GUARD:
+            if cwd in _LOCAL_LANES:
+                raise RuntimeError("another supervised run already owns this cwd")
+            return self._open_lane_lock(cwd)
+
+    def _open_lane_lock(self, cwd: str):
+        root = Path(tempfile.gettempdir()) / "codex-claude-cwd-locks"
+        root.mkdir(mode=0o700, exist_ok=True)
+        key = hashlib.sha256(cwd.encode()).hexdigest()
+        handle = (root / f"{key}.lock").open("a+")
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            handle.close()
+            raise RuntimeError("another supervised run already owns this cwd")
+        _LOCAL_LANES[cwd] = handle
+        return handle
+
+    def _release_lane(self, cwd: str, handle) -> None:
+        cwd = str(Path(cwd).resolve())
+        with _LOCAL_LANES_GUARD:
+            if _LOCAL_LANES.get(cwd) is handle:
+                _LOCAL_LANES.pop(cwd, None)
+            handle.close()
+
+    def _unknown_marker(self, cwd: str) -> Path:
+        root = Path(tempfile.gettempdir()) / "codex-claude-cwd-unknown"
+        root.mkdir(mode=0o700, exist_ok=True)
+        return root / (hashlib.sha256(str(Path(cwd).resolve()).encode()).hexdigest() + ".json")
+
+    def _mark_unknown_lane(self, cwd: str, run_id: str, reason: str) -> None:
+        marker = self._unknown_marker(cwd)
+        tmp = marker.with_name("." + marker.name + ".tmp")
+        tmp.write_text(json.dumps({"cwd": cwd, "run_id": run_id, "reason": reason, "recorded_at": time.time()}) + "\n")
+        os.replace(tmp, marker)
+
+    def _require_matching_unknown_marker(self, cwd: str, run_id: str) -> Path:
+        """Return this run's marker, rejecting a malformed or foreign one."""
+        marker = self._unknown_marker(cwd)
+        if not marker.exists():
+            return marker
+        marker_value = self._read_json(marker)
+        if not isinstance(marker_value, dict) or marker_value.get("run_id") != run_id:
+            raise RuntimeError("cwd unknown marker belongs to another or malformed recovery record; it was not cleared")
+        return marker
+
+    def _clear_matching_unknown_marker(self, cwd: str, run_id: str) -> None:
+        """Clear only this run's admission marker while its CWD lane is held."""
+        marker = self._require_matching_unknown_marker(cwd, run_id)
+        if not marker.exists():
+            return
+        marker.unlink()
+
+    @staticmethod
+    def _has_reconciliation(record: dict[str, Any]) -> bool:
+        reconciliation = record.get("reconciliation")
+        return isinstance(reconciliation, dict) and reconciliation.get("outcome") == "confirmed_stopped"
+
+    @classmethod
+    def _unreconciled_unknown(cls, record: dict[str, Any]) -> bool:
+        return record.get("status") == "unknown" and not cls._has_reconciliation(record)
+
+    def _reconcile_incomplete(self) -> None:
+        # A free lane proves that no bridge still owns the CWD.  Before falling
+        # back to unknown, adopt a terminal receipt only when it is bound to the
+        # exact run/packet and all recorded process groups are gone.
+        data = self._registry()
+        for run_id, record in data.get("runs", {}).items():
+            if record.get("status") not in ACTIVE and not self._unreconciled_unknown(record):
+                continue
+            try:
+                lock = self._lane_lock(record["cwd"])
+            except RuntimeError:
+                if record.get("status") in ACTIVE:
+                    self._refresh(run_id, allow_unowned_active=True)
+                continue
+            try:
+                evidence = self._trusted_terminal(record)
+                if evidence:
+                    self._adopt_trusted_terminal(run_id, evidence)
+                elif record.get("status") in ACTIVE:
+                    self._mark_run_unknown(run_id, "runtime restarted without a confirmed owner; manual reconciliation required")
+            finally:
+                self._release_lane(record["cwd"], lock)
+
+    def _packet_path(self, run_id: str) -> Path:
+        return self.packets_root / f"{run_id}.json"
+
+    def _lifecycle_path(self, run_id: str) -> Path:
+        return self.state_root / "bridge-receipts" / f"{run_id}.json"
+
+    @staticmethod
+    def _file_sha256(path: Path) -> str | None:
+        try:
+            return hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError:
+            return None
+
+    def _packet_binding(self, record: dict[str, Any], *, require_run_copy: bool) -> dict[str, Any] | None:
+        run_id = record.get("run_id")
+        if not isinstance(run_id, str):
+            return None
+        packet_path = self._packet_path(run_id)
+        expected_sha = record.get("packet_sha256")
+        try:
+            packet_bytes = packet_path.read_bytes()
+        except OSError:
+            return None
+        actual_sha = hashlib.sha256(packet_bytes).hexdigest()
+        if expected_sha is not None and (not isinstance(expected_sha, str) or actual_sha != expected_sha):
+            return None
+        try:
+            packet = json.loads(packet_bytes)
+        except (ValueError, TypeError):
+            return None
+        if not isinstance(packet, dict):
+            return None
+        if (packet.get("task_id") != record.get("task_id") or packet.get("revision") != record.get("revision")
+                or packet.get("cwd") != record.get("cwd")):
+            return None
+        descriptor_sha = record.get("cli_descriptor_sha256")
+        if descriptor_sha:
+            descriptor_path = self.packets_root / f"{run_id}.cli.json"
+            if self._file_sha256(descriptor_path) != descriptor_sha:
+                return None
+            run_descriptor = self._run_dir(run_id) / "cli-selection.json"
+            if require_run_copy and self._read_json(run_descriptor) != self._read_json(descriptor_path):
+                return None
+        if record.get("run_dir") != str(self._run_dir(run_id)):
+            return None
+        if record.get("model") is not None and packet.get("model") != record.get("model"):
+            return None
+        if require_run_copy:
+            try:
+                run_packet = json.loads((self._run_dir(run_id) / "packet.json").read_bytes())
+                if run_packet != packet:
+                    return None
+            except (OSError, ValueError, TypeError):
+                return None
+        return packet
+
+    def _trusted_terminal(self, record: dict[str, Any]) -> dict[str, Any] | None:
+        """Return bound terminal evidence; process/lane absence is checked by the caller."""
+        run_id = record.get("run_id")
+        if not isinstance(run_id, str) or self._packet_binding(record, require_run_copy=False) is None:
+            return None
+        lifecycle = self._read_json(self._lifecycle_path(run_id))
+        if isinstance(record.get("packet_sha256"), str) and isinstance(lifecycle, dict):
+            bound = (lifecycle.get("schema_version") == 1 and lifecycle.get("run_id") == run_id
+                     and lifecycle.get("task_id") == record.get("task_id")
+                     and lifecycle.get("revision") == record.get("revision")
+                     and lifecycle.get("cwd") == record.get("cwd")
+                     and lifecycle.get("packet_sha256") == record.get("packet_sha256"))
+            if record.get("cli_descriptor_sha256"):
+                bound = bound and lifecycle.get("cli_descriptor_sha256") == record["cli_descriptor_sha256"]
+            status = lifecycle.get("status")
+            started = lifecycle.get("child_started")
+            phase = lifecycle.get("phase")
+            shape = ((started is False and phase == "pre_dispatch" and status != "reported")
+                     or (started is True and phase == "terminal"))
+            if bound and lifecycle.get("terminal") is True and status in FINAL and shape:
+                bridge_pid = lifecycle.get("bridge_pid", record.get("bridge_process_group"))
+                bridge_state = self._process_presence(bridge_pid, group=True, label="bridge process group",
+                                                      identity=lifecycle.get("bridge_identity") or record.get("bridge_identity"))
+                if bridge_state["state"] != "stopped":
+                    return None
+                if started:
+                    child_group = lifecycle.get("child_process_group")
+                    child_state = self._process_presence(child_group, group=True, label="Claude child process group",
+                                                         identity=lifecycle.get("child_identity"))
+                    if child_state["state"] != "stopped":
+                        return None
+                return {"status": status, "source": "bridge_lifecycle", "value": lifecycle}
+
+        # Backward compatibility for 0.4.0 runs that completed after their
+        # Runtime owner died.  A missing child.json is deliberately not enough:
+        # Popen can succeed before child.json is persisted.
+        legacy_packet = self._packet_binding(record, require_run_copy=True)
+        if legacy_packet is None:
+            return None
+        try:
+            normalized_legacy = bridge.validate_packet(dict(legacy_packet))
+        except Exception:
+            return None
+        if (normalized_legacy.get("task_id") != record.get("task_id")
+                or normalized_legacy.get("revision") != record.get("revision")
+                or normalized_legacy.get("cwd") != record.get("cwd")):
+            return None
+        run_dir = self._run_dir(run_id)
+        receipt = self._read_json(run_dir / "receipt.json")
+        if not isinstance(receipt, dict) or receipt.get("status") not in FINAL:
+            return None
+        if receipt.get("task_id") != record.get("task_id") or receipt.get("revision") != record.get("revision"):
+            return None
+        bridge_state = self._process_presence(record.get("bridge_process_group"), group=True,
+                                              label="recorded bridge process group", identity=record.get("bridge_identity"))
+        child = self._read_json(run_dir / "child.json")
+        child_group = child.get("process_group") if isinstance(child, dict) else None
+        child_state = self._process_presence(child_group, group=True, label="recorded Claude child process group",
+                                             identity=child.get("identity") if isinstance(child, dict) else None)
+        if bridge_state["state"] == "stopped" and child_state["state"] == "stopped":
+            return {"status": receipt["status"], "source": "bound_run_receipt", "value": receipt}
+        return None
+
+    def _mark_run_unknown(self, run_id: str, summary: str) -> None:
+        def mark(data):
+            rec = data.get("runs", {}).get(run_id)
+            if not rec or rec.get("status") in FINAL:
+                return _NO_REGISTRY_CHANGE
+            rec.update(status="unknown", phase="unknown", updated_at=time.time(), ended_at=time.time(), summary=summary)
+        self._update(mark)
+        current = self._registry().get("runs", {}).get(run_id, {})
+        if current.get("status") == "unknown":
+            self._mark_unknown_lane(current.get("cwd", ""), run_id, summary)
+
+    def _adopt_trusted_terminal(self, run_id: str, evidence: dict[str, Any]) -> None:
+        self._refresh(run_id, trusted_terminal=evidence)
+        current = self._registry().get("runs", {}).get(run_id, {})
+        if current.get("status") == "unknown":
+            self._mark_unknown_lane(current.get("cwd", ""), run_id, "bridge returned a trustworthy unknown terminal receipt")
+            return
+        marker = self._unknown_marker(current.get("cwd", ""))
+        if marker.exists():
+            marker_value = self._read_json(marker)
+            if isinstance(marker_value, dict) and marker_value.get("run_id") == run_id:
+                marker.unlink()
+
+    def _sync_unowned(self, run_id: str) -> None:
+        with self._guard:
+            record = self._registry().get("runs", {}).get(run_id)
+            if not record or (record.get("status") not in ACTIVE and not self._unreconciled_unknown(record)):
+                return
+            # A UI snapshot of an unresolved unknown run must not contend for
+            # the CWD lane unless there is terminal evidence it can actually
+            # adopt.  Reconciliation still reacquires the lane and rechecks all
+            # evidence before changing any state.
+            if self._unreconciled_unknown(record):
+                candidate = self._trusted_terminal(record)
+                if candidate is None or candidate.get("status") == "unknown":
+                    return
+            try:
+                lane = self._lane_lock(record["cwd"])
+            except RuntimeError:
+                if record.get("status") in ACTIVE:
+                    self._refresh(run_id, allow_unowned_active=True)
+                return
+            try:
+                current = self._registry().get("runs", {}).get(run_id)
+                if not current or (current.get("status") not in ACTIVE and not self._unreconciled_unknown(current)):
+                    return
+                evidence = self._trusted_terminal(current)
+                if evidence and (current.get("status") in ACTIVE or evidence.get("status") != "unknown"):
+                    self._adopt_trusted_terminal(run_id, evidence)
+                elif current.get("status") in ACTIVE:
+                    self._mark_run_unknown(run_id, "bridge ownership ended without a trustworthy terminal receipt; manual reconciliation required")
+            finally:
+                self._release_lane(record["cwd"], lane)
+
+    def _run_dir(self, run_id: str) -> Path:
+        if not isinstance(run_id, str) or not run_id.startswith("run-") or any(c not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-" for c in run_id[4:]):
+            raise ValueError("invalid run_id")
+        return self.runs_root / run_id
+
+    def start(self, packet: dict, timeout: float = 300, resume_run_id: str | None = None) -> dict:
+        if not isinstance(timeout, (int, float)) or timeout <= 0:
+            raise ValueError("timeout must be positive")
+        normalized = bridge.validate_packet(packet)
+        with self._guard:
+            if self._closing:
+                raise RuntimeError("runtime is closing; it will not dispatch a new Claude process")
+            lane = self._lane_lock(normalized["cwd"])
+            proc = None
+            thread = None
+            stdout = None
+            stderr = None
+            cancel_request = None
+            try:
+                # Holding the lane lets this Runtime safely settle an orphaned
+                # prior record before deciding whether a new dispatch is legal.
+                for old in self._registry().get("runs", {}).values():
+                    if old.get("cwd") != normalized["cwd"] or (old.get("status") not in ACTIVE and not self._unreconciled_unknown(old)):
+                        continue
+                    evidence = self._trusted_terminal(old)
+                    if evidence:
+                        self._adopt_trusted_terminal(old["run_id"], evidence)
+                    elif old.get("status") in ACTIVE:
+                        self._mark_run_unknown(old["run_id"], "prior bridge no longer owns the cwd and has no trustworthy terminal receipt")
+                if self._unknown_marker(normalized["cwd"]).exists():
+                    raise RuntimeError("cwd has an unknown prior supervised run; reconcile it manually before dispatch")
+                registry = self._registry()
+                same_task = [r for r in registry.get("runs", {}).values() if r.get("task_id") == normalized["task_id"] and r.get("cwd") == normalized["cwd"]]
+                if any(self._unreconciled_unknown(r) for r in registry.get("runs", {}).values() if r.get("cwd") == normalized["cwd"]):
+                    raise RuntimeError("cwd has an unknown recorded run; reconcile it manually before dispatch")
+                if any(r.get("revision") == normalized["revision"] for r in same_task):
+                    raise ValueError("task revision already exists for this cwd")
+                if same_task and normalized["revision"] <= max(r["revision"] for r in same_task):
+                    raise ValueError("task revision must strictly increase for this cwd")
+                previous = None
+                if resume_run_id:
+                    previous = registry.get("runs", {}).get(resume_run_id)
+                    if not previous:
+                        raise ValueError("resume_run_id was not found")
+                    if (previous.get("status") != "reported" or previous.get("superseded_by") or previous.get("task_id") != normalized["task_id"]
+                            or previous.get("cwd") != normalized["cwd"] or normalized["revision"] <= previous.get("revision", 0)):
+                        raise RuntimeError("resume_run_id must have a reported terminal receipt")
+                    bridge.validate_resume(normalized, Path(previous["run_dir"]))
+                else:
+                    candidates = [r for r in same_task if r.get("revision", 0) < normalized["revision"]]
+                    previous = max(candidates, key=lambda r: r["revision"]) if candidates else None
+                cli_descriptor = bridge.create_cli_descriptor(normalized, Path(previous["run_dir"]) if resume_run_id else None)
+                run_id = "run-" + secrets.token_urlsafe(12).replace("-", "_")
+                run_dir = self._run_dir(run_id)
+                packet_path = self.packets_root / f"{run_id}.json"
+                packet_path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                packet_sha256 = self._file_sha256(packet_path)
+                cli_path = self.packets_root / f"{run_id}.cli.json"
+                bridge.dump(cli_path, cli_descriptor)
+                cli_sha256 = self._file_sha256(cli_path)
+                lifecycle_path = self._lifecycle_path(run_id)
+                lifecycle_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                record = {"run_id": run_id, "task_id": normalized["task_id"], "revision": normalized["revision"], "cwd": normalized["cwd"],
+                          "status": "starting", "phase": "starting", "started_at": time.time(), "updated_at": time.time(),
+                          "last_activity_at": None, "model": normalized["model"], "session_id": None, "summary": "bridge starting",
+                          "requested_model": normalized["model"], "effort": normalized["effort"],
+                          "objective": normalized["objective"], "role": normalized["role"],
+                          "scope": {"cwd": normalized["cwd"], "owned_files": normalized["owned_files"],
+                                    "input_files": normalized.get("input_files", [])},
+                          "decision": None, "previous_run_id": previous.get("run_id") if previous else None, "run_dir": str(run_dir),
+                          "owner_id": self.owner_id, "packet_sha256": packet_sha256, "lifecycle_file": str(lifecycle_path),
+                          "cli_descriptor_file": str(cli_path), "cli_descriptor_sha256": cli_sha256,
+                          "cli_identity_id": cli_descriptor.get("identity_id"),
+                          "changed_files": None, "workspace_changes": workspace_changes(None, None),
+                          "environment": {"isolation": "bridge hook constraints only; no OS sandbox claim"}}
+                record["events_count"] = 0
+                def register(data):
+                    data.setdefault("runs", {})[run_id] = record
+                    for old in data["runs"].values():
+                        if old.get("task_id") == normalized["task_id"] and old.get("cwd") == normalized["cwd"] and old.get("revision", 0) < normalized["revision"]:
+                            old.setdefault("superseded_by", run_id)
+                            old["updated_at"] = time.time()
+                self._update(register)
+                command = [sys.executable, str(Path(bridge.__file__).resolve()), "run", "--packet", str(packet_path), "--run-dir", str(run_dir), "--timeout", str(timeout),
+                           "--cli-descriptor", str(cli_path), "--cli-descriptor-sha256", cli_sha256]
+                if resume_run_id:
+                    command += ["--resume-from", previous["run_dir"]]
+                stdout = (self.logs_root / f"{run_id}.stdout.log").open("w", encoding="utf-8")
+                stderr = (self.logs_root / f"{run_id}.stderr.log").open("w", encoding="utf-8")
+                environment = dict(os.environ)
+                environment["CODEX_CLAUDE_LANE_FD"] = str(lane.fileno())
+                cancel_request = self.state_root / "cancel-requests" / f"{run_id}.json"
+                environment["CODEX_BRIDGE_CANCEL_FILE"] = str(cancel_request)
+                environment["CODEX_BRIDGE_LIFECYCLE_FILE"] = str(lifecycle_path)
+                cancel_request.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                proc = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr, text=True, start_new_session=True,
+                                        env=environment, pass_fds=(lane.fileno(),))
+                bridge_identity = bridge.capture_process_identity(proc.pid)
+                self._update(lambda data: data["runs"][run_id].update(bridge_pid=proc.pid, bridge_process_group=proc.pid,
+                                                                        bridge_identity=bridge_identity,
+                                                                        updated_at=time.time()))
+                self._workers[run_id] = (proc, lane)
+                thread = threading.Thread(target=self._watch, args=(run_id, proc, lane, stdout, stderr), daemon=True)
+                thread.start()
+                return self.snapshot(run_id)
+            except Exception as exc:
+                watcher_alive = thread is not None and thread.is_alive()
+                if proc is not None and "run_id" in locals():
+                    # The bridge exists and inherited the CWD lane FD.  Do not
+                    # relabel this as a spawn failure or signal the process
+                    # tree: request cancellation through the durable file
+                    # protocol and leave an auditable unknown until the bridge
+                    # and any Claude child are confirmed stopped.
+                    request = {"reason": f"runtime supervision setup failed: {exc}",
+                               "requested_at": time.time(), "requested_by": self.owner_id}
+                    try:
+                        if cancel_request is not None:
+                            bridge.dump(cancel_request, request)
+                    except Exception:
+                        pass
+                    try:
+                        if run_dir.is_dir():
+                            bridge.dump(run_dir / "cancel.json", request)
+                    except Exception:
+                        pass
+                    def mark_post_spawn_unknown(data):
+                        rec = data.get("runs", {}).get(run_id)
+                        if rec:
+                            rec.update(status="unknown", phase="unknown", updated_at=time.time(),
+                                       bridge_pid=proc.pid, bridge_process_group=proc.pid,
+                                       supervision_failure={"stage": "post_bridge_popen", "error": str(exc),
+                                                            "cancel_requested_at": request["requested_at"]},
+                                       summary="runtime lost supervision after bridge start; cancellation requested and recovery evidence is required")
+                    try:
+                        self._update(mark_post_spawn_unknown)
+                    except Exception:
+                        pass
+                    try:
+                        self._mark_unknown_lane(normalized["cwd"], run_id, "runtime supervision failed after bridge start")
+                    except Exception:
+                        pass
+                    if not watcher_alive:
+                        # Keep one owner for the Popen handle and lane when the
+                        # runtime can still create a recovery watcher.  It only
+                        # reaps and records the already-cancel-requested bridge;
+                        # it does not signal it.
+                        recovery_thread = threading.Thread(target=self._watch,
+                                                           args=(run_id, proc, lane, stdout, stderr), daemon=True)
+                        self._workers[run_id] = (proc, lane)
+                        try:
+                            recovery_thread.start()
+                            watcher_alive = True
+                        except Exception:
+                            self._workers.pop(run_id, None)
+                    if not watcher_alive:
+                        for handle in (stdout, stderr):
+                            if handle is not None and not handle.closed:
+                                handle.close()
+                        self._release_lane(normalized["cwd"], lane)
+                    raise
+                if "run_id" in locals():
+                    try:
+                        for handle in (stdout, stderr):
+                            if handle is not None and not handle.closed:
+                                handle.close()
+                        self._update(lambda data: data["runs"][run_id].update(status="failed", phase="failed", updated_at=time.time(),
+                                                                              summary=f"bridge spawn failed before process start: {exc}"))
+                    except Exception:
+                        pass
+                self._release_lane(normalized["cwd"], lane)
+                raise
+
+    def _watch(self, run_id, proc, lane, stdout, stderr) -> None:
+        packet = self._read_json(self._packet_path(run_id)) or {}
+        cwd = packet.get("cwd") if isinstance(packet.get("cwd"), str) else ""
+        terminated = False
+        try:
+            proc.wait()
+            terminated = True
+            stdout.close(); stderr.close()
+            self._archive_bridge_logs(run_id)
+            current = self._registry().get("runs", {}).get(run_id, {})
+            if isinstance(current.get("cwd"), str):
+                cwd = current["cwd"]
+            trusted_terminal = self._trusted_terminal(current) if current else None
+            self._refresh(run_id, proc.returncode, owned=True, trusted_terminal=trusted_terminal)
+            final = self._registry().get("runs", {}).get(run_id, {})
+            if isinstance(final.get("cwd"), str):
+                cwd = final["cwd"]
+            if final.get("status") == "unknown":
+                self._mark_unknown_lane(cwd, run_id, "bridge exited without a trustworthy terminal receipt")
+            else:
+                self._clear_matching_unknown_marker(cwd, run_id)
+        except Exception as exc:
+            if terminated and cwd:
+                try:
+                    self._mark_unknown_lane(cwd, run_id, f"runtime watcher failed after bridge exit: {exc}")
+                except Exception:
+                    pass
+        finally:
+            for handle in (stdout, stderr):
+                try:
+                    if handle is not None and not handle.closed:
+                        handle.close()
+                except Exception:
+                    pass
+            # Releasing this process's lane is safe only after wait() confirms
+            # the bridge has exited.  The lifecycle/unknown evidence remains
+            # available for a later Runtime to reconcile any Claude child.
+            if terminated:
+                try:
+                    self._release_lane(cwd, lane)
+                finally:
+                    with self._guard:
+                        self._workers.pop(run_id, None)
+
+    def _archive_bridge_logs(self, run_id: str) -> None:
+        run_dir = self._run_dir(run_id)
+        if not run_dir.exists():
+            return
+        for source, name in ((self.logs_root / f"{run_id}.stdout.log", "runtime_bridge.stdout.log"),
+                             (self.logs_root / f"{run_id}.stderr.log", "runtime_bridge.stderr.log")):
+            try:
+                os.replace(source, run_dir / name)
+            except OSError:
+                pass
+
+    def _refresh(self, run_id: str, exit_code: int | None = None, owned: bool = False,
+                 allow_unowned_active: bool = False, trusted_terminal: dict[str, Any] | None = None) -> None:
+        run_dir = self._run_dir(run_id)
+        current = self._registry().get("runs", {}).get(run_id)
+        if not current:
+            return
+        if allow_unowned_active and self._packet_binding(current, require_run_copy=run_dir.is_dir()) is None:
+            return
+        state = self._read_json(run_dir / "state.json") or {}
+        receipt = self._read_json(run_dir / "receipt.json") or {}
+        result = self._read_json(run_dir / "result.json") or {}
+        event_count, last_event = statistics(run_dir)
+        status = (trusted_terminal or {}).get("status") or receipt.get("status") or state.get("status") or current.get("status", "unknown")
+        # A receipt can become visible just before the owned watcher archives
+        # bridge logs and publishes its exit code.  Keep that local run active
+        # until the watcher completes evidence finalization.  Unowned recovery
+        # still adopts a bound terminal lifecycle receipt through
+        # trusted_terminal after acquiring the now-free lane.
+        local_terminal_pending = (owned and exit_code is None and run_id in self._workers
+                                  and current.get("status") in ACTIVE and status in FINAL)
+        if local_terminal_pending:
+            status = "cancelling" if current.get("status") == "cancelling" else "collecting"
+        unconfirmed_unowned_terminal = allow_unowned_active and not trusted_terminal and status in FINAL
+        if unconfirmed_unowned_terminal:
+            state_status = state.get("status")
+            status = state_status if state_status in ACTIVE else current.get("status", "unknown")
+        # Reaping the outer bridge proves only that wrapper exited.  A final
+        # receipt is publishable by Runtime only after _trusted_terminal also
+        # proves its binding and every recorded process group has stopped.
+        if exit_code is not None and not trusted_terminal:
+            status = "unknown"
+        event_phase = last_event.get("status") if last_event else None
+        # Provider stream values such as init/success are evidence, not public
+        # Runtime phases.  Keep the lifecycle monotonic and meaningful while
+        # the bridge is still collecting a final result/receipt.
+        if event_phase in PHASES:
+            phase = event_phase
+        elif event_phase == "init":
+            phase = "executing"
+        elif event_phase == "success":
+            phase = "collecting"
+        else:
+            phase = current.get("phase") if current.get("phase") in PHASES else status
+        if local_terminal_pending:
+            phase = status
+        if unconfirmed_unowned_terminal and phase in FINAL:
+            phase = current.get("phase") if current.get("phase") in ACTIVE else status
+        if status in FINAL:
+            phase = status
+        structured_summary = ((result.get("structured") or {}).get("summary")
+                              if isinstance(result.get("structured"), dict) else None)
+        state_error = state.get("error")
+        receipt_reason = receipt.get("reason")
+        has_summary = bool(structured_summary or state_error or receipt_reason)
+        summary = structured_summary or state_error or receipt_reason or "run state recorded"
+        if local_terminal_pending:
+            summary = current.get("summary") or "bridge finalizing terminal evidence"
+        if unconfirmed_unowned_terminal:
+            summary = current.get("summary") or "run state recorded"
+        if current.get("status") == "cancelling" and status in ACTIVE:
+            summary = current.get("summary") or summary
+        if trusted_terminal:
+            terminal_value = trusted_terminal.get("value") if isinstance(trusted_terminal.get("value"), dict) else {}
+            if not has_summary:
+                summary = terminal_value.get("reason") or terminal_value.get("note") or summary
+        if exit_code is not None and not trusted_terminal and status == "unknown":
+            summary = "bridge exited without trustworthy stopped-process terminal evidence; inspect processes and workspace before retrying"
+        before = self._read_json(run_dir / "workspace_before.json") or self._read_json(run_dir / "git_before.json") or {}
+        after = self._read_json(run_dir / "workspace_after.json") or self._read_json(run_dir / "git_after.json") or {}
+        changes = workspace_changes(before, after)
+        environment = self._read_json(run_dir / "environment.json") or {}
+        live_identity = self._live_provider_identity(run_dir)
+        safe_environment = {"status": environment.get("status"), "cli_version": (environment.get("cli") or {}).get("version"),
+                            "auth_status": (environment.get("auth") or {}).get("status"),
+                            "cli_identity": environment.get("cli_descriptor"),
+                            "isolation": "bridge hook constraints only; no OS sandbox claim"}
+        def observation(rec):
+            current_status = rec.get("status")
+            if current_status in FINAL:
+                if not (current_status == "unknown" and trusted_terminal and status in FINAL):
+                    return None
+            if status in ACTIVE and not (owned or allow_unowned_active):
+                return None
+            effective_status = status
+            effective_phase = phase
+            if current_status == "cancelling" and status in ACTIVE and status != "cancelling":
+                effective_status = effective_phase = "cancelling"
+            ended_at = rec.get("ended_at")
+            if effective_status in FINAL and not ended_at:
+                ended_at = time.time()
+            updates = {"status": effective_status, "phase": effective_phase,
+                       "last_event": last_event or rec.get("last_event"),
+                       "last_activity_at": last_event["received_at"] if last_event else rec.get("last_activity_at"),
+                       "session_id": result.get("actual_session_id") or live_identity.get("session_id") or rec.get("session_id"),
+                       "initialized_model": result.get("initialized_model") or result.get("cli_resolved_model")
+                                            or result.get("system_init_model") or live_identity.get("initialized_model"),
+                       "cli_resolved_model": result.get("cli_resolved_model") or result.get("initialized_model")
+                                             or result.get("system_init_model") or live_identity.get("initialized_model"),
+                       "actual_models": (result.get("actual_models") if isinstance(result.get("actual_models"), list)
+                                         else result.get("provider_models") if isinstance(result.get("provider_models"), list)
+                                         else live_identity.get("actual_models", [])),
+                       "actual_model_source": result.get("actual_model_source") or live_identity.get("actual_model_source"),
+                       "provider_response_observed": bool(result.get("provider_response_observed")
+                                                          or result.get("provider_subtype") or live_identity.get("provider_response_observed")),
+                       "summary": summary, "events_count": event_count, "changed_files": changes["changed_files"], "workspace_changes": changes, "environment": safe_environment,
+                       "bridge_exit_code": exit_code if exit_code is not None else rec.get("bridge_exit_code"), "ended_at": ended_at}
+            updates["provider_models"] = list(updates["actual_models"])
+            updates["actual_model"] = updates["actual_models"][0] if len(updates["actual_models"]) == 1 else None
+            if trusted_terminal:
+                updates["terminal_evidence"] = trusted_terminal.get("source")
+            return updates
+
+        initial_updates = observation(current)
+        if initial_updates is None or all(current.get(key) == value for key, value in initial_updates.items()):
+            return
+
+        def mutate(data):
+            rec = data["runs"].get(run_id)
+            if not rec:
+                return _NO_REGISTRY_CHANGE
+            updates = observation(rec)
+            if updates is None:
+                return _NO_REGISTRY_CHANGE
+            if all(rec.get(key) == value for key, value in updates.items()):
+                return _NO_REGISTRY_CHANGE
+            updates["updated_at"] = time.time()
+            rec.update(updates)
+        self._update(mutate)
+
+    @staticmethod
+    def _live_provider_identity(run_dir: Path) -> dict[str, Any]:
+        """Extract only provider identity fields from an in-progress stream.
+
+        This deliberately does not surface assistant text, tool input, thinking,
+        or credentials through Runtime snapshots.
+        """
+        path = run_dir / "stream.jsonl"
+        try:
+            if path.stat().st_size > 2 * 1024 * 1024:
+                return {"session_id": None, "initialized_model": None, "actual_models": [],
+                        "actual_model_source": None, "provider_response_observed": False}
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            return {"session_id": None, "initialized_model": None, "actual_models": [],
+                    "actual_model_source": None, "provider_response_observed": False}
+        session = initialized_model = None
+        actual_models: list[str] = []
+        sources: list[str] = []
+        provider_response_observed = False
+        for line in lines:
+            try:
+                item = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "system" and item.get("subtype") == "init":
+                if isinstance(item.get("session_id"), str):
+                    session = item["session_id"]
+                if isinstance(item.get("model"), str):
+                    initialized_model = item["model"]
+            elif item.get("type") == "assistant":
+                provider_response_observed = True
+                message = item.get("message")
+                model = message.get("model") if isinstance(message, dict) else None
+                if not isinstance(model, str):
+                    model = item.get("model") if isinstance(item.get("model"), str) else None
+                if model and model not in actual_models:
+                    actual_models.append(model)
+                if model and "assistant_message" not in sources:
+                    sources.append("assistant_message")
+            elif item.get("type") == "result":
+                provider_response_observed = True
+                if isinstance(item.get("session_id"), str):
+                    session = item["session_id"]
+                model_usage = item.get("modelUsage")
+                if isinstance(model_usage, dict):
+                    usage_model_observed = False
+                    for model in model_usage:
+                        if isinstance(model, str) and model:
+                            usage_model_observed = True
+                            if model not in actual_models:
+                                actual_models.append(model)
+                    if usage_model_observed and "result_model_usage" not in sources:
+                        sources.append("result_model_usage")
+        return {"session_id": session, "initialized_model": initialized_model, "actual_models": actual_models,
+                "actual_model_source": "+".join(sources) or None,
+                "provider_response_observed": provider_response_observed}
+
+    @staticmethod
+    def _read_json(path: Path):
+        try: return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError): return None
+
+    @staticmethod
+    def _digest(value: Any) -> str:
+        material = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(material).hexdigest()
+
+    @staticmethod
+    def _process_presence(pid: Any, *, group: bool, label: str, identity: Any = None) -> dict[str, str]:
+        if group:
+            return bridge.process_identity_presence(identity, pid, label)
+        if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+            return {"state": "unconfirmed", "reason": f"{label} identity is missing or invalid"}
+        try:
+            if group:
+                os.killpg(pid, 0)
+            else:
+                os.kill(pid, 0)
+        except ProcessLookupError:
+            return {"state": "stopped", "reason": f"{label} is absent"}
+        except PermissionError:
+            return {"state": "unconfirmed", "reason": f"cannot inspect {label}"}
+        except OSError as exc:
+            return {"state": "unconfirmed", "reason": f"cannot inspect {label}: {exc}"}
+        return {"state": "running", "reason": f"{label} is still present"}
+
+    def _bound_lifecycle(self, record: dict[str, Any]) -> dict[str, Any] | None:
+        run_id = record.get("run_id")
+        if not isinstance(run_id, str):
+            return None
+        lifecycle = self._read_json(self._lifecycle_path(run_id))
+        if not isinstance(lifecycle, dict) or lifecycle.get("schema_version") != 1:
+            return None
+        keys = ("run_id", "task_id", "revision", "cwd", "packet_sha256")
+        if any(lifecycle.get(key) != record.get(key) for key in keys):
+            return None
+        if record.get("cli_descriptor_sha256") and lifecycle.get("cli_descriptor_sha256") != record.get("cli_descriptor_sha256"):
+            return None
+        return lifecycle
+
+    def _recovery_details(self, run_id: str, *, lane_available: bool | None = None) -> dict[str, Any]:
+        record = self._registry().get("runs", {}).get(run_id)
+        if not record:
+            raise ValueError("run_id was not found")
+        run_dir = self._run_dir(run_id)
+        lifecycle = self._bound_lifecycle(record)
+        detail: dict[str, Any] = {
+            "run_id": run_id,
+            "status": record.get("status"),
+            "reconciliation": record.get("reconciliation"),
+            "lane_available": lane_available,
+            "bridge": self._process_presence(record.get("bridge_process_group"), group=True,
+                                             label="recorded bridge process group", identity=record.get("bridge_identity")),
+        }
+        state = self._read_json(run_dir / "state.json") or {}
+        # State is written by bridge before its sole Claude Popen.  Prefer it
+        # when registry was persisted before Runtime learned the outer PID.
+        bridge_pid = state.get("pid") if isinstance(state, dict) else None
+        if isinstance(bridge_pid, int):
+            detail["bridge"] = self._process_presence(bridge_pid, group=True, label="bridge process group",
+                                                      identity=(lifecycle.get("bridge_identity") if isinstance(lifecycle, dict) else None)
+                                                               or record.get("bridge_identity"))
+        child = self._read_json(run_dir / "child.json") or {}
+        child_group = child.get("process_group") if isinstance(child, dict) else None
+        if isinstance(child_group, int):
+            detail["child"] = self._process_presence(child_group, group=True, label="recorded Claude child process group",
+                                                     identity=child.get("identity") if isinstance(child, dict) else None)
+        elif (isinstance(lifecycle, dict) and lifecycle.get("phase") == "pre_dispatch"
+              and lifecycle.get("child_started") is False):
+            detail["child"] = {"state": "stopped", "reason": "bound pre-dispatch lifecycle proves no Claude child was launched"}
+        elif isinstance(lifecycle, dict) and lifecycle.get("child_started") is True:
+            detail["child"] = self._process_presence(lifecycle.get("child_process_group"), group=True,
+                                                     label="lifecycle Claude child process group",
+                                                     identity=lifecycle.get("child_identity"))
+        else:
+            detail["child"] = {"state": "unconfirmed",
+                               "reason": "Claude child launch is unconfirmed; no bound pre-dispatch proof or durable child identity exists"}
+        packet = self._read_json(run_dir / "packet.json")
+        workspace: dict[str, Any] = {"state": "unconfirmed"}
+        if not isinstance(packet, dict):
+            workspace["reason"] = "packet.json is missing or malformed"
+        else:
+            try:
+                # bridge owns both Git and declared-artifact snapshot semantics.
+                # Old persisted packets predate workspace_kind, whose historical
+                # meaning was Git, so preserve that recovery path explicitly.
+                packet = dict(packet)
+                packet.setdefault("workspace_kind", "git")
+                snapshot = bridge.workspace_snapshot(packet)
+                digest = snapshot.get("workspace_digest")
+                workspace = {"state": "observed", "digest": digest if isinstance(digest, str) else self._digest(snapshot),
+                             "kind": snapshot.get("kind", packet["workspace_kind"])}
+                recorded = self._read_json(run_dir / "workspace_after.json")
+                if not isinstance(recorded, dict):
+                    recorded = self._read_json(run_dir / "git_after.json")
+                if isinstance(recorded, dict):
+                    recorded_digest = recorded.get("workspace_digest")
+                    workspace["recorded_after_digest"] = recorded_digest if isinstance(recorded_digest, str) else self._digest(recorded)
+                    workspace["matches_recorded_after"] = snapshot == recorded
+            except Exception as exc:
+                workspace["reason"] = f"cannot obtain current workspace evidence: {exc}"
+        detail["workspace"] = workspace
+        blocking: list[str] = []
+        if record.get("status") != "unknown":
+            blocking.append("run is not unknown")
+        if self._has_reconciliation(record):
+            blocking.append("unknown run already has a confirmed reconciliation")
+        if lane_available is not True:
+            blocking.append("cwd lane is not exclusively available")
+        if detail["bridge"]["state"] != "stopped":
+            blocking.append(detail["bridge"]["reason"])
+        if detail["child"]["state"] != "stopped":
+            blocking.append(detail["child"]["reason"])
+        if workspace.get("state") != "observed":
+            blocking.append(str(workspace.get("reason") or "current workspace evidence is unavailable"))
+        detail["blocking_reasons"] = blocking
+        detail["eligible"] = not blocking
+        return detail
+
+    def inspect_recovery(self, run_id: str) -> dict[str, Any]:
+        """Inspect an unknown run without changing it or releasing any marker."""
+        with self._guard:
+            record = self._registry().get("runs", {}).get(run_id)
+            if not record:
+                raise ValueError("run_id was not found")
+            lane = None
+            try:
+                lane = self._lane_lock(record["cwd"])
+            except RuntimeError:
+                return self._recovery_details(run_id, lane_available=False)
+            try:
+                return self._recovery_details(run_id, lane_available=True)
+            finally:
+                self._release_lane(record["cwd"], lane)
+
+    def reconcile(self, run_id: str, reason: str, evidence: list[str], expected_workspace_digest: str | None = None) -> dict[str, Any]:
+        """Record a manual unknown-run reconciliation; never revive the old run."""
+        if not isinstance(reason, str) or not reason.strip() or not isinstance(evidence, list) or not evidence or not all(isinstance(item, str) and item.strip() for item in evidence):
+            raise ValueError("reason and non-empty evidence strings are required")
+        if (expected_workspace_digest is not None and (not isinstance(expected_workspace_digest, str)
+                                                       or len(expected_workspace_digest) != 64
+                                                       or any(char not in "0123456789abcdef" for char in expected_workspace_digest))):
+            raise ValueError("expected_workspace_digest must be a lowercase SHA-256 when provided")
+        with self._guard:
+            record = self._registry().get("runs", {}).get(run_id)
+            if not record:
+                raise ValueError("run_id was not found")
+            lane = self._lane_lock(record["cwd"])
+            try:
+                detail = self._recovery_details(run_id, lane_available=True)
+                actual_digest = detail["workspace"].get("digest")
+                if expected_workspace_digest is None:
+                    raise ValueError("expected_workspace_digest from inspect_recovery is required")
+                current = self._registry().get("runs", {}).get(run_id)
+                if not current:
+                    raise ValueError("run_id was not found")
+                reconciliation = current.get("reconciliation")
+                if self._has_reconciliation(current):
+                    # The reconciliation record is immutable.  A retry may
+                    # only finish a failed marker unlink when it proves the
+                    # same workspace fact and the two process groups remain
+                    # absent while this CWD lane is exclusively held.
+                    recorded_digest = reconciliation.get("workspace_digest") if isinstance(reconciliation, dict) else None
+                    retry_blocking = [item for item in detail["blocking_reasons"]
+                                      if item != "unknown run already has a confirmed reconciliation"]
+                    if retry_blocking:
+                        raise RuntimeError("unknown run cannot finish reconciliation cleanup: " + "; ".join(retry_blocking))
+                    if not isinstance(recorded_digest, str) or expected_workspace_digest != recorded_digest:
+                        raise RuntimeError("expected_workspace_digest does not match the recorded reconciliation")
+                    if actual_digest != recorded_digest:
+                        raise RuntimeError("workspace changed since recorded reconciliation; marker was not cleared")
+                    self._clear_matching_unknown_marker(current["cwd"], run_id)
+                    return self.snapshot(run_id)
+                if not detail["eligible"]:
+                    raise RuntimeError("unknown run cannot be reconciled: " + "; ".join(detail["blocking_reasons"]))
+                if actual_digest != expected_workspace_digest:
+                    raise RuntimeError("workspace changed since inspection; inspect again before reconciliation")
+                self._require_matching_unknown_marker(current["cwd"], run_id)
+                value = {"outcome": "confirmed_stopped", "reason": reason, "evidence": list(evidence),
+                         "workspace_digest": actual_digest, "recorded_at": time.time(),
+                         "note": "manual recovery fact; old unknown receipt remains terminal and is not accepted"}
+                run_dir = self._run_dir(run_id)
+                def persist(data):
+                    current = data.get("runs", {}).get(run_id)
+                    if not current or not self._unreconciled_unknown(current):
+                        raise RuntimeError("unknown run is no longer eligible for reconciliation")
+                    bridge.dump(run_dir / "reconciliation.json", value)
+                    current["reconciliation"] = value
+                    current["updated_at"] = time.time()
+                    current["summary"] = "unknown run manually reconciled as stopped; a fresh higher revision may be dispatched"
+                self._update(persist)
+                # Re-read after persisting: an unlink failure leaves an
+                # immutable recovery fact and can be retried only through the
+                # guarded branch above, never by reviving this unknown run.
+                self._clear_matching_unknown_marker(record["cwd"], run_id)
+                append(run_dir, "reconciliation", "unknown run manually confirmed stopped", status="unknown")
+                return self.snapshot(run_id)
+            finally:
+                self._release_lane(record["cwd"], lane)
+
+    def snapshot(self, run_id: str) -> dict:
+        self._run_dir(run_id)
+        record = self._registry().get("runs", {}).get(run_id)
+        if not record: raise ValueError("run_id was not found")
+        # A different live Runtime holds the lane lock; never reinterpret its active
+        # record as an orphan merely because this object lacks its Popen handle.
+        if run_id in self._workers:
+            self._refresh(run_id, owned=True)
+        elif record.get("status") in ACTIVE or self._unreconciled_unknown(record):
+            self._sync_unowned(run_id)
+        # Terminal records are immutable summaries written by _watch.  Reading
+        # them must not rewrite registry.json merely to redraw history/UI.
+        record = self._registry()["runs"][run_id]
+        copy = dict(record); copy["elapsed_seconds"] = max(0, (copy.get("ended_at") or time.time()) - copy["started_at"])
+        # Execution visibility is evidence, not an inference from a run ID or
+        # a successful preflight. A launch-intent crash stays indeterminate.
+        lifecycle = self._read_json(self._lifecycle_path(run_id)) or {}
+        bound = all(lifecycle.get(key) == record.get(key) for key in
+                    ("run_id", "task_id", "revision", "cwd", "packet_sha256", "cli_descriptor_sha256"))
+        copy["claude_started"] = lifecycle.get("child_started") if bound else None
+        if copy.get("session_id") or copy.get("provider_response_observed"):
+            copy["claude_started"] = True
+        copy["execution_evidence"] = ("provider_event" if copy.get("provider_response_observed")
+                                      else "bridge_lifecycle" if bound else "unconfirmed")
+        run_dir = self._run_dir(run_id)
+        copy["workspace_changes"] = workspace_changes(None, None)
+        copy["changed_files"] = None
+        if run_dir.exists():
+            # Terminal display may show newly appended public events (for
+            # example a coordinator decision), but that observation must not
+            # rewrite the durable run registry.
+            event_count, last_event = statistics(run_dir)
+            copy["events_count"] = event_count
+            copy["last_meaningful_event"] = latest_meaningful(run_dir)
+            if last_event:
+                copy["last_activity_at"] = last_event.get("received_at", copy.get("last_activity_at"))
+                copy["last_event"] = last_event
+            copy["receipt"] = self._read_json(run_dir / "receipt.json")
+            copy["result"] = self._read_json(run_dir / "result.json")
+            copy["workspace_changes"] = workspace_changes(
+                self._read_json(run_dir / "workspace_before.json") or self._read_json(run_dir / "git_before.json"),
+                self._read_json(run_dir / "workspace_after.json") or self._read_json(run_dir / "git_after.json"))
+            copy["changed_files"] = copy["workspace_changes"]["changed_files"]
+        return copy
+
+    def list_runs(self, limit: int | None = None, offset: int = 0) -> list[dict]:
+        """Return immutable run summaries, optionally paged without refreshing history."""
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            raise ValueError("offset must be a non-negative integer")
+        if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int) or limit < 1):
+            raise ValueError("limit must be a positive integer when provided")
+        now = time.time()
+        runs = []
+        for record in self._registry().get("runs", {}).values():
+            copy = dict(record)
+            if "workspace_changes" not in copy:
+                # Legacy registry paths meant ending dirtiness, not this run's
+                # changes. Defer reconstruction to a specific snapshot request.
+                copy["workspace_changes"] = workspace_changes(None, None)
+                copy["changed_files"] = None
+            copy["elapsed_seconds"] = max(0, (copy.get("ended_at") or now) - copy["started_at"])
+            runs.append(copy)
+        ordered = sorted(runs, key=lambda item: item["started_at"], reverse=True)
+        return ordered[offset:] if limit is None else ordered[offset:offset + limit]
+
+    def events(self, run_id: str, after: int = 0, limit: int = 100) -> dict:
+        page, cursor, more = read(self._run_dir(run_id), after, limit)
+        return {"events": page, "next_cursor": cursor, "has_more": more}
+
+    def wait(self, run_id: str, after: int = 0, timeout: float = 25) -> dict:
+        if timeout < 0 or timeout > 60: raise ValueError("timeout must be 0..60 seconds")
+        deadline = time.monotonic() + timeout
+        pause = .10
+        while True:
+            if latest(self._run_dir(run_id)) > after:
+                answer = self.events(run_id, after, 100)
+                answer["snapshot"] = self.snapshot(run_id)
+                return answer
+            record = self._registry().get("runs", {}).get(run_id)
+            if not record:
+                raise ValueError("run_id was not found")
+            if record.get("status") in FINAL or time.monotonic() >= deadline:
+                answer = self.events(run_id, after, 100)
+                snap = self.snapshot(run_id)
+                answer["snapshot"] = snap
+                return answer
+            time.sleep(min(pause, max(0, deadline - time.monotonic())))
+            pause = min(.75, pause * 2)
+
+    def cancel(self, run_id: str, reason: str) -> dict:
+        if not isinstance(reason, str) or not reason.strip(): raise ValueError("reason is required")
+        if run_id not in self._workers:
+            self._sync_unowned(run_id)
+        record = self._registry().get("runs", {}).get(run_id)
+        if not record:
+            raise ValueError("run_id was not found")
+        if record.get("status") not in ACTIVE:
+            raise RuntimeError("run is terminal or unknown; cancellation requires a live bridge")
+        run_dir = self._run_dir(run_id)
+        request = self.state_root / "cancel-requests" / f"{run_id}.json"
+        request.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        bridge.dump(request, {"reason": reason, "requested_at": time.time(), "requested_by": self.owner_id})
+        deadline = time.monotonic() + 3
+        while not run_dir.exists() and time.monotonic() < deadline:
+            time.sleep(.05)
+        if not run_dir.exists():
+            def mark_queued(data):
+                rec = data.get("runs", {}).get(run_id)
+                if not rec or rec.get("status") in FINAL:
+                    return _NO_REGISTRY_CHANGE
+                requested_at = time.time()
+                rec.update(status="cancelling", phase="cancelling", updated_at=requested_at,
+                           cancel_requested_by=self.owner_id, cancel_requested_at=requested_at,
+                           summary="cancellation queued before bridge preflight")
+            self._update(mark_queued)
+            return self.snapshot(run_id)
+        bridge.dump(run_dir / "cancel.json", {"reason": reason, "requested_at": time.time(), "requested_by": self.owner_id})
+        append(run_dir, "cancelling", "cancellation marker recorded", status="cancelling")
+        def mark_cancelling(data):
+            rec = data.get("runs", {}).get(run_id)
+            if rec:
+                request_time = time.time()
+                rec.update(updated_at=request_time, cancel_requested_by=self.owner_id, cancel_requested_at=request_time)
+                if rec.get("status") not in FINAL:
+                    rec.update(status="cancelling", phase="cancelling")
+        self._update(mark_cancelling)
+        return self.snapshot(run_id)
+
+    def record_decision(self, run_id: str, decision: str, reason: str, evidence: list[str],
+                        resolution: str | None = None, completion_summary: str | None = None) -> dict:
+        if decision not in {"accepted", "returned"}: raise ValueError("decision must be accepted or returned")
+        if not isinstance(reason, str) or not reason.strip() or not isinstance(evidence, list) or not evidence or not all(isinstance(x, str) and x.strip() for x in evidence):
+            raise ValueError("reason and evidence strings are required")
+        if resolution is not None and (decision != "returned" or resolution not in {"revision_requested", "completed_by_codex"}):
+            raise ValueError("resolution is only valid for returned: revision_requested or completed_by_codex")
+        if resolution == "completed_by_codex":
+            if not isinstance(completion_summary, str) or not completion_summary.strip():
+                raise ValueError("completed_by_codex requires the independently verified completion_summary")
+        elif completion_summary is not None:
+            raise ValueError("completion_summary requires completed_by_codex")
+        value = {"decision": decision, "reason": reason, "evidence": evidence, "recorded_at": time.time(), "note": "coordinator record; not automatic acceptance"}
+        if decision == "returned":
+            value["resolution"] = resolution or "revision_requested"
+        if completion_summary is not None:
+            value["completion_summary"] = completion_summary.strip()
+        run_dir = self._run_dir(run_id)
+        def write_if_current(data):
+            rec = data.get("runs", {}).get(run_id)
+            if not rec or rec.get("status") != "reported" or rec.get("superseded_by"):
+                raise RuntimeError("decision requires a non-superseded reported run")
+            history = list(rec.get("decision_history") or [])
+            current = rec.get("decision")
+            if isinstance(current, dict) and (not history or history[-1] != current):
+                history.append(current)
+            history.append(value)
+            bridge.dump(run_dir / "decision.json", value)
+            bridge.dump(run_dir / "decision-history.json", history)
+            rec.update(decision=value, decision_history=history, updated_at=time.time())
+        self._update(write_if_current)
+        append(run_dir, "decision", "Codex completed the task; original report returned" if resolution == "completed_by_codex" else "coordinator decision recorded", status=decision)
+        return self.snapshot(run_id)
+
+    def close(self) -> None:
+        self._closing = True
+        for run_id in list(self._workers):
+            try: self.cancel(run_id, "runtime closing")
+            except (RuntimeError, ValueError): pass
+        deadline = time.monotonic() + 8
+        while self._workers and time.monotonic() < deadline: time.sleep(.1)
+        for run_id in list(self._workers):
+            record = self._registry().get("runs", {}).get(run_id, {})
+            def mark_unconfirmed(data, rid=run_id):
+                rec = data.get("runs", {}).get(rid)
+                if not rec or rec.get("status") in FINAL:
+                    return _NO_REGISTRY_CHANGE
+                rec.update(status="unknown", phase="unknown", updated_at=time.time(),
+                           summary="close could not confirm bridge termination; do not retry automatically")
+            self._update(mark_unconfirmed)
+            current = self._registry().get("runs", {}).get(run_id, {})
+            if current.get("status") == "unknown" and not self._has_reconciliation(current):
+                self._mark_unknown_lane(record.get("cwd", ""), run_id, "runtime close could not confirm bridge termination")

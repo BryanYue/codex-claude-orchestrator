@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Claude 执行详情</title>
+<style>
+:root{color-scheme:light dark;--bg:#f7f7f8;--panel:#fff;--line:#dedfe3;--muted:#62666d;--text:#1f2328;--warn:#9a6700;--warn-bg:#fffbeb;--warn-line:#dfc889;--bad:#b42318;--bad-bg:#fff4f2;--bad-line:#e5b5b0;--connection-bg:#fff4d6;--connection-text:#735500}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}button,input,select{font:inherit}button:disabled{cursor:default;opacity:.45}button{cursor:pointer}button:focus-visible,input:focus-visible{outline:2px solid #4b5563;outline-offset:3px}header{min-height:68px;padding:12px 28px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:12px}header strong{font-size:16px}.meta{color:var(--muted);font-size:12px}.tools{display:flex;align-items:center;gap:14px}.mode,.quiet{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:7px;padding:6px 10px}.connection{color:var(--muted);font-size:12px}.offline{color:var(--warn)}.layout{display:grid;grid-template-columns:1fr;min-height:calc(100vh - 68px)}aside{display:none;align-self:start;position:sticky;top:0;max-height:calc(100vh - 70px);overflow:auto;padding:18px 12px;border-right:1px solid var(--line)}.side-head{display:flex;justify-content:space-between;padding:0 9px 11px}.eyebrow{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted)}.run{display:block;width:100%;text-align:left;color:var(--text);background:none;border:1px solid transparent;border-radius:9px;padding:11px 9px;margin-bottom:5px}.run:hover,.run.selected{background:#eceef0}.run.selected{border-color:#b9bdc4}.run-title{font-weight:600;overflow-wrap:anywhere}.run-meta{font-size:11px;color:var(--muted);margin-top:4px}.full .layout{grid-template-columns:236px minmax(0,1fr)}.full aside{display:block}main{width:100%;max-width:1060px;margin:0 auto;align-self:start;padding:28px clamp(20px,4vw,54px) 60px}.hidden{display:none!important}.empty{text-align:center;color:var(--muted);padding:72px 16px}.empty h1{color:var(--text);font-size:22px}.topline{display:flex;justify-content:space-between;align-items:center;gap:12px}.status{font-size:12px;border:1px solid var(--line);border-radius:999px;padding:4px 10px}.warn{color:var(--warn);border-color:var(--warn-line);background:var(--warn-bg)}.bad{color:var(--bad);border-color:var(--bad-line);background:var(--bad-bg)}.objective{font-size:20px;line-height:1.35;margin:10px 0 3px}.notice{margin:17px 0;padding:11px 14px;border-left:2px solid #7c838c;border-radius:0 7px 7px 0;background:#f1f3f5;white-space:pre-wrap}.notice.warn{border-color:var(--warn-line);background:var(--warn-bg)}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:18px}.card,.timeline{min-width:0;padding:14px;background:var(--panel);border:1px solid var(--line);border-radius:10px}.card h2,.timeline summary{font-size:12px;margin:0 0 5px}.value{font-size:16px;margin:0}.action,.timeline,.report-card{grid-column:1/-1}.prose{white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0}.evidence-list{margin:8px 0;padding-left:20px}.round-tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:14px 0}.round-tools select{max-width:100%;padding:5px 8px;border:1px solid var(--line);border-radius:6px;color:var(--text);background:var(--panel)}.paging{display:flex;gap:8px;margin:14px 0}.connection-note{margin:0;padding:12px 28px;background:var(--connection-bg);color:var(--connection-text)}.full .report-card{margin-top:16px}.grid{align-items:start}.prompt{display:block;margin-top:7px;padding:7px 9px;background:#f5f6f7;border-radius:6px;font:12px ui-monospace,monospace;overflow-wrap:anywhere}.buttons{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.timeline{padding:0}.timeline summary{cursor:pointer;padding:13px 14px}.event{display:grid;grid-template-columns:72px minmax(0,1fr);gap:10px;padding:9px 14px;border-top:1px solid var(--line);font-size:12px}.event time{color:var(--muted)}.full-only{display:none}.full .full-only{display:block}.full .simple-only{display:none!important}.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));margin:20px 0;border:1px solid var(--line);border-radius:10px;overflow:hidden}.metric{padding:15px;border-right:1px solid var(--line)}.metric:last-child{border:0}.label{font-size:11px;color:var(--muted)}.tabs{display:flex;gap:18px;overflow:auto;border-bottom:1px solid var(--line);margin-top:24px}.tab{white-space:nowrap;border:0;border-bottom:2px solid transparent;background:none;color:var(--muted);padding:10px 0}.tab[aria-selected=true]{color:var(--text);border-color:var(--text)}.search{margin:18px 0 10px;width:280px;max-width:100%;padding:8px 10px;background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:7px}.artifact{max-height:56vh;overflow:auto;padding:16px;background:#fafafa;border:1px solid var(--line);border-radius:9px;white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.7 ui-monospace,monospace}.history{display:grid;gap:9px;margin-top:16px}.revision{padding:13px;text-align:left;color:var(--text);border:1px solid var(--line);border-radius:9px;background:var(--panel)}.footer{font-size:11px;color:var(--muted);margin-top:24px}@media(prefers-color-scheme:dark){:root{--bg:#1b1c1f;--panel:#24262a;--line:#3a3d42;--muted:#afb3ba;--text:#f3f4f6;--warn:#ffd56a;--warn-bg:#48370b;--warn-line:#b68a21;--bad:#ffc2bb;--bad-bg:#54231f;--bad-line:#b9655d;--connection-bg:#4a390b;--connection-text:#ffe6a6}.run:hover,.run.selected{background:#303238}.notice{background:#2b2e33}.notice.warn{background:var(--warn-bg)}.prompt,.artifact{background:#1f2125}}@media(max-width:800px){header{padding:11px 16px}.layout,.full .layout{grid-template-columns:1fr}aside{display:none}.full aside{display:block;border-right:0;border-bottom:1px solid var(--line);max-height:190px;overflow:auto;position:static}.grid,.metrics{grid-template-columns:1fr}.metric{border-right:0;border-bottom:1px solid var(--line)}.metric:last-child{border-bottom:0}}
+</style></head><body>
+<header><div><strong>Claude 执行详情</strong><div class="meta">本页只显示记录；执行、停止和改向请在 Codex 中发送。</div></div><div class="tools"><button id="mode" class="mode" type="button" aria-pressed="false">完整模式</button><span id="connection" class="connection">正在连接</span></div></header><div id="connectionNote" class="connection-note hidden" role="status"></div><div id="maintenanceNotice" class="notice hidden" role="status"></div><p id="maintenanceDetail" class="meta full-only hidden"></p>
+<div class="layout"><aside><div class="side-head"><span class="eyebrow">执行记录</span><span id="count" class="meta">0</span></div><div id="runs"></div><div class="paging"><button id="previousPage" class="quiet" type="button">上一页</button><button id="nextPage" class="quiet" type="button">下一页</button></div></aside><main><section id="empty" class="empty"><div class="eyebrow">准备就绪</div><h1>还没有执行任务</h1><p>在 Codex 描述要做的事；这里会显示真实活动和核验结果。</p></section><section id="content" class="hidden"><div class="topline"><span id="round" class="eyebrow"></span><span id="status" class="status"></span></div><h1 id="objective" class="objective"></h1><p id="subObjective" class="meta"></p><div class="round-tools"><label for="roundSelect">执行轮次</label><select id="roundSelect"></select><button id="previousRun" class="quiet hidden" type="button">查看上一轮</button><button id="currentRun" class="quiet hidden" type="button">查看后续轮</button><button id="historyButton" class="quiet" type="button">全部记录</button></div><div id="notice" class="notice hidden" role="status"></div><section class="grid simple-only" aria-label="任务摘要"><article class="card"><h2>当前状态</h2><p id="simpleStatus" class="value"></p><p id="statusDetail" class="meta"></p></article><article class="card"><h2>运行情况</h2><p id="duration" class="value"></p><p id="lastSync" class="meta"></p></article><article class="card"><h2>最近公开活动</h2><p id="simpleActivity" class="value"></p><p id="simpleActivityAt" class="meta"></p></article><article class="card"><h2>报告与验收</h2><p id="report" class="value"></p><p id="reportDetail" class="meta"></p></article><article id="actionCard" class="card action"><h2>需要处理</h2><p id="nextStep" class="value"></p><code id="prompt" class="prompt hidden"></code><div class="buttons"><button id="copyPrompt" class="quiet hidden" type="button">复制给 Codex</button></div></article><details id="publicTimeline" class="timeline"><summary>展开查看过程（公开活动）</summary><div id="simpleEvents"></div></details></section><article class="card report-card"><h2>报告摘要</h2><p id="readableSummary" class="prose">尚未产生报告。</p><p id="workspaceChangeSummary" class="meta"></p><p id="verificationSummary" class="meta"></p><details id="evidenceDetails"><summary>展开核验依据与未确认项</summary><div id="readableEvidence"></div></details><div class="buttons"><button id="rawButton" class="quiet" type="button">查看原始记录</button></div></article><section class="full-only"><div class="metrics"><div class="metric"><div class="label">运行时长</div><div id="fullDuration"></div></div><div class="metric"><div class="label">页面同步</div><div id="fullSync"></div></div><div class="metric"><div class="label">请求模型</div><div id="requestedModel"></div></div><div class="metric"><div class="label">实际模型</div><div id="actualModel"></div></div><div class="metric"><div class="label">请求 effort</div><div id="requestedEffort"></div></div><div class="metric"><div class="label">公开活动</div><div id="eventCount"></div></div></div><nav class="tabs" role="tablist" aria-label="执行详情"><button id="tab-activity" class="tab" role="tab" aria-controls="panel-activity" aria-selected="true" tabindex="0" data-tab="activity">活动</button><button id="tab-changes" class="tab" role="tab" aria-controls="panel-artifact" aria-selected="false" tabindex="-1" data-tab="changes">文件变化</button><button id="tab-history" class="tab" role="tab" aria-controls="panel-history" aria-selected="false" tabindex="-1" data-tab="history">轮次</button><button id="tab-result" class="tab" role="tab" aria-controls="panel-artifact" aria-selected="false" tabindex="-1" data-tab="result">结果与验收</button><button id="tab-packet" class="tab" role="tab" aria-controls="panel-artifact" aria-selected="false" tabindex="-1" data-tab="packet">任务要求</button></nav><section id="panel-activity" role="tabpanel" aria-labelledby="tab-activity"><input id="search" class="search" placeholder="筛选文件、工具或活动" aria-label="筛选活动"><p id="eventWindow" class="meta"></p><div id="events"></div></section><section id="panel-artifact" role="tabpanel" class="hidden"><div id="artifactButtons" class="buttons"></div><p id="artifactNote" class="meta"></p><pre id="artifact" class="artifact"></pre></section><section id="panel-history" role="tabpanel" class="history hidden"></section><p id="usage" class="meta"></p><dl id="identity" class="meta"></dl><p class="footer">活动来自公开工具事件；没有新事件不等于执行已停止。技术 JSON 仅在完整模式展示。</p></section></section></main></div>
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+let hash = new URLSearchParams(location.hash.slice(1));
+const MAX_EVENTS = 300, PAGE_SIZE = 50;
+const TERMINAL = new Set(['reported','accepted','returned','blocked','failed','cancelled','timeout','unknown','superseded']);
+const st = {run:hash.get('run')||'',runs:[],snapshot:null,events:[],cursor:0,moreEvents:false,packet:null,
+  result:null,decision:null,loadedKey:'',tab:'activity',artifact:'',mode:'simple',busy:false,epoch:0,timer:null,
+  controller:new AbortController(),refreshRequested:false,lastSync:0,listAt:0,listOffset:0,listMore:false,listNext:0,connected:false,maintenance:null,maintenanceAt:0};
+const names = {preflight:'正在预检',starting:'正在启动',running:'执行中',executing:'执行中',collecting:'收集结果',
+  completed:'执行结束 · 待核验',reported:'执行结束 · 待核验',accepted:'已验收',returned:'已退回',blocked:'被阻止',
+  failed:'执行失败',cancelling:'正在停止',cancelled:'已取消',timeout:'已超时',unknown:'状态待核对',superseded:'已被后续轮次替代'};
+function decision(s) { return typeof s?.decision==='string'?s.decision:s?.decision?.decision||s?.decision?.status||''; }
+function displayState(s) { return s?.superseded_by?'superseded':decision(s)||s?.status||'unknown'; }
+function completedByCodex(s) { return !s?.superseded_by&&decision(s)==='returned'&&s?.decision?.resolution==='completed_by_codex'; }
+function acceptedThenSuperseded(s) { return Boolean(s?.superseded_by&&decision(s)==='accepted'); }
+function label(s) { return completedByCodex(s)?'原报告未采纳 · Codex 已完成':acceptedThenSuperseded(s)?'已验收 · 已有后续轮':(names[displayState(s)]||displayState(s)); }
+function stamp(v) { return typeof v==='number'?v*1000:Date.parse(v||'')||0; }
+function duration(v) { const n=Math.max(0,Math.floor(Number(v)||0)); return n>=3600?`${Math.floor(n/3600)} 时 ${Math.floor(n%3600/60)} 分`:n>=60?`${Math.floor(n/60)} 分 ${n%60} 秒`:`${n} 秒`; }
+function first(v) { const t=typeof v==='string'?v.trim():''; return t.length>180?t.slice(0,180)+'…':t; }
+function el(tag,text,cls) { const n=document.createElement(tag); if(text!==undefined)n.textContent=String(text); if(cls)n.className=cls; return n; }
+function same(id,epoch) { return id===st.run&&epoch===st.epoch; }
+function pollingDelay(terminal,hidden,more) { return hidden?(terminal?60000:15000):more?250:terminal?15000:1800; }
+function runCliEvidence(s) {
+  const environment=s?.environment&&typeof s.environment==='object'?s.environment:{};
+  const descriptor=s?.cli_descriptor&&typeof s.cli_descriptor==='object'?s.cli_descriptor:{};
+  const identity=s?.cli_identity||s?.cli_identity_id||descriptor.identity_id||descriptor.id||environment.cli_identity||environment.identity||null;
+  const identityText=typeof identity==='string'?identity:(identity&&typeof identity.id==='string'?identity.id:'本轮记录未提供');
+  return {
+    version:s?.cli_version||environment.cli_version||descriptor.version||'本轮记录未提供',
+    identity:identityText,
+    environmentStatus:environment.status||'本轮记录未提供'
+  };
+}
+function requestedValue(s, packet, key) { return s?.[`requested_${key}`]||s?.[key]||packet?.[key]||'本轮记录未提供'; }
+function actualModelText(s) {
+  const models=Array.isArray(s?.actual_models)?s.actual_models.filter(x=>typeof x==='string'&&x):[];
+  if(models.length)return [...new Set(models)].join('、');
+  if(s?.actual_model&&s?.actual_model_source)return s.actual_model;
+  return '待 provider 回报';
+}
+function latestPublicEvent(s) {
+  if(s&&Object.hasOwn(s,'last_meaningful_event'))return s.last_meaningful_event;
+  return [s?.last_event,...st.events].filter(e=>e&&e.kind!=='provider').sort((a,b)=>(b.seq||0)-(a.seq||0))[0]||null;
+}
+function activityDescription(event) {
+  if(event?.kind==='tool'&&event.summary==='tool path permitted')return ({Read:'已允许读取',Glob:'已允许查找文件',Grep:'已允许搜索内容'})[event.tool]||'已允许工具访问';
+  if(event?.kind==='decision')return event.summary==='Codex completed the task; original report returned'?'Codex 已补齐并完成，原报告未采纳':event.status==='accepted'?'Codex 已记录验收通过':event.status==='returned'?'Codex 已记录退回原因':'Codex 已记录核验结论';
+  const milestones={preflight:'正在检查执行条件',starting:'正在启动 Claude',executing:'Claude 正在执行',collecting:'正在收集结果',reported:'Claude 已交回报告，等待核验'};
+  return milestones[event?.kind]||first(event?.summary)||first(event?.message)||first(event?.kind)||'公开活动';
+}
+function activityAt(s, event) { return stamp(event?.received_at||event?.at||event?.timestamp)||stamp(s?.last_activity_at); }
+function workspaceChangeText(s) {
+  const w=s?.workspace_changes;
+  if(!w||w.status==='unknown')return '文件影响尚不能确认，需核对前后快照。';
+  if(Array.isArray(w.changes))return w.changes.length?`资料快照观察到 ${w.changes.length} 项差异，需核对来源。`:'声明的资料内容与目录结构未观察到变化。';
+  return `前后快照观察到 ${w.changed_files.length} 个文件变化；开始前已有 ${w.preexisting_dirty_files.length} 个改动文件，结束时共 ${w.worktree_dirty_files.length} 个。变化不单独证明由 Claude 造成；忽略文件及中途变化不在此统计。`;
+}
+function activityTimeText(value) { return value?`最近公开活动 ${new Date(value).toLocaleString('zh-CN',{hour12:false})}`:'活动时间未记录'; }
+function maintenanceProgress(m) {
+  const phase=typeof m?.progress?.phase==='string'?m.progress.phase:'';
+  const percent=Number(m?.progress?.percent);
+  if(phase==='downloading')return Number.isFinite(percent)?`正在下载支持版本（${Math.max(0,Math.min(100,Math.floor(percent)))}%）。`:'正在下载支持版本。';
+  if(phase==='starting')return '正在准备支持版本。';
+  if(phase==='discovering')return '正在查询 Claude 官方发布。';
+  if(phase==='qualifying'||phase==='validating'||(phase==='qualification'&&m?.qualification?.state==='pending'))return '正在验证候选兼容能力，会使用 Claude 额度。';
+  return '正在获取支持版本。';
+}
+function maintenanceNotice(m) {
+  if(!m)return '';
+  const current=typeof m.current_version==='string'&&m.current_version?m.current_version:'当前版本待确认';
+  const target=typeof m.target_version==='string'&&m.target_version?m.target_version:'目标版本待确认';
+  const inProgress=['acquiring','discovering','qualifying','validating'].includes(m.state)||['downloading','discovering','qualifying','validating'].includes(m?.progress?.phase)||m?.qualification?.state==='pending';
+  if(inProgress)return `CLI 正在维护：当前 ${current}；目标 ${target}。${maintenanceProgress(m)}任务影响：已有任务继续使用启动时的执行版本。`;
+  if(!m.notice_pending) {
+    if(m.active_unqualified_for_contract)return `配置的 CLI ${current} 尚缺当前资格；基础只读任务预计使用 ${m.effective_dispatch_version||'尚无合格版本'}。具体版本以本轮执行记录为准。`;
+    if(m.reason==='qualification_result_pending_maintenance')return first(m.message);
+    return '';
+  }
+  const explanation=first(m.message)||'维护结果需要说明。';
+  return `CLI 维护通知：当前 ${current}；目标 ${target}。${explanation} 任务影响：已有任务继续使用启动时的执行版本。`;
+}
+function renderMaintenance(m) {
+  const note=maintenanceNotice(m),root=$('maintenanceNotice');
+  root.textContent=note;root.className='notice warn'+(note?'':' hidden');
+  const details=[m?.source&&`来源 ${m.source}`,m?.scope&&`范围 ${m.scope}`,
+    m?.effective_dispatch_version&&`基础任务预计 CLI ${m.effective_dispatch_version}（启动前仍需完整校验）`,
+    m?.installed_plugin_release&&`已安装插件发布 ${m.installed_plugin_release}`,
+    m?.supported_target&&`支持目标 ${m.supported_target}`,
+    m?.channel?.last_checked_at&&`上次检查 ${new Date(m.channel.last_checked_at*1000).toLocaleString('zh-CN',{hour12:false})}`,
+    m?.qualification?.missing_groups?.length&&`尚未验证通过 ${m.qualification.missing_groups.join('、')}`,
+    m?.qualification?.fallback_evidence?.length&&`保留版本承接 ${m.qualification.fallback_evidence.map(x=>`${x.group} → CLI ${x.version}`).join('、')}`].filter(Boolean).join(' · ');
+  const detail=$('maintenanceDetail');detail.textContent=details;detail.classList.toggle('hidden',!details);
+}
+async function api(path,params={}) {
+  const u=new URL(path,location.origin); Object.entries(params).forEach(([k,v])=>u.searchParams.set(k,String(v)));
+  const r=await fetch(u,{headers:{Authorization:'Bearer '+(hash.get('token')||'')},cache:'no-store',signal:AbortSignal.any([AbortSignal.timeout(10000),st.controller.signal])});
+  const d=await r.json(); if(!r.ok)throw Error(d.error||'读取失败'); return d;
+}
+function action(s) {
+  if(completedByCodex(s))return ['',''];
+  if(s?.reconciliation?.outcome==='confirmed_stopped')return ['旧轮已核对停止，历史结果仍未验收；可在 Codex 指定新的任务方向。','核对恢复记录后，按新方向开启新一轮。'];
+  if(displayState(s)==='blocked'&&(s?.blocked_by||st.result?.blocked_by)==='executor') {
+    const value=st.result?.structured||st.result?.structured_output||{};
+    const summary=typeof value.summary==='string'?value.summary:(typeof s.summary==='string'?s.summary:'执行者需要补充材料或澄清规格。');
+    const unresolved=Array.isArray(value.unresolved)&&value.unresolved.length?` 未确认项：${value.unresolved.join('；')}`:'';
+    return [`执行者无法继续：${summary}${unresolved}`,'根据执行者说明补充材料或澄清规格后，再决定下一步。'];
+  }
+  return ({reported:['',''],accepted:['',''],returned:['报告已退回，按负责人给出的原因修正。','按退回原因修正这项任务。'],
+    blocked:['本轮被预检阻止，先查看具体环境或范围问题。','检查这项执行被阻止的原因，并给出处理步骤。'],
+    failed:['执行未正常结束，需核对错误和文件状态。','核对这项执行失败的原因和文件状态。'],
+    timeout:['执行超时，需确认进程已停止并核对文件。','核对这项超时执行的进程和文件状态。'],
+    unknown:['状态无法确认；先核对实际进程和文件，暂不重派。','检查这项未知执行能否恢复；核对进程和文件后给出结论。'],
+    cancelling:['已请求停止，仍在等待确认。',''],cancelled:['本轮受监督进程已按回执停止。工作区外副作用仍需按任务核对。','核对残留文件后，按新的任务方向继续。'],
+    superseded:['本轮已被后续轮次替代，仅保留作历史证据。','查看这项任务的当前轮次。']})[displayState(s)]||['',''];
+}
+function report(s) { const state=displayState(s); return completedByCodex(s)?['Codex 已完成','原 Claude 报告未采纳，补齐结果和依据见下方。']:state==='accepted'?['已验收','负责人已记录核验结论。']:state==='returned'?['已退回','修正依据见下方核验结论。']:state==='reported'?['报告待核验','Claude 自报结果尚待 Codex 核验。']:state==='superseded'&&acceptedThenSuperseded(s)?['已验收 · 已有后续轮','验收记录保留为历史事实，不能作为当前方向的验收依据。']:state==='superseded'?['历史报告','不能作为当前方向的验收依据。']:TERMINAL.has(state)?['本轮未验收','保留部分报告与失败证据。']:['尚无报告','等待执行者交回结果。']; }
+function renderRuns() {
+  const root=$('runs'); root.replaceChildren(); $('count').textContent=`${st.listOffset+1}–${st.listOffset+st.runs.length}`;
+  if(!st.runs.length)$('count').textContent='0';
+  for(const r of st.runs) { const b=el('button',undefined,'run'+(r.run_id===st.run?' selected':'')); b.type='button';
+    b.append(el('div',r.task_id||r.run_id,'run-title'),el('div',`第 ${r.revision||1} 轮 · ${label(r)}`,'run-meta'));
+    b.onclick=()=>selectRun(r.run_id); root.append(b); }
+  $('previousPage').disabled=st.listOffset===0; $('nextPage').disabled=!st.listMore;
+}
+function roundOptions(s) {
+  const rows=st.runs.filter(r=>r.task_id===s.task_id&&r.cwd===s.cwd);
+  if(!rows.some(r=>r.run_id===s.run_id))rows.push(s);
+  rows.sort((a,b)=>b.revision-a.revision);
+  const select=$('roundSelect'),key=JSON.stringify(rows.map(r=>[r.run_id,r.revision,label(r)]));
+  if(select.dataset.key!==key) { select.replaceChildren(...rows.map(r=>{const option=el('option',`第 ${r.revision||1} 轮 · ${label(r)}`);option.value=r.run_id;return option;}));select.dataset.key=key; }
+  select.value=s.run_id;
+  $('previousRun').classList.toggle('hidden',!s.previous_run_id); $('currentRun').classList.toggle('hidden',!s.superseded_by);
+}
+function selectRun(id,updateHash=true) {
+  if(id===st.run)return;
+  st.controller.abort();st.controller=new AbortController();
+  st.run=id; st.epoch++; st.snapshot=null; st.events=[]; st.cursor=0; st.moreEvents=false; st.packet=null;
+  st.result=null; st.decision=null; st.loadedKey=''; st.artifact=''; st.lastSync=0;
+  for(const id of ['events','simpleEvents']) {$(id).dataset.signature='';$(id).replaceChildren();}
+  $('copyPrompt').textContent='复制给 Codex';
+  $('content').classList.add('hidden'); $('empty').classList.remove('hidden');
+  $('empty').querySelector('h1').textContent='正在载入这轮执行'; $('empty').querySelector('p').textContent='读取该轮真实记录。';
+  $('artifact').textContent='正在读取…'; $('readableSummary').textContent='正在读取…'; $('readableEvidence').replaceChildren();
+  $('evidenceDetails').open=false;
+  if(updateHash) { hash.set('run',id); history.replaceState(null,'','#'+hash.toString()); }
+  renderRuns(); schedule(0);
+}
+function eventRows(root,items) {
+  const signature=items.map(e=>e.seq).join(','); if(root.dataset.signature===signature)return; root.dataset.signature=signature;
+  const existing=new Map([...root.children].filter(n=>n.dataset.seq).map(n=>[n.dataset.seq,n]));
+  const desired=[];
+  for(const e of items) { const seq=String(e.seq); let row=existing.get(seq);
+    if(!row) {row=el('div',undefined,'event');row.dataset.seq=seq;const when=stamp(e.received_at||e.at||e.timestamp),body=el('div');
+      body.append(el('strong',activityDescription(e)));
+      const detail=[e.status&&names[e.status],e.tool,e.file||e.path].filter(Boolean).join(' · ');if(detail)body.append(el('div',detail,'meta'));
+      row.append(el('time',when?new Date(when).toLocaleTimeString('zh-CN',{hour12:false}):'#'+seq),body);}
+    desired.push(row); }
+  if(!items.length)desired.push(el('p','尚无公开活动。没有活动不等于执行停止。','meta'));
+  root.replaceChildren(...desired);
+}
+function renderEvents() {
+  const query=$('search').value.toLowerCase();
+  eventRows($('events'),st.events.filter(e=>JSON.stringify(e).toLowerCase().includes(query)));
+  eventRows($('simpleEvents'),st.events.filter(e=>e.kind!=='provider').slice(-30).reverse());
+  $('eventWindow').textContent=`显示已载入的最近 ${st.events.length} 条；共 ${st.snapshot?.events_count??st.cursor} 条公开活动。${st.moreEvents?'正在追赶最新记录。':'完整日志保留在本机执行记录。'}`;
+}
+function readableReport() {
+  const result=st.result, value=result?.structured||result?.structured_output||{}, d=st.decision?.decision&&typeof st.decision.decision==='object'?st.decision.decision:st.decision;
+  const closure=completedByCodex(st.snapshot),returned=decision(st.snapshot)==='returned';
+  $('readableSummary').textContent=closure?`Codex 补齐结果：${st.snapshot.decision.completion_summary}`:(returned?'原 Claude 报告（未采纳）：\n':'')+(typeof value.summary==='string'?value.summary:'尚未产生可读报告；完成后在此展示。');
+  $('workspaceChangeSummary').textContent=workspaceChangeText(st.snapshot);
+  $('verificationSummary').textContent=d?.reason?`Codex 核验：${d.reason}`:TERMINAL.has(displayState(st.snapshot))?'尚无负责人验收记录。':'结果返回后由 Codex 核验。';
+  const target=$('readableEvidence');target.replaceChildren();
+  if(closure&&typeof value.summary==='string'){target.append(el('h3','原 Claude 报告（未采纳）'),el('p',value.summary,'prose'));}
+  for(const [title,values] of [[returned?'原报告引用（未采纳）':'报告引用',value.evidence],['Claude 自报检查',value.checks],['未确认项',value.unresolved],['Codex 核验依据',d?.evidence]]) {
+    if(!Array.isArray(values)||!values.length)continue;
+    target.append(el('h3',title));const list=el('ul',undefined,'evidence-list');for(const item of values)list.append(el('li',String(item)));target.append(list);
+  }
+  if(!target.children.length)target.append(el('p','尚无可展示的核验依据。','meta'));
+  const usage=result?.usage_summary,parts=[];
+  if(usage)for(const [key,title] of [['input_tokens','输入 token'],['output_tokens','输出 token'],['cache_read_input_tokens','缓存读取 token'],['cache_creation_input_tokens','缓存写入 token']])if(typeof usage[key]==='number')parts.push(`${title} ${usage[key]}`);
+  const cost=result?.total_cost_usd??result?.cost_usd;
+  if(typeof cost==='number')parts.push(`API 计价 $${cost.toFixed(4)}`);
+  $('usage').textContent=parts.length?'Provider 回报：'+parts.join(' · ')+'。不等同订阅剩余额度。':'Provider 尚未提供可展示的用量。';
+}
+function statusSummary(s) {
+  const state=displayState(s),record=typeof s?.decision==='object'?s.decision:st.decision;
+  if(completedByCodex(s))return first(s.decision.completion_summary);
+  if(state==='accepted'||state==='returned')return first(record?.reason)||'负责人已记录核验结论。';
+  if(state==='reported')return first(st.result?.structured?.summary)||first(s.summary)||'报告已返回，等待 Codex 核验。';
+  return first(s.summary)||'暂无额外公开说明。';
+}
+function render(s) {
+  const state=displayState(s),[stateText,prompt]=action(s),[reportText,reportDetail]=report(s),packet=st.packet||{};
+  $('empty').classList.add('hidden');$('content').classList.remove('hidden');$('status').textContent=label(s);
+  $('status').className='status'+(['failed','timeout'].includes(state)?' bad':!completedByCodex(s)&&['unknown','blocked','returned','superseded'].includes(state)?' warn':'');
+  $('round').textContent=`第 ${s.revision||1} 轮`;
+  const title=packet.title||first(packet.objective)||s.task_id||s.run_id;
+  $('objective').textContent=title;$('subObjective').textContent=packet.objective&&packet.objective!==title?first(packet.objective):'';
+  $('simpleStatus').textContent=label(s);$('statusDetail').textContent=statusSummary(s);
+  $('duration').textContent=duration(s.elapsed_seconds);$('lastSync').textContent=st.lastSync?`页面最后同步 ${new Date(st.lastSync).toLocaleTimeString('zh-CN',{hour12:false})}`:'等待同步';
+  const latestEvent=latestPublicEvent(s),latestAt=activityAt(s,latestEvent);
+  $('simpleActivity').textContent=latestEvent?activityDescription(latestEvent):'暂无新的公开活动';
+  $('simpleActivityAt').textContent=latestEvent?activityTimeText(latestAt):'没有公开活动不等于执行停止。';
+  $('report').textContent=reportText;$('reportDetail').textContent=reportDetail;
+  $('actionCard').classList.toggle('hidden',!stateText);$('nextStep').textContent=stateText;
+  $('prompt').textContent=prompt;$('prompt').classList.toggle('hidden',!prompt);$('copyPrompt').classList.toggle('hidden',!prompt);
+  const note=state==='unknown'&&!s.reconciliation?'当前状态无法确认；这不单独证明执行停止。':acceptedThenSuperseded(s)?'本轮已验收，之后已有后续轮；历史验收事实保留，但不能作为当前方向的验收依据。':state==='superseded'?'本轮已被后续轮次替代，保留供回看。':'';
+  $('notice').textContent=note;$('notice').className='notice'+(state==='unknown'?' warn':'')+(note?'':' hidden');
+  $('fullDuration').textContent=duration(s.elapsed_seconds);$('fullSync').textContent=$('lastSync').textContent;
+  $('requestedModel').textContent=requestedValue(s,packet,'model');$('actualModel').textContent=actualModelText(s);
+  $('requestedEffort').textContent=requestedValue(s,packet,'effort');$('eventCount').textContent=String(s.events_count??st.events.length);
+  const cli=runCliEvidence(s);
+  $('identity').replaceChildren(...[['执行编号',s.run_id],['工作目录',s.cwd],['Claude 会话',s.session_id||'等待初始化'],['本轮 CLI',cli.version],['CLI identity',cli.identity],['初始化模型（未证明实际调用）',s.initialized_model||'未记录'],['实际模型证据',s.actual_model_source||'尚无响应证据'],['运行环境',cli.environmentStatus],['上一轮',s.previous_run_id||'首轮 / 独立执行']].flatMap(([k,v])=>[el('dt',k),el('dd',v)]));
+  roundOptions(s);readableReport();renderEvents();
+}
+const groups={changes:[['diff','工作区 Diff'],['workspace_before','输入快照'],['workspace_after','结果快照']],result:[['result','Claude 报告'],['receipt','执行回执'],['decision','Codex 核验'],['decision_history','核验历史'],['reconciliation','恢复核验'],['environment','运行环境']],packet:[['packet','本轮要求']]};
+async function artifact(name) {
+  const id=st.run,epoch=st.epoch;st.artifact=name;$('artifact').textContent='正在读取…';
+  try {const a=await api('/api/artifact',{run_id:id,name});if(!same(id,epoch)||name!==st.artifact)return;
+    $('artifact').textContent=a.available?(typeof a.content==='string'?a.content:JSON.stringify(a.content,null,2)):'本项记录尚未产生。';
+    $('artifactNote').textContent=(name==='diff'?'此 Diff 可能含已有修改，需要结合输入快照核验。':'')+(a.truncated?'展示已截断；完整记录保留在本机。':'');
+  }catch(e){if(same(id,epoch))connectionError(e);}
+}
+function historyView() {
+  const root=$('panel-history');root.replaceChildren();
+  root.append(el('p','以下为当前历史页中的相关轮次；可在左侧翻页查看更早记录。','meta'));
+  for(const r of st.runs.filter(r=>r.task_id===st.snapshot?.task_id&&r.cwd===st.snapshot?.cwd)) {const b=el('button',`第 ${r.revision||1} 轮 · ${label(r)}`,'revision');b.onclick=()=>selectRun(r.run_id);root.append(b);}
+}
+function switchTab(tab,focus=false) {
+  st.tab=tab;
+  for(const b of document.querySelectorAll('[role=tab]')) {const on=b.dataset.tab===tab;b.setAttribute('aria-selected',String(on));b.tabIndex=on?0:-1;if(on&&focus)b.focus();}
+  $('panel-activity').classList.toggle('hidden',tab!=='activity');$('panel-artifact').classList.toggle('hidden',!groups[tab]);$('panel-history').classList.toggle('hidden',tab!=='history');
+  $('panel-artifact').setAttribute('aria-labelledby','tab-'+tab);$('panel-history').setAttribute('aria-labelledby','tab-history');
+  if(tab==='history')historyView();
+  if(groups[tab]) {$('artifactButtons').replaceChildren(...groups[tab].map(([n,t])=>{const b=el('button',t,'quiet');b.type='button';b.onclick=()=>artifact(n);return b;}));artifact(groups[tab][0][0]);}
+}
+function applyMode() {document.body.classList.toggle('full',st.mode==='full');$('mode').textContent=st.mode==='full'?'简洁模式':'完整模式';$('mode').setAttribute('aria-pressed',String(st.mode==='full'));}
+function connectionError(e) {
+  st.connected=false;$('connection').classList.add('offline');$('connection').textContent='连接中断 · 保留最后记录';
+  $('connectionNote').textContent=`详情连接已断开。${st.lastSync?'最后同步 '+new Date(st.lastSync).toLocaleTimeString('zh-CN',{hour12:false})+'。':''}当前展示可能是旧记录；这不单独证明执行停止。请在 Codex 说“重新打开这项执行详情”。${e?' '+e.message:''}`;
+  $('connectionNote').classList.remove('hidden');
+}
+async function fetchEvents(id,epoch) {
+  let changed=false;
+  for(let page=0;page<3;page++) {
+    const d=await api('/api/events',{run_id:id,after:st.cursor,limit:200});if(!same(id,epoch))return false;
+    const values=d.events||[];if(values.length)changed=true;st.events.push(...values);
+    if(st.events.length>MAX_EVENTS)st.events.splice(0,st.events.length-MAX_EVENTS);
+    st.cursor=d.next_cursor??st.cursor;st.moreEvents=Boolean(d.has_more);if(!d.has_more)break;
+  }return changed;
+}
+function schedule(ms) {clearTimeout(st.timer);if(st.busy&&ms===0)st.refreshRequested=true;st.timer=setTimeout(tick,ms);}
+async function tick() {
+  if(st.busy)return;st.busy=true;const initialEpoch=st.epoch;
+  try {
+    if(st.run) {
+      const id=st.run,epoch=st.epoch,s=await api('/api/snapshot',{run_id:id});if(!same(id,epoch))return;
+      st.snapshot=s;st.runs=st.runs.map(r=>r.run_id===id?s:r);st.lastSync=Date.now();renderRuns();render(s);
+      if(st.cursor===0&&!st.events.length)st.cursor=Math.max(0,(s.last_event?.seq||0)-MAX_EVENTS);
+      const changed=await fetchEvents(id,epoch);if(!same(id,epoch))return;
+      const key=id+':'+JSON.stringify([s.status,s.decision,s.reconciliation]);
+      if(!st.packet||st.loadedKey!==key) {
+        const names=st.packet?['result','decision']:['packet','result','decision'];
+        const values=await Promise.all(names.map(name=>api('/api/artifact',{run_id:id,name})));if(!same(id,epoch))return;
+        for(let i=0;i<names.length;i++)st[names[i]]=values[i].available&&typeof values[i].content==='object'?values[i].content:null;
+        st.loadedKey=key;
+      }
+      st.lastSync=Date.now();render(s);
+      if(st.tab==='history')historyView();
+      else if(groups[st.tab]&&(!st.artifact||changed))artifact(st.artifact||groups[st.tab][0][0]);
+    }
+    if(!st.maintenanceAt||Date.now()-st.maintenanceAt>30000) {
+      st.maintenanceAt=Date.now();
+      try {st.maintenance=await api('/api/cli-maintenance');if(st.epoch!==initialEpoch)return;renderMaintenance(st.maintenance);}
+      catch(e){if(st.epoch!==initialEpoch)return;renderMaintenance({state:'unavailable',notice_pending:true,message:'版本维护状态暂不可用；本轮执行记录仍可查询。'});}
+    }
+    if(!st.listAt||Date.now()-st.listAt>30000) {
+      const offset=st.listOffset,list=await api('/api/runs',{offset,limit:PAGE_SIZE});
+      if(st.epoch!==initialEpoch||offset!==st.listOffset)return;
+      st.runs=list.runs||[];st.listMore=Boolean(list.has_more);st.listNext=list.next_offset;st.listAt=Date.now();
+      if(!st.run&&st.runs.length){selectRun(st.runs[0].run_id);return;}
+      renderRuns();
+    }
+    st.connected=true;$('connection').classList.remove('offline');$('connection').textContent='已连接 · 自动刷新';$('connectionNote').classList.add('hidden');
+  }catch(e){if(initialEpoch===st.epoch)connectionError(e);}
+  finally {st.busy=false;const immediate=st.refreshRequested||initialEpoch!==st.epoch;st.refreshRequested=false;schedule(immediate?0:pollingDelay(TERMINAL.has(displayState(st.snapshot)),document.hidden,st.moreEvents));}
+}
+document.addEventListener('visibilitychange',()=>schedule(document.hidden?15000:0));
+window.addEventListener('hashchange',()=>{const next=new URLSearchParams(location.hash.slice(1)),id=next.get('run')||'';const tokenChanged=next.get('token')!==hash.get('token');hash=next;
+  if(tokenChanged&&id===st.run){st.run='';}selectRun(id,false);st.listAt=0;schedule(0);});
+$('mode').onclick=()=>{st.mode=st.mode==='full'?'simple':'full';applyMode();};
+$('rawButton').onclick=()=>{st.mode='full';applyMode();switchTab('result',true);};
+$('historyButton').onclick=()=>{st.mode='full';applyMode();switchTab('history',true);};
+$('roundSelect').onchange=e=>selectRun(e.target.value);
+$('previousRun').onclick=()=>selectRun(st.snapshot.previous_run_id);
+$('currentRun').onclick=()=>selectRun(st.snapshot.superseded_by);
+$('previousPage').onclick=()=>{st.listOffset=Math.max(0,st.listOffset-PAGE_SIZE);st.listAt=0;schedule(0);};
+$('nextPage').onclick=()=>{st.listOffset=st.listNext;st.listAt=0;schedule(0);};
+$('copyPrompt').onclick=async()=>{const prompt=action(st.snapshot)[1];if(!prompt)return;try{await navigator.clipboard.writeText(`${prompt}\n执行编号：${st.run}`);$('copyPrompt').textContent='已复制';}catch(_){$('copyPrompt').textContent='请复制上方文字';}};
+$('search').addEventListener('input',()=>{$('events').dataset.signature='';renderEvents();});
+for(const b of document.querySelectorAll('[role=tab]')) {b.onclick=()=>switchTab(b.dataset.tab);b.onkeydown=e=>{const tabs=[...document.querySelectorAll('[role=tab]')],i=tabs.indexOf(b);let n=null;
+  if(e.key==='ArrowRight')n=tabs[(i+1)%tabs.length];if(e.key==='ArrowLeft')n=tabs[(i+tabs.length-1)%tabs.length];if(e.key==='Home')n=tabs[0];if(e.key==='End')n=tabs.at(-1);
+  if(n){e.preventDefault();switchTab(n.dataset.tab,true);}};}
+applyMode();if(!hash.get('token'))connectionError(new Error('请使用 Codex 返回的完整详情链接。'));else schedule(0);
+
+</script></body></html>

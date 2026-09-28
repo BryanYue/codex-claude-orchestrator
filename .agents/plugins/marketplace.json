@@ -1,0 +1,20 @@
+{
+  "name": "codex-claude-team",
+  "interface": {
+    "displayName": "Codex Claude Team"
+  },
+  "plugins": [
+    {
+      "name": "codex-claude-orchestrator",
+      "source": {
+        "source": "local",
+        "path": "./plugins/codex-claude-orchestrator"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

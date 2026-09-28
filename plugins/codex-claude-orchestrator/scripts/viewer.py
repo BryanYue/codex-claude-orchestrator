@@ -1,0 +1,175 @@
+"""Read-only loopback viewer. Execution is only exposed through the MCP tools."""
+from __future__ import annotations
+
+import hmac
+import json
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+import secrets
+import threading
+from urllib.parse import parse_qs, urlparse
+
+try:
+    import cli_updates
+except ModuleNotFoundError:  # A partially upgraded plugin still serves its immutable run evidence.
+    cli_updates = None
+
+ROOT = Path(__file__).resolve().parents[1]
+ARTIFACTS = {
+    "packet": "packet.json", "result": "result.json", "receipt": "receipt.json",
+    "environment": "environment.json", "decision": "decision.json", "decision_history": "decision-history.json",
+    "git_before": "git_before.json", "git_after": "git_after.json", "diff": "diff.patch",
+    "workspace_before": "workspace_before.json", "workspace_after": "workspace_after.json",
+    "reconciliation": "reconciliation.json",
+}
+
+_MAINTENANCE_FIELDS = frozenset({
+    "policy", "state", "channel", "current_version", "target_version", "message", "reason", "next_action",
+    "notice_id", "notice_pending", "progress", "error", "source", "scope", "installed_plugin_release",
+    "supported_target", "auto_qualify", "effective_dispatch_version", "effective_dispatch_reason", "effective_dispatch_groups",
+    "active_unqualified_for_contract", "dispatch_message",
+})
+
+
+def read_cli_maintenance() -> dict:
+    """Return only the updater's public read model; this endpoint never starts work."""
+    if cli_updates is None:
+        return {"state": "unavailable", "reason": "CLI maintenance module is unavailable"}
+    try:
+        value = cli_updates.status()
+    except (OSError, RuntimeError, ValueError) as exc:
+        return {"state": "unavailable", "reason": str(exc)}
+    if not isinstance(value, dict):
+        return {"state": "unavailable", "reason": "CLI maintenance status had an invalid shape"}
+    public = {key: value[key] for key in _MAINTENANCE_FIELDS if key in value}
+    channel = public.get("channel")
+    if isinstance(channel, dict):
+        public["channel"] = {key: channel[key] for key in ("source", "scope", "mode", "discovery_state", "last_checked_at", "next_check_at") if key in channel}
+        public.setdefault("source", channel.get("source"))
+        public.setdefault("scope", channel.get("scope"))
+    qualification = value.get("qualification")
+    if isinstance(qualification, dict):
+        public["qualification"] = {key: qualification[key] for key in
+                                   ("state", "missing_groups", "attempt_final", "job_id", "job_status") if key in qualification}
+        fallback = qualification.get("fallback_evidence")
+        if isinstance(fallback, list):
+            public["qualification"]["fallback_evidence"] = [
+                {key: item[key] for key in ("group", "version") if key in item}
+                for item in fallback if isinstance(item, dict)]
+    return public
+
+
+def read_artifact(runtime, run_id: str, name: str) -> dict:
+    if name not in ARTIFACTS:
+        raise ValueError("Unknown artifact")
+    snapshot = runtime.snapshot(run_id)
+    folder = Path(snapshot["run_dir"]).resolve()
+    path = folder / ARTIFACTS[name]
+    if path.is_symlink() or (path.exists() and path.resolve().parent != folder):
+        raise ValueError("Artifact escapes run directory")
+    if not path.is_file():
+        return {"name": name, "available": False, "content": None}
+    limit = 300_000
+    with path.open("rb") as handle:
+        data = handle.read(limit + 1)
+    clipped = len(data) > limit
+    value = data[:limit].decode("utf-8", "replace")
+    if path.suffix == ".json" and not clipped:
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return {"name": name, "available": False, "content": None, "note": "Artifact is being written; retry."}
+    return {"name": name, "available": True, "content": value, "truncated": clipped}
+
+
+class Viewer:
+    def __init__(self, runtime):
+        self.runtime = runtime
+        self.token = secrets.token_urlsafe(32)
+        self.http = None
+        self.thread = None
+
+    def start(self):
+        viewer = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *_):
+                pass  # Never log URLs, capability tokens, or task contents.
+
+            def send(self, status, payload, content_type="application/json; charset=utf-8"):
+                body = payload if isinstance(payload, bytes) else json.dumps(payload, ensure_ascii=False).encode()
+                self.send_response(status)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Referrer-Policy", "no-referrer")
+                self.send_header("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src data:; base-uri 'none'; frame-ancestors 'none'")
+                self.end_headers()
+                try:
+                    self.wfile.write(body)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+
+            def do_GET(self):
+                port = viewer.http.server_port
+                hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
+                if self.headers.get("Host") not in hosts:
+                    return self.send(403, {"error": "Invalid host"})
+                origin = self.headers.get("Origin")
+                if origin and origin not in {"http://" + h for h in hosts}:
+                    return self.send(403, {"error": "Invalid origin"})
+                route = urlparse(self.path)
+                if route.path == "/":
+                    return self.send(200, (ROOT / "assets/dashboard.html").read_bytes(), "text/html; charset=utf-8")
+                if not hmac.compare_digest(self.headers.get("Authorization", ""), "Bearer " + viewer.token):
+                    return self.send(401, {"error": "Reopen the details link supplied by Claude tools."})
+                q = parse_qs(route.query)
+                run_id = q.get("run_id", [""])[0]
+                try:
+                    if route.path == "/api/cli-maintenance":
+                        return self.send(200, read_cli_maintenance())
+                    if route.path == "/api/runs":
+                        limit = int(q.get("limit", [50])[0])
+                        offset = int(q.get("offset", [0])[0])
+                        if not 1 <= limit <= 200 or offset < 0:
+                            raise ValueError("Invalid history page")
+                        rows = viewer.runtime.list_runs(limit=limit + 1, offset=offset)
+                        return self.send(200, {
+                            "runs": [{k: v for k, v in row.items() if k not in {"result", "receipt"}} for row in rows[:limit]],
+                            "next_offset": offset + min(limit, len(rows)), "has_more": len(rows) > limit,
+                        })
+                    if route.path == "/api/snapshot":
+                        return self.send(200, viewer.runtime.snapshot(run_id))
+                    if route.path == "/api/events":
+                        after, limit = int(q.get("after", [0])[0]), int(q.get("limit", [200])[0])
+                        if after < 0 or not 1 <= limit <= 200:
+                            raise ValueError("Invalid event page")
+                        return self.send(200, viewer.runtime.events(run_id, after=after, limit=limit))
+                    if route.path == "/api/artifact":
+                        return self.send(200, read_artifact(viewer.runtime, run_id, q.get("name", [""])[0]))
+                    return self.send(404, {"error": "Not found"})
+                except (ValueError, RuntimeError, KeyError, FileNotFoundError) as exc:
+                    return self.send(400, {"error": str(exc)})
+
+            def do_POST(self):
+                self.send(405, {"error": "Read-only viewer; send execution instructions through Codex."})
+
+        self.http = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.http.daemon_threads = True
+        self.thread = threading.Thread(target=self.http.serve_forever, daemon=True)
+        self.thread.start()
+        return self
+
+    def url(self, run_id=""):
+        if self.http is None:
+            raise RuntimeError("Viewer not started")
+        return f"http://127.0.0.1:{self.http.server_port}/#token={self.token}&run={run_id}"
+
+    def close(self):
+        if self.http:
+            self.http.shutdown()
+            self.http.server_close()
+            self.http = None
+        if self.thread:
+            self.thread.join(timeout=3)
