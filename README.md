@@ -1,4 +1,4 @@
-# Codex–Claude 协作 · macOS 插件 0.4.7
+# Codex–Claude 协作 · macOS 插件 0.5.0
 
 把项目规格、Skill、Codex 原生监督子代理、Claude CLI、MCP、持久 Runtime 和简洁详情装在同一个包里。你在 Codex 主任务中正常提需求，Codex 负责选择执行者、同步进度、纠正方向和核验结果。
 
@@ -30,6 +30,15 @@ bash Install.command --rollback <上一步返回的备份ID>
 每个人使用自己的 Claude 本机认证和额度。安装器准备插件私有的已验证执行版本，保留 Claude 原有安装；不自动登录或切换账号。Skill 会在首次实际需要委派时调用在线凭证检查（bridge 每轮的自动预检仅查本地配置），会使用少量 Claude 额度；近期成功调用可复用。
 
 首发在 macOS Apple Silicon 实测；Intel 尚未单独实测，Windows 不在本版范围。安装器要求在标准 /Applications 目录中检测到 Codex.app 或 ChatGPT.app 内置且支持 plugin 命令的 Codex CLI。仅安装 PATH Codex CLI 的宿主当前不在支持范围，不能作为桌面兼容性证据；--check 不执行安装，但条件不满足会返回非零退出码。
+
+## 0.5.0：Git 分发准备（A4/A5）
+
+本版把源码整理为独立 Git 仓库源，新增可复用的构建工具与首次安装文档；本节只描述这部分改动本身，不代表已完成完整 0.5.0 验收——实际通过情况以 [发布验证](RELEASE-VERIFICATION.md) 为准，不在此重复宣称测试结果。
+
+- 新增 `tools/build_distribution.py`：从干净、已提交的 Git commit 构建分发包；校验根包版本（`.codex-plugin/plugin.json` 基础版本号与 `pyproject.toml`、`uv.lock` 中的 `codex-claude-orchestrator` 版本一致，第三方依赖锁定内容不受影响）；拒绝覆盖已有输出、拒绝 symlink 和未登记的文件类型；生成确定性排序/时间戳/权限的 ZIP，使同一 Git 提交、同一输出文件名的重复构建可核对哈希；随包写出 `FILE-SHA256.json` 与 `RELEASE-MANIFEST.json`（版本、源提交、执行契约摘要）。也校验 `launch.sh`、`Install.command` 在 Git 中记录为可执行模式（100755），因为 Git 安装路径依赖这个位，ZIP 安装路径依赖打包时写入的权限位。用法：`python3 tools/build_distribution.py --source-root <repo> --output <目标目录>`（默认输出到 `<repo>/dist/codex-claude-orchestrator-macos-<version>`）。
+- 新增 [Git marketplace 说明](docs/git-marketplace.md) 与 [安装与恢复说明](docs/install-and-recovery.md)：区分 ZIP 与 Git 两条首次安装路径；uv/Python/依赖/CLI/认证的分步准备；本机同名市场迁移的具体步骤与失败回退；并明确区分"本地 Git-ready"（可克隆、可复现构建）与"真实远端已验证"（实际执行过 Git 取源与安装）两种不同结论，不把前者当后者宣称。
+- `plugins/codex-claude-orchestrator/scripts/launch.sh` 新增 `--prepare-dependencies` 显式模式：只执行 `uv sync --frozen --no-dev` 做冷启动依赖预热，不启动 MCP server、不发起任何模型调用、不修改 global/PATH/profile/认证；`.mcp.json` 的默认启动路径（不带该参数）行为不变。
+- 插件与根包版本号同步为 0.5.0；`uv.lock` 中第三方依赖的锁定内容未改动。
 
 ## 0.4.7：审查后的稳定性修复
 
@@ -200,10 +209,16 @@ uv run python scripts/run_tests.py --suite all
 
 回归入口为测试子进程提供独立 TMPDIR，结束后清理测试自己的 lock/marker，不触碰真实运行记录。可用 `--suite plugin` 或 `--suite bridge` 做定向回归。
 
+`tools/build_distribution.py` 独立于插件的 uv 环境，只用标准库；对应测试用标准 `unittest`，会在临时目录里 `git init` 一个最小夹具仓库，不触碰当前工作树：
+
+```bash
+python3 tools/tests/test_build_distribution.py
+```
+
 自动回归、真实 Claude 调用、原生宿主接入和浏览器观察分别记录；小夹具通过不证明生产长任务零偏差。整体结构为：用户 → 主 Codex + Skill/规格 → 原生 Codex 监督席 → MCP Runtime → Claude；证据原路返回，由主 Codex 核验。
 
 发布验证同时覆盖隔离夹具、MCP 协议、浏览器和安装。具体版本与覆盖以随包 RELEASE-VERIFICATION.md 为准；不将历史版本的通过数当作本版证据。普通请求在新桌面任务中从路由到委派的完整自动入口，需要在目标宿主正常权限下走查；本机 MCP 直连不替代这项验收。
 
-后续可将整个 marketplace 根放到团队私有 Git 仓库，以 tag 固定版本，通过官方 marketplace 安装。本版交付本地安装包，尚未发布外部仓库。
+后续可将整个 marketplace 根放到团队私有 Git 仓库，以 tag 固定版本，通过官方 marketplace 安装；具体命令与 Git-ready/远端已验证的区分见 [Git marketplace 说明](docs/git-marketplace.md)。本版交付本地安装包与 Git-ready 源码，尚未发布外部仓库，也没有实际远端安装证据。
 
 要停用项目入口，向 Codex 说“这个项目不再自动采用该协作流程”。插件只移除精确未改的自有块，保留其他规则和证据。要卸载客户端插件，在 Codex 插件界面卸载；任务记录按团队规则另行保留。

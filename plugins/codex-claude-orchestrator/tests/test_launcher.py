@@ -127,6 +127,51 @@ esac
         self.assertTrue(observed["uv_env"].endswith("/venvs/" + manifest["version"]))
         self.assertNotIn("python3", (ROOT.parent.parent / "Install.command").read_text())
 
+    def _write_fake_uv(self, script: str) -> Path:
+        # $HOME/.local/bin is prepended first by launch.sh, so this fixture
+        # always wins over any real `uv` on the test machine's PATH.
+        uv = self.bin / "uv"
+        uv.write_text(script)
+        uv.chmod(0o755)
+        return uv
+
+    def test_launch_prepare_dependencies_runs_uv_sync_without_starting_server(self):
+        call_log = self.base / "uv-calls.log"
+        self._write_fake_uv(
+            "#!/bin/sh\n"
+            f"echo \"$@\" >> {str(call_log)!r}\n"
+            "if [ \"$1\" = \"sync\" ]; then exit 0; fi\n"
+            "echo 'server should not have started' >&2\n"
+            "exit 1\n"
+        )
+        proc = subprocess.run(["bash", str(ROOT / "scripts/launch.sh"), "--prepare-dependencies"],
+                              text=True, capture_output=True, env=self.env(), check=True)
+        observed = json.loads(proc.stdout.strip())
+        self.assertEqual(observed["status"], "ready")
+        calls = call_log.read_text().splitlines()
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(calls[0].startswith("sync --project"))
+        self.assertIn("--frozen", calls[0])
+        self.assertIn("--no-dev", calls[0])
+
+    def test_launch_prepare_dependencies_propagates_sync_failure_without_ready_status(self):
+        self._write_fake_uv("#!/bin/sh\nif [ \"$1\" = \"sync\" ]; then exit 42; fi\nexit 1\n")
+        proc = subprocess.run(["bash", str(ROOT / "scripts/launch.sh"), "--prepare-dependencies"],
+                              text=True, capture_output=True, env=self.env())
+        self.assertEqual(proc.returncode, 42)
+        self.assertNotIn('"status"', proc.stdout)
+
+    def test_launch_without_prepare_flag_still_starts_server_via_uv_run(self):
+        self._write_fake_uv(
+            "#!/bin/sh\n"
+            "if [ \"$1\" = \"sync\" ]; then echo 'sync should not run for a normal launch' >&2; exit 1; fi\n"
+            "printf '{\"argv1\":\"%s\",\"uv_env\":\"%s\"}\\n' \"$1\" \"$UV_PROJECT_ENVIRONMENT\"\n"
+        )
+        proc = subprocess.run(["bash", str(ROOT / "scripts/launch.sh")],
+                              text=True, capture_output=True, env=self.env(), check=True)
+        observed = json.loads(proc.stdout.strip())
+        self.assertEqual(observed["argv1"], "run")
+
     def test_managed_selection_wins_over_mutable_claude_bin_and_disables_only_its_updater(self):
         managed = {"id": "darwin-arm64-2.1.278-deadbeef", "path": str(self.base / "private/claude"),
                    "version": "2.1.278", "sha256": "d" * 64, "platform": "darwin", "machine": "arm64",

@@ -18,4 +18,12 @@ if ! command -v uv >/dev/null 2>&1; then
   echo 'Claude Orchestrator needs uv. Install uv, then restart this plugin. See the included README.' >&2
   exit 127
 fi
+if [[ "${1:-}" == "--prepare-dependencies" ]]; then
+  # Cold-start warmup only: resolve/download the locked venv so the first real
+  # MCP launch does not spend .mcp.json's 120s startup_timeout_sec on `uv sync`.
+  # Never starts server.py, never touches Claude/global/path/profile/auth state.
+  uv sync --project "$ROOT" --frozen --no-dev
+  printf '{"status":"ready","uv_project_environment":"%s"}\n' "$UV_PROJECT_ENVIRONMENT"
+  exit 0
+fi
 exec uv run --project "$ROOT" --frozen --no-dev python "$ROOT/scripts/server.py" "$@"

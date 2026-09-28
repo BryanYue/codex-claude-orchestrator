@@ -1,0 +1,149 @@
+# Install, first use and recovery
+
+This covers the two install paths for `codex-claude-orchestrator` and the
+first-use preparation both share. See [git-marketplace.md](git-marketplace.md)
+for the Git-specific commands and identity, and `RELEASE-VERIFICATION.md` for
+which of the steps below have actually been exercised for the current version.
+
+## Two install paths
+
+| | ZIP install | Git install |
+| --- | --- | --- |
+| Entry point | `bash Install.command` from an extracted package | `codex plugin marketplace add` + `codex plugin add` (see [git-marketplace.md](git-marketplace.md)) |
+| Verifies package hashes | Yes, against `FILE-SHA256.json` | No local step does this; the host CLI fetches the ref directly |
+| Registers with local catalog (`~/.codex/claude-orchestrator/catalog`) | Yes | No — the plugin source is the Git ref itself |
+| Prepares a managed Claude CLI | Yes, as part of the same run | No — a separate explicit step (see below) |
+| Runs automatically after install | Nothing further | Nothing further |
+
+A Git install does **not** run `Install.command`. This is deliberate: running
+it after a Git install would silently re-register the plugin against the local
+catalog and overwrite the Git source you just chose. If a step described for
+the ZIP path below (hash verification, catalog registration) is needed for a
+Git-sourced plugin, it must be reproduced as its own explicit action, not by
+invoking `Install.command` against a Git checkout.
+
+## First-time preparation (both paths)
+
+The plugin becoming installed/registered is not the same as it being ready to
+delegate to Claude. There are four independent things to get ready, in this
+order:
+
+1. **uv.** Required for both paths. Check with `command -v uv`; install per
+   [the official instructions](https://docs.astral.sh/uv/getting-started/installation/)
+   if missing (`brew install uv` if Homebrew is already available). Nothing in
+   this plugin installs uv for you or modifies your shell profile to do so.
+2. **Python ≥3.11 and the locked dependency venv.** `uv` resolves the
+   interpreter and installs the locked dependencies (`mcp==2.2.0`, pinned in
+   `plugins/codex-claude-orchestrator/uv.lock`) into a version-specific venv
+   the first time they are needed. This first resolution can involve a
+   download, which is slow compared to the 120-second `startup_timeout_sec`
+   in `.mcp.json`. To avoid racing that timeout on a cold machine, warm the
+   venv explicitly **before** opening a Codex task that loads the plugin:
+
+   For an extracted ZIP or a source checkout, start at that package root:
+
+   ```bash
+   bash plugins/codex-claude-orchestrator/scripts/launch.sh --prepare-dependencies
+   ```
+
+   For a Git marketplace install, first run `codex plugin list --json` and
+   locate this plugin's installed/cache path in the returned record (or ask
+   Codex to inspect its plugin record). Invoke `scripts/launch.sh` inside that
+   exact installed plugin directory. Do not guess a cache version directory or
+   run the ZIP installer to repair a Git source. If the host does not expose
+   the installed path, the dependency preparation can be run from a checkout
+   of the same fixed ref and full manifest version: the launcher selects the
+   same version-specific environment. Keep that checkout unchanged until the
+   installed version has started successfully.
+
+   This only runs `uv sync --frozen --no-dev` and prints a `{"status": ...}`
+   line; it never starts the MCP server, never calls a model, and never
+   touches global config, PATH, CLI profiles or authentication. If it fails,
+   the printed error is the exact `uv sync` failure (e.g. missing `uv`,
+   unreachable package index, disk space) — fix that and rerun the same
+   command; nothing has been partially registered.
+3. **Open a Codex task to actually start the MCP server.** Once dependencies
+   are warm, open a new Codex task so `.mcp.json` loads the plugin normally
+   (`./scripts/launch.sh` with no arguments, which runs `scripts/server.py`).
+   This is the first point at which the MCP server itself starts; step 2 only
+   prepares its dependencies.
+4. **Managed Claude CLI and authentication.** Independent of steps 1–3, and
+   does not require Claude to be logged in yet:
+   - `bash Install.command --diagnose-json` (ZIP path) or the Skill's
+     `claude_cli_status` tool (either path, once the MCP server is running)
+     reports uv discovery, Codex host compatibility, and Claude discovery/auth
+     status without starting a model call. It does not independently verify
+     that a cold Python/dependency download can succeed. Successful dependency
+     preparation and a fresh MCP initialization establish those separate facts.
+   - If no usable Claude executable is found, `claude_cli_update(action="prepare")`
+     stages a private, signature-verified baseline; this downloads Anthropic's
+     published release binary, not a model response, and does not log in.
+   - Authentication itself is always the user's own action. Use the login
+     flow for the executable selected by `claude_cli_status`, rather than
+     assuming a different `claude` on PATH shares its account. The optional
+     `Install.command --configure-claude-bin` is a ZIP-install operation only;
+     do not use it for a Git-installed plugin. The plugin does not ask Codex
+     to read, copy or upload credential files.
+
+### Breakdown by what's missing
+
+| Symptom | What it means | What to do |
+| --- | --- | --- |
+| `command -v uv` fails | uv is not installed | Install uv per the official instructions above; do not let anything auto-run Homebrew/curl for you |
+| `./scripts/launch.sh --prepare-dependencies` fails on `uv sync` | Locked dependency resolution/download failed (network, index, disk) | Read the printed `uv sync` error directly; rerun after fixing it |
+| MCP server does not come up within 120s | Dependency download or another startup error may be responsible | Preserve stderr, run step 2, then retry MCP initialization. If warmup succeeds but startup still fails, inspect the actual server error; do not assume every timeout is a download problem or raise the timeout without evidence |
+| `claude_cli_status` reports no discovered Claude CLI | No system/managed Claude executable found yet | Run `claude_cli_update(action="prepare")`, or configure an explicit path via `--configure-claude-bin` |
+| `claude_cli_status` reports not authenticated | Claude CLI is present but the user has not logged in | Log in with the Claude CLI yourself; the plugin will not do this for you |
+| Delegation is blocked even though the plugin is installed | Claude readiness (steps 2–4) is separate from plugin registration (this doc's "Two install paths") | Re-check readiness with `claude_cli_status`/diagnostics, not just install success |
+
+## Migrating from the local catalog to a Git source
+
+This machine may already have a marketplace named `codex-claude-team` pointing
+at the local catalog (`~/.codex/claude-orchestrator/catalog`). Because the host
+CLI keys a marketplace by name, adding a Git source under the same name is not
+a conflict-free operation. The sequence below is the **documented** procedure
+and its failure/rollback shape; it has not been run against a real local
+market or a real remote host in this task (see the note at the end).
+
+1. **Record current state before touching anything.**
+   ```bash
+   codex plugin marketplace list --json   # save the codex-claude-team entry: source, ref if any
+   codex plugin list --json               # save the codex-claude-orchestrator entry: version, enabled, source
+   ```
+2. **Remove the old market entry.** The locally checked CLI exposes
+   `codex plugin marketplace remove codex-claude-team --json`. Check the
+   installed CLI's help if that command is unavailable. After the operation,
+   read both marketplace and plugin state: removing a source is not evidence
+   that the cached plugin was removed, disabled or preserved.
+3. **Add the target Git source with a fixed ref** (see
+   [git-marketplace.md](git-marketplace.md) for the exact `add`/`--ref`
+   invocation and why a moving branch should not be used for a first rollout).
+4. **Install the same plugin id** (`codex plugin add codex-claude-orchestrator@codex-claude-team`)
+   and verify with `codex plugin list --json` that version, source and `ref`/
+   commit match what step 3 targeted.
+5. **On any failure at steps 2–4**, read actual state before recovery. If the
+   candidate source was added, remove that candidate same-name entry first;
+   if removal itself failed or its result is unknown, stop instead of adding
+   a conflicting source. Restore the old local path or Git source and fixed
+   ref from step 1, reinstall the recorded old version, and restore its prior
+   enabled/disabled state using the host's supported plugin controls. Read
+   both inventories again and check source, ref/version and enabled state.
+   A failed initial removal whose old source is still present needs no
+   source replacement; a successful candidate install followed by failed
+   verification needs the full recovery sequence. If any recovery step or
+   final check is inconclusive, retain its evidence and stop automatic retries.
+6. A completed switch means source, ref/commit, plugin version and the
+   installed catalog all agree after step 4's verification. A run that was
+   already using the old MCP process keeps its original execution identity;
+   it is not hot-replaced by a later switch. Open a new Codex task to pick up
+   whichever version is now installed.
+
+**Verification boundary:** this procedure is a source migration plan. The
+release verification records any controlled failure replay separately; this
+document does not itself prove that such a replay ran. It does **not** include
+running this migration against the real
+local `codex-claude-team` catalog on any machine, and it does not include a
+real Git remote to migrate to — see
+[git-marketplace.md](git-marketplace.md#what-git-ready-means-here-and-what-it-does-not)
+for that distinction. Do not read this section as evidence that a real
+migration has been performed or verified.
