@@ -216,6 +216,20 @@ class InstallationTests(unittest.TestCase):
         self.assertFalse(report['remote_credentials_verified'])
         self.assertGreaterEqual(len(report['next_steps']), 3)
 
+    def test_bundled_nested_and_legacy_host_paths_precede_path_cli(self):
+        for app in ('ChatGPT.app', 'Codex.app'):
+            for relative in ('Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex',
+                             'Contents/Resources/codex'):
+                bundled = Path('/Applications') / app / relative
+                with self.subTest(bundle=str(bundled)), \
+                        patch.object(Path, 'is_file', lambda p: p == bundled), \
+                        patch.object(Path, 'resolve', lambda p: p), \
+                        patch.object(diagnostics.os, 'access', return_value=True), \
+                        patch.object(diagnostics.shutil, 'which', return_value='/fixture/bin/codex'):
+                    self.assertEqual(diagnostics._host_candidates(),
+                                     [(str(bundled), 'desktop'), ('/fixture/bin/codex', 'path')])
+                    self.assertEqual(diagnostics.host_source(str(bundled)), 'desktop')
+
     def test_path_cli_is_not_reported_as_a_verified_desktop_host(self):
         fake = self.base / 'codex'
         fake.write_text("#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 1.0; fi\nexit 0\n")

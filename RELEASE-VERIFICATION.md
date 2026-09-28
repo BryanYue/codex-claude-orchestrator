@@ -9,7 +9,8 @@ a source document cannot certify installation of an archive that does not yet ex
 ## Verified before release freeze
 
 - Full offline runner: 240 plugin tests and 72 bridge tests passed after final
-  browser corrections, including the modal keyboard regression.
+  browser corrections, including the modal keyboard regression. A later narrow
+  desktop bundle-path fix has separate installer regression coverage.
 - Builder regression: 28 tests passed, including tracked-HEAD-only packaging,
   inherited Git-environment isolation, linked worktrees, output/sidecar collisions,
   symlinks, immutable bytes, deterministic ZIP hashes and executable modes.
@@ -27,6 +28,9 @@ a source document cannot certify installation of an archive that does not yet ex
   a fresh offline MCP session after warmup initialized in 1.886 seconds with
   server version 0.5.0 and 24 tools. Offline missing-Python/missing-wheel cases
   returned failure without falsely reporting ready.
+- Desktop CLI discovery supports both the legacy Resources/codex path and
+  the nested codex-cli/CodexCLI.app bundle layout observed in the current host.
+  PATH-only CLI remains insufficient to claim desktop compatibility.
 - The eight execution-contract files, protocol and viewer backend are unchanged.
   Third-party locked dependencies are unchanged; only root package metadata moves
   to 0.5.0. No new CLI qualification is required by this source change.

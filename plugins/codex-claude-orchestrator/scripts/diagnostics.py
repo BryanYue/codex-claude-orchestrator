@@ -24,8 +24,10 @@ except ModuleNotFoundError:  # During an interrupted plugin upgrade, diagnostics
 
 def _host_candidates() -> list[tuple[str, str]]:
     """Bundled host CLIs take precedence; PATH remains diagnostic-only fallback."""
-    candidates = [(Path('/Applications/ChatGPT.app/Contents/Resources/codex'), 'desktop'),
-                  (Path('/Applications/Codex.app/Contents/Resources/codex'), 'desktop')]
+    candidates = [(Path(app) / relative, 'desktop')
+                  for app in ('/Applications/ChatGPT.app', '/Applications/Codex.app')
+                  for relative in ('Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex',
+                                   'Contents/Resources/codex')]
     result: list[tuple[str, str]] = []
     seen: set[Path] = set()
     for path, source in candidates:
