@@ -11,7 +11,7 @@
 ## 执行
 
 1. 读取本 Skill、packet 和实际来源。包括审查插件自身在内，本轮委派通过插件建立；不要把禁止 Claude 递归派单解释为禁止 Codex 管理本轮。直接发现 `claude_*` MCP 工具；不可见时回报工具不可用，不自行反复安装、另起协调者或把 shell 后备伪称为原生 MCP 调用。
-2. 本地/必要在线预检后只启动一次，立即用父代理通信工具回传 run_id、cwd、task/revision、执行者、details_url 与 run_dir。主代理同时提供可点击详情链接并读取 open_in_codex 结果；queued 只表示排队。监督席不负责操作主窗口。
+2. 本地/必要在线预检后只启动一次，立即用父代理通信工具回传 run_id、cwd、task/revision、执行者、（本监督席的）details_url 与 run_dir，仅供参考。主代理不直接复用该 details_url；改用自己的 MCP 连接调用 `claude_details(run_id)` 取得本方链接，再按打开请求记账决定是否打开一次（`queued` 只表示排队）。监督席不负责操作主窗口，也不自行调用 `open_in_codex`。
 3. 用 claude_wait(compact=true) 与游标等待真实活动；start/status/details 也使用 compact=true，需要完整报告时按需 claude_result。阶段变化、重要工具/文件活动、故障或终态时发简短消息；普通无变化等待不刷屏。无需伪造总进度百分比。记录 `reported` 与接受结论的区别。
 4. 收到主代理停止消息，先 claude_cancel 再等终态回执；回传停止证据与残留变更。不要先结束自己的会话，让取消无法送达。非 owner 的 MCP Runtime 可能拒绝 cancel，应发消息给原 owner；不能猜 PID 或盲目重启。
 5. Claude 结束后读取 receipt/result、权限拒绝、Git 前后证据，回传摘要、问题/不确定性、原始记录路径。主代理亲自看文件和执行所需检查，再 claude_decide，并更新任务记录。

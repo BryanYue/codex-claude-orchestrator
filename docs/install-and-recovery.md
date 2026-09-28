@@ -92,7 +92,7 @@ order:
 | `command -v uv` fails | uv is not installed | Install uv per the official instructions above; do not let anything auto-run Homebrew/curl for you |
 | `./scripts/launch.sh --prepare-dependencies` fails on `uv sync` | Locked dependency resolution/download failed (network, index, disk) | Read the printed `uv sync` error directly; rerun after fixing it |
 | MCP server does not come up within 120s | Dependency download or another startup error may be responsible | Preserve stderr, run step 2, then retry MCP initialization. If warmup succeeds but startup still fails, inspect the actual server error; do not assume every timeout is a download problem or raise the timeout without evidence |
-| `claude_cli_status` reports no discovered Claude CLI | No system/managed Claude executable found yet | Run `claude_cli_update(action="prepare")`, or configure an explicit path via `--configure-claude-bin` |
+| `claude_cli_status` reports no discovered Claude CLI | No system/managed Claude executable found yet | Run `claude_cli_update(action="prepare")`; only a ZIP install may alternatively use its installer with `--configure-claude-bin` |
 | `claude_cli_status` reports not authenticated | Claude CLI is present but the user has not logged in | Log in with the Claude CLI yourself; the plugin will not do this for you |
 | Delegation is blocked even though the plugin is installed | Claude readiness (steps 2–4) is separate from plugin registration (this doc's "Two install paths") | Re-check readiness with `claude_cli_status`/diagnostics, not just install success |
 

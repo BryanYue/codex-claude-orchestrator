@@ -66,7 +66,7 @@ async def lifespan(_):
 
 
 mcp = MCPServer(
-    "claude-orchestrator", version="0.4.7", lifespan=lifespan,
+    "claude-orchestrator", version="0.5.0", lifespan=lifespan,
     instructions="Use the codex-claude-orchestrator skill for natural task requests in adopted projects; users do not need tool commands. Read claude_workflow_context to recover the project workflow. A native Codex subagent can supervise independent Claude execution while the parent prepares verification; the parent owns scope and acceptance. Start with a versioned packet and file scope; keep run_id. Use claude_wait for incremental updates and claude_details for a compact live view. Use claude_environment for local preflight and claude_recovery/claude_reconcile for unknown-state recovery. Managed CLI maintenance follows its persisted bundled/latest channel. Official latest with auto_qualify explicitly enabled may run one bounded quota-consuming qualification per candidate and contract; status queries never start it. Use claude_models to discover CLI-advertised selectors and resolved models without a model prompt; forward official aliases for latest-in-family requests and preserve explicit model IDs. When cli_maintenance.notice_pending is true, explain its message, reason, current/target version and task impact to the user, then acknowledge that notice_id with claude_cli_update. Do not repeat ordinary up-to-date notices. Use claude_cli_status for progress and separate installation/login/compatibility facts; Explicit validate and opted-in auto_qualify consume provider quota; never imply model metadata is an actual successful call. Manual rollback pauses automatic maintenance until the user enables it again. Artifacts are explicit-file read-only reviews in non-Git directories. Only claude_decide after independent verification. Confirm the prior writer stopped before redirects. Project adoption does not approve a plan or deploy OS protection. Do not change login or bypass permissions.",
 )
 READ = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
@@ -129,9 +129,9 @@ async def decorate(snapshot, operation="execution_status", compact=False):
     result["presentation"] = {
         "run_id": snapshot.get("run_id"),
         "state": "available" if result["details_url"] else "unavailable",
-        "link_label": "查看 Claude 执行详情",
+        "link_label": "查看 Claude 协作工作台",
         "host_open_state": "unobserved",
-        "instruction": ("向用户提供可点击的 details_url，并尝试打开一次。宿主返回 queued 只表示排队，不能说已显示。"
+        "instruction": ("仅主代理在能确认本 Codex 任务尚未请求打开工作台时，先记 requested 再请求打开一次；已请求（含 queued）、失败或上下文未知只提供可点击链接。queued 只表示排队，不能说已显示。用户显式要求重开时可重新取得同一 run 的链接并打开，不新增执行。"
                         if result["details_url"] else "继续查询原 run_id；连接恢复后用 claude_details 取得新链接，不能为显示重新派单。"),
     }
     return result
@@ -439,7 +439,7 @@ async def claude_events(run_id: str, after: int = 0, limit: int = 100) -> dict:
 @mcp.tool(title="查看 Claude 执行详情", annotations=READ)
 @expected_errors
 async def claude_details(run_id: str, compact: bool = False) -> dict:
-    """Return the same run's read-only live details URL. Always give the user a clickable link and open it once with open_in_codex. Its queued result means queued, not displayed. Unavailable details never require another dispatch; reconnect then request this run_id again."""
+    """Return the same run's read-only workbench URL. The main agent provides the link and calls open_in_codex only when it can confirm this Codex task has not yet requested opening it; record requested before the call (queued counts as requested). Failed or unknown-context attempts do not auto-retry. Explicit reopen is allowed for the same run without redispatch. Supervisors return the run_id; the main agent obtains its own Viewer link. Unavailable details never require another dispatch."""
     return await decorate(await asyncio.to_thread(require_runtime().snapshot, run_id), compact=compact)
 
 

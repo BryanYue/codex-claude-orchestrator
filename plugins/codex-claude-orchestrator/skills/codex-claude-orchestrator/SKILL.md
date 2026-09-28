@@ -13,6 +13,12 @@ Codex 拥有任务目标、计划、技术裁决和验收。用本技能把明�
 
 未实现：无人值守 daemon、自动更换 Codex 协调者、自动合入、完整 Claude Dynamic Workflow Review。用户请求这些能力时明确说明缺口；单席 review 不能标成 Workflow Review。完整 Runtime 设计见 [runtime-design.md](references/runtime-design.md)，仅在设计升级或恢复机制时读。
 
+## 首次安装与依赖恢复
+
+Git marketplace 安装不会运行根 `Install.command`。MCP 工具缺失或启动超时时，先检查实际安装版本与启动错误；不要把注册成功当作依赖或 Claude 已就绪。MCP 启动器需要 uv、Python >=3.11 和锁定依赖，第一次可能下载。可从本 Skill 所属插件根（本文件目录向上两层）执行 `bash scripts/launch.sh --prepare-dependencies` 显式预热；此命令只准备该完整 manifest 版本的 venv，不发 Claude 请求。无 uv 时说明缺项并按官方安装方式处理，不静默安装 Homebrew、改 shell 配置或登录。
+
+预热成功后重新加载插件 MCP，再用 `claude_cli_status(cwd)` 或 `claude_diagnostics(cwd)` 区分插件/宿主、执行器与本地认证；它们不证明冷下载或远端模型调用成功。执行器未准备时复用 `claude_cli_update(action="prepare")`，认证由用户完成。Git 来源不能用 `Install.command` 或其配置参数补救，以免切回本地 catalog；保留原 source/ref 和维护策略。预热后仍失败则核对实际错误，不无限延长120秒启动窗口或重派模型任务。
+
 ## 自然入口与项目采用
 
 用户不需要逐次点名插件、预检、派单、打开详情或验收。已采用项目中的普通需求、已批准计划、“继续”和纠正都属于入口；从项目 AGENTS、`claude_workflow_context(cwd)` 和当前任务记录恢复，而不是让用户复述流程。只在实际需要 Claude 时检查并派发，不把小改动强制做成多代理任务。配置检查先看 `check_status` 和 `adoption_status`：`check_failed` / `unknown` 表示尚不能确认，不能概括成未采用；多项目逐个保留结论。只读检查可解析目录别名，核对 `requested_cwd`、`resolved_cwd`、`project_root` 后用真实目录派单。配置和协议文件的符号链接限制不因此放开。
@@ -42,13 +48,13 @@ Codex 拥有任务目标、计划、技术裁决和验收。用本技能把明�
 
 有独立且较长的 Claude 工作，主代理同时有可推进的工作，或上下文隔离有收益时，可派一个原生 Codex 子代理监督委派，按 [supervisor.md](references/supervisor.md) 传递有界任务。短任务由主代理直接管理 MCP，避免仅为显示节点增加一层模型开销。主代理保留技术裁决和正式记录写入权；监督席负责预检、启动、增量进度、结果回传和既定纠正，不自行 accepted，不再派嵌套监督席。名称及型号遵从适用规则，明确其为 Codex 监督者。
 
-主代理立即接收其 run_id/详情链接，在主任务给简短进度并打开简洁详情；使用真实子代理工具等待/发消息。没有独立并行工作、原生工具不可用或席位不足时由主代理直接监督，说明实际路径；不要创建用户侧新任务充当子代理，不假造原生 Claude 节点。
+主代理立即接收其 run_id，随后通过自己的 MCP 连接调用 `claude_details(run_id)` 取得本方 Viewer 链接（不直接复用监督席回传、可能短命的 details_url），按打开请求记账决定是否打开一次；取链接失败时保留 run_id 和可用说明，不通过再 start 或反复开页补偿。在主任务给简短进度；使用真实子代理工具等待/发消息。没有独立并行工作、原生工具不可用或席位不足时由主代理直接监督，说明实际路径；不要创建用户侧新任务充当子代理，不假造原生 Claude 节点。
 
 ## 调用 Claude
 
 用户让 Claude 执行或审查时，通过本插件的 `claude_*` MCP 工具建立和监督执行，包括审查插件自身。审查独立性来自冻结输入与 Codex 核验；禁止递归委派指 Claude 不再调用协调插件派下一层，不妨碍 Codex 用插件管理本轮。工具或范围确实不受支持时先说明具体限制与可行路径，不能静默改为直接 `claude -p` 或临时监督脚本，也不能把旁路执行记作插件流程验收。
 
-常规预检调用只读 `claude_environment(cwd)`，检查 CLI、兼容版本和当前认证状态；诊断安装/宿主问题用 `claude_diagnostics(cwd)`，可分享的摘要不含账号身份、任务原文或原始 run/session 标识；对应执行详情仍保留核验所需标识。工具尚未载入时在安装后的新任务加载一次；CLI 诊断后备用 `python3 <skill>/scripts/bridge.py doctor --cwd ...`。每轮 run 自动保存 environment.json；未安装、未登录、未验证的 CLI 版本分别说明下一步，不盲目重试。桌面 PATH 缺失时使用安装器的 `--configure-claude-bin` 指定经确认的绝对执行路径；不 source shell 配置或静默选择其他 nvm 版本。版本固定与更新说明见随包 README，不自行改 Claude 全局更新策略。不得读取、复制或打印 token/keychain/凭证文件，不自动登录、登出或切换账号。
+常规预检调用只读 `claude_environment(cwd)`，检查 CLI、兼容版本和当前认证状态；诊断安装/宿主问题用 `claude_diagnostics(cwd)`，可分享的摘要不含账号身份、任务原文或原始 run/session 标识；对应执行详情仍保留核验所需标识。工具尚未载入时在安装后的新任务加载一次；CLI 诊断后备用 `python3 <skill>/scripts/bridge.py doctor --cwd ...`。每轮 run 自动保存 environment.json；未安装、未登录、未验证的 CLI 版本分别说明下一步，不盲目重试。ZIP 安装且桌面 PATH 缺失时，才使用安装器的 `--configure-claude-bin` 指定经确认的绝对执行路径；不 source shell 配置或静默选择其他 nvm 版本。版本固定与更新说明见随包 README，不自行改 Claude 全局更新策略。不得读取、复制或打印 token/keychain/凭证文件，不自动登录、登出或切换账号。
 
 ### CLI 更新、验证与回退
 
@@ -85,7 +91,7 @@ Codex 拥有任务目标、计划、技术裁决和验收。用本技能把明�
 常规 start/status/wait/details/decide 调用传 `compact=true`，避免重复展开整份报告和核验历史；旧调用不传该参数仍返回完整结构。需要证据时通过 `claude_result` 或 `compact=false` 按需读取，摘要不代替验收。
 
 1. 按本次工作量选择有界 `timeout_seconds`（默认 300 秒，最大 14400 秒；不是进度轮询时限），调用 `claude_start(packet, timeout_seconds, resume_run_id?)`。取得具体 `run_id` 后说明任务目标、范围、请求模型和记录中的实际状态；“已创建执行记录”不等于进程已启动，`claude_started` 未确认时如实说明。
-2. 首次返回即在主任务给出 `[查看 Claude 执行详情](details_url)` 和简短状态，同时用 `open_in_codex` 的 browser target 打开一次。读取打开结果：成功才说已打开；`queued` 说明已排队、可点击链接查看；失败保留链接说明未能自动打开。工具调用中的 URL 不代替用户可点击回复。详情不可用时保留原 `run_id` 继续查询，绝不因此重新派单。重连后用 `claude_details(run_id)` 取新链接；页面依赖 MCP 进程存活。用户要求重新打开时可再打开同一 run。
+2. 主代理在本 Codex 任务内按"打开请求记账"维护 `not_requested / requested / failed` 状态（只存在对话上下文，不写入 Runtime 或执行状态）。只有能确认 `not_requested` 且取得有效链接时才自动打开：给出 `[查看 Claude 协作工作台](details_url)`，在发出 `open_in_codex` 调用前先记为 `requested`，再用 browser target 请求一次；成功与 `queued` 都保持 `requested`（`queued` 只表示排队，不能说已显示），明确失败改为 `failed`、不自动重试。已处于 `requested` 或 `failed` 时，同任务后续 start/details 只给可点击链接和一句状态，不再自动调用 `open_in_codex`。上下文恢复时沿用已有记账；无法确认是否请求过时只给链接，不能按 `not_requested` 猜测重开。工具调用中的 URL 不代替用户可点击回复。详情不可用时保留原 `run_id` 继续查询，绝不因此重新派单。重连后用主代理自己的 `claude_details(run_id)` 取新链接；页面依赖 MCP 进程存活。用户显式说"重新打开/另开查看/打不开了"时，取新链接、先记 `requested` 再请求打开一次；这不新增 Claude run。不能保证宿主深链复用原标签页时，使用原工作台的任务列表定位；单页承诺限定为同一 Codex 任务内存活的 Viewer。原生监督席永不调用 `open_in_codex`，只回传 run_id 与 details_url。
 3. 用 `claude_wait(run_id, after=<上次 next_cursor>, timeout_seconds=25)` 获取增量，围绕同一 ID 跟踪到结束。报告新出现的有意义公开活动；无新事件不编造进展，也不重复相同状态。不用 latest 代替原任务，不高频轮询。默认详情区分“最近公开活动”和“页面同步”；请求模型/effort 是配置，实际模型只认 provider 证据。
 4. 执行结束读 `claude_result` 的 receipt/result/diff，按下节核验并给最终结论。`reported` 只表示 Claude 已交回结果；`claude_decide` 记录 Codex 有证据的 accepted/returned，不能省略验证。公开活动、简洁/完整详情、核验依据复用现有入口，不另外创建监控任务或许诺无人值守通知。
 5. `claude_cancel(run_id, reason)` 发出取消；继续等待终态回执。`unknown` 表示无法确认，先核实进程和残留变更，不能直接重派。
