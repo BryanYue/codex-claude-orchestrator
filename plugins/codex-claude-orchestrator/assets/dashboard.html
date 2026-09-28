@@ -1,70 +1,376 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Claude 执行详情</title>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Claude 协作工作台</title>
 <style>
-:root{color-scheme:light dark;--bg:#f7f7f8;--panel:#fff;--line:#dedfe3;--muted:#62666d;--text:#1f2328;--warn:#9a6700;--warn-bg:#fffbeb;--warn-line:#dfc889;--bad:#b42318;--bad-bg:#fff4f2;--bad-line:#e5b5b0;--connection-bg:#fff4d6;--connection-text:#735500}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}button,input,select{font:inherit}button:disabled{cursor:default;opacity:.45}button{cursor:pointer}button:focus-visible,input:focus-visible{outline:2px solid #4b5563;outline-offset:3px}header{min-height:68px;padding:12px 28px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:12px}header strong{font-size:16px}.meta{color:var(--muted);font-size:12px}.tools{display:flex;align-items:center;gap:14px}.mode,.quiet{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:7px;padding:6px 10px}.connection{color:var(--muted);font-size:12px}.offline{color:var(--warn)}.layout{display:grid;grid-template-columns:1fr;min-height:calc(100vh - 68px)}aside{display:none;align-self:start;position:sticky;top:0;max-height:calc(100vh - 70px);overflow:auto;padding:18px 12px;border-right:1px solid var(--line)}.side-head{display:flex;justify-content:space-between;padding:0 9px 11px}.eyebrow{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted)}.run{display:block;width:100%;text-align:left;color:var(--text);background:none;border:1px solid transparent;border-radius:9px;padding:11px 9px;margin-bottom:5px}.run:hover,.run.selected{background:#eceef0}.run.selected{border-color:#b9bdc4}.run-title{font-weight:600;overflow-wrap:anywhere}.run-meta{font-size:11px;color:var(--muted);margin-top:4px}.full .layout{grid-template-columns:236px minmax(0,1fr)}.full aside{display:block}main{width:100%;max-width:1060px;margin:0 auto;align-self:start;padding:28px clamp(20px,4vw,54px) 60px}.hidden{display:none!important}.empty{text-align:center;color:var(--muted);padding:72px 16px}.empty h1{color:var(--text);font-size:22px}.topline{display:flex;justify-content:space-between;align-items:center;gap:12px}.status{font-size:12px;border:1px solid var(--line);border-radius:999px;padding:4px 10px}.warn{color:var(--warn);border-color:var(--warn-line);background:var(--warn-bg)}.bad{color:var(--bad);border-color:var(--bad-line);background:var(--bad-bg)}.objective{font-size:20px;line-height:1.35;margin:10px 0 3px}.notice{margin:17px 0;padding:11px 14px;border-left:2px solid #7c838c;border-radius:0 7px 7px 0;background:#f1f3f5;white-space:pre-wrap}.notice.warn{border-color:var(--warn-line);background:var(--warn-bg)}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:18px}.card,.timeline{min-width:0;padding:14px;background:var(--panel);border:1px solid var(--line);border-radius:10px}.card h2,.timeline summary{font-size:12px;margin:0 0 5px}.value{font-size:16px;margin:0}.action,.timeline,.report-card{grid-column:1/-1}.prose{white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0}.evidence-list{margin:8px 0;padding-left:20px}.round-tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:14px 0}.round-tools select{max-width:100%;padding:5px 8px;border:1px solid var(--line);border-radius:6px;color:var(--text);background:var(--panel)}.paging{display:flex;gap:8px;margin:14px 0}.connection-note{margin:0;padding:12px 28px;background:var(--connection-bg);color:var(--connection-text)}.full .report-card{margin-top:16px}.grid{align-items:start}.prompt{display:block;margin-top:7px;padding:7px 9px;background:#f5f6f7;border-radius:6px;font:12px ui-monospace,monospace;overflow-wrap:anywhere}.buttons{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.timeline{padding:0}.timeline summary{cursor:pointer;padding:13px 14px}.event{display:grid;grid-template-columns:72px minmax(0,1fr);gap:10px;padding:9px 14px;border-top:1px solid var(--line);font-size:12px}.event time{color:var(--muted)}.full-only{display:none}.full .full-only{display:block}.full .simple-only{display:none!important}.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));margin:20px 0;border:1px solid var(--line);border-radius:10px;overflow:hidden}.metric{padding:15px;border-right:1px solid var(--line)}.metric:last-child{border:0}.label{font-size:11px;color:var(--muted)}.tabs{display:flex;gap:18px;overflow:auto;border-bottom:1px solid var(--line);margin-top:24px}.tab{white-space:nowrap;border:0;border-bottom:2px solid transparent;background:none;color:var(--muted);padding:10px 0}.tab[aria-selected=true]{color:var(--text);border-color:var(--text)}.search{margin:18px 0 10px;width:280px;max-width:100%;padding:8px 10px;background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:7px}.artifact{max-height:56vh;overflow:auto;padding:16px;background:#fafafa;border:1px solid var(--line);border-radius:9px;white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.7 ui-monospace,monospace}.history{display:grid;gap:9px;margin-top:16px}.revision{padding:13px;text-align:left;color:var(--text);border:1px solid var(--line);border-radius:9px;background:var(--panel)}.footer{font-size:11px;color:var(--muted);margin-top:24px}@media(prefers-color-scheme:dark){:root{--bg:#1b1c1f;--panel:#24262a;--line:#3a3d42;--muted:#afb3ba;--text:#f3f4f6;--warn:#ffd56a;--warn-bg:#48370b;--warn-line:#b68a21;--bad:#ffc2bb;--bad-bg:#54231f;--bad-line:#b9655d;--connection-bg:#4a390b;--connection-text:#ffe6a6}.run:hover,.run.selected{background:#303238}.notice{background:#2b2e33}.notice.warn{background:var(--warn-bg)}.prompt,.artifact{background:#1f2125}}@media(max-width:800px){header{padding:11px 16px}.layout,.full .layout{grid-template-columns:1fr}aside{display:none}.full aside{display:block;border-right:0;border-bottom:1px solid var(--line);max-height:190px;overflow:auto;position:static}.grid,.metrics{grid-template-columns:1fr}.metric{border-right:0;border-bottom:1px solid var(--line)}.metric:last-child{border-bottom:0}}
+:root{color-scheme:light dark;
+--bg-detail:#FBFAF7;--bg-list:#F4F2EE;--panel:#FFFFFF;--line:#E2DFD8;--line-strong:#D9D6CE;
+--text:#1C1B19;--text-2:#3F3D39;--muted:#56544F;--muted-2:#6B6964;--focus:#1F4FB8;
+--primary-bg:#1C1B19;--primary-fg:#FFFFFF;
+--active-fg:#1F4FB8;--active-bg:#EAF0FC;--active-border:#BFD0F3;
+--settled-fg:#3F3D39;--settled-bg:#FFFFFF;--settled-border:#CFCBC2;
+--ok-fg:#17704B;--ok-bg:#E6F3EC;--ok-border:#B7DBC7;
+--attention-fg:#9A4B00;--attention-bg:#FCF1E3;--attention-border:#EDCB9E;
+--bad-fg:#A8271B;--bad-bg:#FBEAE8;--bad-border:#EDBDB7;
+--unknown-fg:#5E5C57;--unknown-bg:#F2F1ED;--unknown-border:#A9A59C;
+--history-fg:#56544F;--history-bg:#F2F1ED;--history-border:#CFCBC2;
+--none-fg:#6B6964;--none-bg:#FFFFFF;--none-border:#D9D6CE;
+--banner-warn-fg:#6E3800;--banner-ok-fg:#0F5537;--banner-warn-bg:#FCF1E3;--banner-warn-line:#EDCB9E;--banner-ok-bg:#E6F3EC;--banner-ok-line:#B7DBC7;
+}
+@media(prefers-color-scheme:dark){:root{
+--bg-detail:#1B1C1F;--bg-list:#17181B;--panel:#232529;--line:#34373C;--line-strong:#43464C;
+--text:#F3F4F6;--text-2:#D5D7DB;--muted:#AFB3BA;--muted-2:#9A9EA6;--focus:#8FB0FF;
+--primary-bg:#F3F4F6;--primary-fg:#1B1C1F;
+--active-fg:#9DB8FF;--active-bg:#1E2A45;--active-border:#3A5184;
+--settled-fg:#D5D7DB;--settled-bg:#232529;--settled-border:#55585E;
+--ok-fg:#7FD3A8;--ok-bg:#16302A;--ok-border:#2F6B50;
+--attention-fg:#FFC870;--attention-bg:#3A2A10;--attention-border:#8A6424;
+--bad-fg:#FFB0A6;--bad-bg:#3D1D1A;--bad-border:#8C4A42;
+--unknown-fg:#C9C6BF;--unknown-bg:#2A2B2E;--unknown-border:#6E6B64;
+--history-fg:#AFB3BA;--history-bg:#2A2B2E;--history-border:#4A4D52;
+--none-fg:#AFB3BA;--none-bg:transparent;--none-border:#43464C;
+--banner-warn-fg:#FFE6A6;--banner-ok-fg:#BFF0D4;--banner-warn-bg:#3A2A10;--banner-warn-line:#8A6424;--banner-ok-bg:#16302A;--banner-ok-line:#2F6B50;
+}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg-list);color:var(--text);font:14px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",sans-serif}
+button,input,select{font:inherit;color:inherit}
+button{cursor:pointer;background:var(--panel);border:1px solid var(--line);border-radius:7px}
+button:disabled{cursor:default;opacity:.5}
+button:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.mono{font:12px ui-monospace,Menlo,monospace;overflow-wrap:anywhere}
+.meta{color:var(--muted);font-size:12px}
+.hidden{display:none!important}
+.visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.quiet{background:var(--panel);color:var(--text);padding:6px 10px}
+.quiet.small{padding:3px 8px;font-size:12px}
+.primary{background:var(--primary-bg);color:var(--primary-fg);border:0;padding:9px 16px;border-radius:7px;font-weight:600;min-height:36px}
+.icon-btn{width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center;border-radius:7px}
+.app{display:flex;flex-direction:column;min-height:100vh}
+.topbar{min-height:56px;padding:10px 20px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:12px;background:var(--bg-detail);position:sticky;top:0;z-index:5}
+.topbar-left,.topbar-right{display:flex;align-items:center;gap:12px}
+.brand{font-size:15px;font-weight:600}
+.readonly-note{font-size:12px;color:var(--muted)}
+.connection-pill{font-size:12px;border:1px solid var(--line);border-radius:999px;padding:4px 10px;display:inline-flex;align-items:center;gap:6px}
+.connection-pill::before{content:'';width:7px;height:7px;border-radius:50%;background:#2f9e5c;display:inline-block}
+.connection-pill.offline::before{background:#c98a1f}
+.connection-pill.offline{color:var(--attention-fg);border-color:var(--attention-border)}
+.connection-pill.token-invalid::before{background:#b3271b}
+.connection-pill.token-invalid{color:var(--bad-fg);border-color:var(--bad-border)}
+.dot{width:7px;height:7px;border-radius:50%;background:#e08a1e;display:inline-block;margin-left:4px}
+.dot.unavailable{background:var(--muted-2)}
+#bannerArea{display:flex;flex-direction:column}
+.banner{padding:10px 20px;font-size:13px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.banner.warn{background:var(--banner-warn-bg);color:var(--banner-warn-fg);border-bottom:1px solid var(--banner-warn-line)}
+.banner.ok{background:var(--banner-ok-bg);color:var(--banner-ok-fg);border-bottom:1px solid var(--banner-ok-line)}
+.layout{display:grid;grid-template-columns:392px minmax(0,1fr);flex:1;min-height:0}
+.list-pane{border-right:1px solid var(--line);background:var(--bg-list);padding:14px 12px;overflow:auto}
+.search{width:100%;padding:8px 10px;background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:7px;margin-bottom:10px}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+.chip{border-radius:15px;padding:5px 11px;font-size:12px;border:1px solid var(--line);background:var(--panel)}
+.chip[aria-pressed=true]{background:var(--primary-bg);color:var(--primary-fg);border-color:var(--primary-bg)}
+.new-task-notice{background:var(--active-bg);color:var(--active-fg);border:1px solid var(--active-border);border-radius:8px;padding:9px 11px;margin-bottom:10px;font-size:13px;display:flex;justify-content:space-between;gap:8px;align-items:center}
+.group-label{font-size:10px;letter-spacing:1.4px;text-transform:uppercase;color:var(--muted-2);margin:14px 0 6px}
+.group-label:first-child{margin-top:0}
+.task-card{display:block;width:100%;text-align:left;padding:10px 11px;border-radius:10px;border:1px solid var(--line);background:var(--panel);margin-bottom:6px}
+.task-card:hover{background:var(--bg-detail)}
+.task-card[aria-current=true]{border-color:var(--text);background:var(--bg-detail)}
+.task-card.offline-card{border-style:dashed;border-color:var(--line-strong)}
+.card-title{font-size:14px;font-weight:600;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.card-new-tag{font-size:10px;font-weight:600;background:var(--active-bg);color:var(--active-fg);border-radius:4px;padding:1px 5px;margin-left:6px}
+.card-reason{font-size:12px;font-weight:500;margin-top:3px}
+.card-flags{display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;margin-top:6px;font-size:11px;color:var(--muted)}
+.card-flags .flag-item{display:flex;align-items:center;gap:3px;white-space:nowrap;flex-shrink:0}
+.flag{width:16px;height:16px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:9.6px;font-weight:700}
+.flag.tone-active{color:var(--active-fg);background:var(--active-bg);border:1px solid var(--active-border);animation:pulse 1.6s ease-in-out infinite}
+.flag.tone-settled{color:var(--settled-fg);background:var(--settled-bg);border:1px solid var(--settled-border)}
+.flag.tone-ok{color:var(--ok-fg);background:var(--ok-bg);border:1px solid var(--ok-border)}
+.flag.tone-attention{color:var(--attention-fg);background:var(--attention-bg);border:1px solid var(--attention-border)}
+.flag.tone-bad{color:var(--bad-fg);background:var(--bad-bg);border:1px solid var(--bad-border)}
+.flag.tone-unknown{color:var(--unknown-fg);background:var(--unknown-bg);border:1px dashed var(--unknown-border)}
+.flag.tone-history{color:var(--history-fg);background:var(--history-bg);border:1px solid var(--history-border)}
+.flag.tone-none{color:var(--none-fg);background:var(--none-bg);border:1px solid var(--none-border)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
+@media(prefers-reduced-motion:reduce){.flag.tone-active{animation:none}}
+.offline-card .flag.tone-active{animation:none}
+.card-meta{flex-basis:100%;overflow-wrap:anywhere}
+.list-footer{margin-top:10px}
+#loadMoreBtn{width:100%;margin-top:6px}
+.detail-pane{overflow:auto;padding:24px clamp(20px,4vw,54px) 60px;background:var(--bg-detail)}
+.detail-content{max-width:900px;margin:0 auto}
+.empty-state{max-width:520px;margin:60px auto;text-align:center;color:var(--muted)}
+.empty-state h1{color:var(--text);font-size:22px}
+.eyebrow{font-size:10px;letter-spacing:1.4px;text-transform:uppercase;color:var(--muted-2)}
+.breadcrumb{display:flex;gap:10px;align-items:center;color:var(--muted);margin-bottom:6px}
+.breadcrumb .spacer{flex:1}
+.detail-title{font-size:24px;font-weight:600;margin:6px 0 2px;overflow-wrap:anywhere}
+.detail-sub{margin:0 0 10px}
+.round-tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
+.round-tab{padding:5px 10px;border-radius:7px;font-size:12px;border:1px solid var(--line);background:var(--panel)}
+.round-tab[aria-selected=true]{border-color:var(--text);font-weight:600}
+.round-tab[aria-disabled=true]{opacity:.6;border-style:dashed}
+.round-select{display:none}
+.time-info{margin:0 0 10px}
+.round-banner{margin:10px 0;padding:10px 12px;border-radius:8px;background:var(--attention-bg);color:var(--attention-fg);border:1px solid var(--attention-border);font-size:13px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.facts-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:16px 0}
+.fact-card{padding:14px;border-radius:10px;background:var(--panel);border:1px solid var(--line)}
+.fact-card[data-tone=active]{background:var(--active-bg);border-color:var(--active-border)}
+.fact-card[data-tone=attention]{background:var(--attention-bg);border-color:var(--attention-border)}
+.fact-card[data-tone=bad]{background:var(--bad-bg);border-color:var(--bad-border)}
+.fact-card[data-tone=ok]{background:var(--ok-bg);border-color:var(--ok-border)}
+.fact-card[data-tone=unknown]{background:var(--unknown-bg);border:1px dashed var(--unknown-border)}
+.fact-card[data-tone=history]{background:var(--history-bg);border-color:var(--history-border)}
+.fact-name{font-size:12px;color:var(--muted);display:flex;justify-content:space-between}
+.fact-value{font-size:16px;font-weight:600;margin:4px 0}
+.fact-note{font-size:13px;color:var(--muted)}
+.fact-stale{font-size:11px;color:var(--muted-2);margin-top:4px}
+@media(max-width:1099px){.facts-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.list-pane{width:340px}.layout{grid-template-columns:340px minmax(0,1fr)}}
+.next-step{margin:16px 0;padding:14px;border-radius:10px;background:var(--panel);border:1px solid var(--line)}
+.next-step-head{display:flex;align-items:center;gap:10px}
+.next-step-head h2{font-size:16px;margin:0}
+.tag{font-size:11px;border:1px solid var(--line);border-radius:4px;padding:2px 6px;color:var(--muted)}
+.prompt{display:block;margin-top:8px;padding:8px 10px;background:var(--bg-list);border-radius:6px;font:12px ui-monospace,monospace;overflow-wrap:anywhere;white-space:pre-wrap}
+.buttons{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.footnote{font-size:11px;color:var(--muted-2);margin:10px 0 0}
+.report-section{margin:16px 0}
+.report-head{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+.report-head h2{font-size:16px;margin:0}
+.report-box{padding:14px;border-radius:10px;border:1px solid var(--line);background:var(--panel);white-space:pre-wrap;overflow-wrap:anywhere}
+.report-box.tone-attention{background:var(--attention-bg);border-color:var(--attention-border)}
+.report-box.tone-bad{background:var(--bad-bg);border-color:var(--bad-border)}
+.report-box.tone-ok{background:var(--ok-bg);border-color:var(--ok-border)}
+.report-box.tone-history{background:var(--history-bg);border-color:var(--history-border)}
+.report-box.tone-none{border-style:dashed}
+.evidence-list{margin:6px 0;padding-left:20px}
+details.expand{margin:14px 0;padding:12px 14px;border-radius:10px;border:1px solid var(--line);background:var(--panel)}
+details.expand summary{cursor:pointer;font-size:13px;font-weight:600}
+.identity{display:grid;grid-template-columns:max-content 1fr;gap:4px 12px;font-size:12px;margin:8px 0}
+.identity dt{color:var(--muted)}
+.identity dd{margin:0;overflow-wrap:anywhere}
+.artifact{max-height:56vh;overflow:auto;padding:12px;margin-top:8px;background:var(--bg-list);border:1px solid var(--line);border-radius:8px;white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.7 ui-monospace,monospace}
+.event-row{display:grid;grid-template-columns:72px minmax(0,1fr);gap:10px;padding:8px 0;border-top:1px solid var(--line);font-size:12px}
+.event-row time{color:var(--muted)}
+.narrow-only{display:none}
+.drawer-overlay{position:fixed;inset:0;background:rgba(0,0,0,.25);display:flex;justify-content:flex-end;z-index:20}
+.drawer{width:440px;max-width:100%;height:100%;background:var(--bg-detail);box-shadow:-12px 0 32px rgba(28,27,25,.10);padding:18px;overflow:auto}
+@media(prefers-color-scheme:dark){.drawer{box-shadow:-12px 0 32px rgba(0,0,0,.4)}}
+.drawer-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+.drawer-body section{margin-bottom:16px}
+.drawer-body h3{font-size:13px;margin:0 0 6px}
+@media(max-width:899px){
+.topbar{min-height:48px;padding:8px 12px}
+.topbar{flex-wrap:wrap;gap:6px}
+.topbar-left,.topbar-right{width:100%;min-width:0;gap:8px}
+.topbar-left{justify-content:space-between}
+.brand,#maintenanceBtn{white-space:nowrap;flex-shrink:0}
+#projectFilter{max-width:46%;min-width:0}
+.connection-pill{margin-right:auto;min-width:110px;flex:1;font-size:11px;white-space:normal;padding:4px 6px}
+.connection-pill::before,.icon-btn{flex-shrink:0}
+.breadcrumb{flex-wrap:wrap;gap:6px 10px;margin-top:12px}
+#breadcrumbCwd{flex-basis:100%;order:1}
+#runIdLabel{flex-basis:calc(100% - 58px);order:2}
+#copyRunId{order:3;flex-shrink:0;white-space:nowrap}
+.breadcrumb .spacer{display:none}
+.readonly-note{display:none}
+.narrow-only{display:inline-flex}
+.layout{grid-template-columns:1fr;display:block}
+.list-pane{border-right:0;width:auto}
+html[data-view=list] .detail-pane{display:none}
+html[data-view=detail] .list-pane{display:none}
+.detail-title{font-size:18px}
+.facts-grid{grid-template-columns:1fr}
+.round-tabs{display:none}
+.round-select{display:block;width:100%;padding:7px;border-radius:7px;border:1px solid var(--line);background:var(--panel);color:var(--text);margin-bottom:8px}
+.primary{width:100%}
+.drawer{width:100%}
+}
 </style></head><body>
-<header><div><strong>Claude 执行详情</strong><div class="meta">本页只显示记录；执行、停止和改向请在 Codex 中发送。</div></div><div class="tools"><button id="mode" class="mode" type="button" aria-pressed="false">完整模式</button><span id="connection" class="connection">正在连接</span></div></header><div id="connectionNote" class="connection-note hidden" role="status"></div><div id="maintenanceNotice" class="notice hidden" role="status"></div><p id="maintenanceDetail" class="meta full-only hidden"></p>
-<div class="layout"><aside><div class="side-head"><span class="eyebrow">执行记录</span><span id="count" class="meta">0</span></div><div id="runs"></div><div class="paging"><button id="previousPage" class="quiet" type="button">上一页</button><button id="nextPage" class="quiet" type="button">下一页</button></div></aside><main><section id="empty" class="empty"><div class="eyebrow">准备就绪</div><h1>还没有执行任务</h1><p>在 Codex 描述要做的事；这里会显示真实活动和核验结果。</p></section><section id="content" class="hidden"><div class="topline"><span id="round" class="eyebrow"></span><span id="status" class="status"></span></div><h1 id="objective" class="objective"></h1><p id="subObjective" class="meta"></p><div class="round-tools"><label for="roundSelect">执行轮次</label><select id="roundSelect"></select><button id="previousRun" class="quiet hidden" type="button">查看上一轮</button><button id="currentRun" class="quiet hidden" type="button">查看后续轮</button><button id="historyButton" class="quiet" type="button">全部记录</button></div><div id="notice" class="notice hidden" role="status"></div><section class="grid simple-only" aria-label="任务摘要"><article class="card"><h2>当前状态</h2><p id="simpleStatus" class="value"></p><p id="statusDetail" class="meta"></p></article><article class="card"><h2>运行情况</h2><p id="duration" class="value"></p><p id="lastSync" class="meta"></p></article><article class="card"><h2>最近公开活动</h2><p id="simpleActivity" class="value"></p><p id="simpleActivityAt" class="meta"></p></article><article class="card"><h2>报告与验收</h2><p id="report" class="value"></p><p id="reportDetail" class="meta"></p></article><article id="actionCard" class="card action"><h2>需要处理</h2><p id="nextStep" class="value"></p><code id="prompt" class="prompt hidden"></code><div class="buttons"><button id="copyPrompt" class="quiet hidden" type="button">复制给 Codex</button></div></article><details id="publicTimeline" class="timeline"><summary>展开查看过程（公开活动）</summary><div id="simpleEvents"></div></details></section><article class="card report-card"><h2>报告摘要</h2><p id="readableSummary" class="prose">尚未产生报告。</p><p id="workspaceChangeSummary" class="meta"></p><p id="verificationSummary" class="meta"></p><details id="evidenceDetails"><summary>展开核验依据与未确认项</summary><div id="readableEvidence"></div></details><div class="buttons"><button id="rawButton" class="quiet" type="button">查看原始记录</button></div></article><section class="full-only"><div class="metrics"><div class="metric"><div class="label">运行时长</div><div id="fullDuration"></div></div><div class="metric"><div class="label">页面同步</div><div id="fullSync"></div></div><div class="metric"><div class="label">请求模型</div><div id="requestedModel"></div></div><div class="metric"><div class="label">实际模型</div><div id="actualModel"></div></div><div class="metric"><div class="label">请求 effort</div><div id="requestedEffort"></div></div><div class="metric"><div class="label">公开活动</div><div id="eventCount"></div></div></div><nav class="tabs" role="tablist" aria-label="执行详情"><button id="tab-activity" class="tab" role="tab" aria-controls="panel-activity" aria-selected="true" tabindex="0" data-tab="activity">活动</button><button id="tab-changes" class="tab" role="tab" aria-controls="panel-artifact" aria-selected="false" tabindex="-1" data-tab="changes">文件变化</button><button id="tab-history" class="tab" role="tab" aria-controls="panel-history" aria-selected="false" tabindex="-1" data-tab="history">轮次</button><button id="tab-result" class="tab" role="tab" aria-controls="panel-artifact" aria-selected="false" tabindex="-1" data-tab="result">结果与验收</button><button id="tab-packet" class="tab" role="tab" aria-controls="panel-artifact" aria-selected="false" tabindex="-1" data-tab="packet">任务要求</button></nav><section id="panel-activity" role="tabpanel" aria-labelledby="tab-activity"><input id="search" class="search" placeholder="筛选文件、工具或活动" aria-label="筛选活动"><p id="eventWindow" class="meta"></p><div id="events"></div></section><section id="panel-artifact" role="tabpanel" class="hidden"><div id="artifactButtons" class="buttons"></div><p id="artifactNote" class="meta"></p><pre id="artifact" class="artifact"></pre></section><section id="panel-history" role="tabpanel" class="history hidden"></section><p id="usage" class="meta"></p><dl id="identity" class="meta"></dl><p class="footer">活动来自公开工具事件；没有新事件不等于执行已停止。技术 JSON 仅在完整模式展示。</p></section></section></main></div>
+<div class="app">
+<header class="topbar">
+<div class="topbar-left"><strong class="brand">Claude 协作工作台</strong>
+<label class="visually-hidden" for="projectFilter">项目筛选</label>
+<select id="projectFilter"><option value="">全部项目</option></select></div>
+<div class="topbar-right"><span id="readonlyNote" class="readonly-note">只读视图 · 执行、停止与核验在 Codex 中进行</span>
+<span id="connection" class="connection-pill" role="status">正在连接</span>
+<button id="openWindowBtn" class="icon-btn narrow-only" type="button" aria-label="在独立窗口打开">⇱</button>
+<button id="maintenanceBtn" class="quiet" type="button" aria-expanded="false" aria-haspopup="dialog">环境与维护<span id="maintenanceDot" class="dot hidden" aria-hidden="true"></span></button>
+</div></header>
+<div id="bannerArea"></div>
+<div class="layout">
+<aside id="listPane" class="list-pane">
+<input id="searchInput" class="search" type="search" placeholder="搜索任务标题（仅已载入记录）" aria-label="搜索任务">
+<div id="filterChips" class="chips" role="group" aria-label="状态筛选"></div>
+<div id="newTaskNotice" class="new-task-notice hidden" role="status" aria-live="polite"></div>
+<div id="taskGroups" class="task-groups"></div>
+<p id="listFooter" class="list-footer meta"></p>
+<button id="loadMoreBtn" class="quiet" type="button">加载更早记录</button>
+</aside>
+<main id="detailPane" class="detail-pane">
+<button id="backToList" class="quiet narrow-only" type="button">‹ 任务列表</button>
+<section id="emptyState" class="empty-state"><div class="eyebrow">准备就绪</div><h1>还没有执行任务</h1><p>在 Codex 描述要做的事；这里会显示真实活动和核验结果。</p></section>
+<section id="detailContent" class="hidden">
+<div class="breadcrumb"><span id="breadcrumbProject" class="mono"></span><span id="breadcrumbCwd" class="mono"></span><span class="spacer"></span><span id="runIdLabel" class="mono"></span><button id="copyRunId" class="quiet small" type="button">复制</button></div>
+<h1 id="detailTitle" class="detail-title"></h1>
+<p id="detailSub" class="meta detail-sub"></p>
+<div id="roundTabs" class="round-tabs" role="tablist" aria-label="执行轮次"></div>
+<select id="roundSelectNarrow" class="round-select narrow-only" aria-label="执行轮次"></select>
+<p id="timeInfo" class="meta time-info"></p>
+<div id="roundBanner" class="round-banner hidden" role="status"></div>
+<div id="facts" class="facts-grid"></div>
+<div id="nextStep" class="next-step hidden"><div class="next-step-head"><h2>下一步</h2><span class="tag">在 Codex 中处理</span></div>
+<p id="nextStepBody"></p><code id="nextStepPrompt" class="prompt hidden"></code>
+<div class="buttons"><button id="copyPromptBtn" class="primary hidden" type="button">复制给 Codex</button></div>
+<p class="footnote">本页只读：停止、重派、改派和验收都经 Codex 对话完成，页面不直接执行。</p></div>
+<section id="reportSection"><div class="report-head"><h2>报告</h2><span id="reportTag" class="tag"></span><span id="reportSource" class="meta"></span></div>
+<div id="reportBody" class="report-box"></div>
+<details id="evidenceDetails" class="expand"><summary id="evidenceSummary">核验依据与未确认项</summary><div id="evidenceBody"></div></details></section>
+<details id="activityDetails" class="expand"><summary>过程 · 公开活动 <span id="activityCount" class="meta"></span></summary>
+<input id="activityFilter" class="search" type="search" placeholder="筛选文件、工具或活动" aria-label="筛选活动">
+<div id="activityBody"></div><p id="activityFootnote" class="meta">只显示公开工具事件，不含私有推理；一段时间没有新活动不等于执行已停止。</p></details>
+<details id="changesDetails" class="expand"><summary>文件变化</summary><p id="changesSummary" class="meta"></p><div id="changesButtons" class="buttons"></div></details>
+<details id="identityDetails" class="expand"><summary>本轮执行身份</summary><dl id="identityBody" class="identity"></dl><p id="usageText" class="meta"></p></details>
+<details id="technicalDetails" class="expand"><summary>技术记录</summary><dl id="technicalFields" class="identity"></dl><div id="technicalButtons" class="buttons"></div><pre id="technicalArtifact" class="artifact"></pre></details>
+</section></main></div></div>
+<div id="drawerOverlay" class="drawer-overlay hidden">
+<div id="drawer" class="drawer" role="dialog" aria-modal="true" aria-label="环境与维护">
+<div class="drawer-head"><h2>环境与维护</h2><button id="drawerClose" class="quiet" type="button" aria-label="关闭">✕</button></div>
+<div class="drawer-body">
+<section><h3>本机连接</h3><p id="drawerConnection" class="meta"></p></section>
+<section><h3>Claude CLI</h3><p id="drawerCli" class="meta"></p></section>
+<section><h3>维护</h3><p id="drawerMaintenance" class="meta"></p><p id="drawerMaintenanceDetail" class="meta"></p></section>
+<section><h3>用量说明</h3><p class="meta">Provider 回报的用量不等同订阅剩余额度。</p></section>
+</div></div></div>
 <script>
 'use strict';
 const $ = id => document.getElementById(id);
 let hash = new URLSearchParams(location.hash.slice(1));
-const MAX_EVENTS = 300, PAGE_SIZE = 50;
-const TERMINAL = new Set(['reported','accepted','returned','blocked','failed','cancelled','timeout','unknown','superseded']);
-const st = {run:hash.get('run')||'',runs:[],snapshot:null,events:[],cursor:0,moreEvents:false,packet:null,
-  result:null,decision:null,loadedKey:'',tab:'activity',artifact:'',mode:'simple',busy:false,epoch:0,timer:null,
-  controller:new AbortController(),refreshRequested:false,lastSync:0,listAt:0,listOffset:0,listMore:false,listNext:0,connected:false,maintenance:null,maintenanceAt:0};
-const names = {preflight:'正在预检',starting:'正在启动',running:'执行中',executing:'执行中',collecting:'收集结果',
-  completed:'执行结束 · 待核验',reported:'执行结束 · 待核验',accepted:'已验收',returned:'已退回',blocked:'被阻止',
-  failed:'执行失败',cancelling:'正在停止',cancelled:'已取消',timeout:'已超时',unknown:'状态待核对',superseded:'已被后续轮次替代'};
-function decision(s) { return typeof s?.decision==='string'?s.decision:s?.decision?.decision||s?.decision?.status||''; }
-function displayState(s) { return s?.superseded_by?'superseded':decision(s)||s?.status||'unknown'; }
-function completedByCodex(s) { return !s?.superseded_by&&decision(s)==='returned'&&s?.decision?.resolution==='completed_by_codex'; }
-function acceptedThenSuperseded(s) { return Boolean(s?.superseded_by&&decision(s)==='accepted'); }
-function label(s) { return completedByCodex(s)?'原报告未采纳 · Codex 已完成':acceptedThenSuperseded(s)?'已验收 · 已有后续轮':(names[displayState(s)]||displayState(s)); }
-function stamp(v) { return typeof v==='number'?v*1000:Date.parse(v||'')||0; }
-function duration(v) { const n=Math.max(0,Math.floor(Number(v)||0)); return n>=3600?`${Math.floor(n/3600)} 时 ${Math.floor(n%3600/60)} 分`:n>=60?`${Math.floor(n/60)} 分 ${n%60} 秒`:`${n} 秒`; }
-function first(v) { const t=typeof v==='string'?v.trim():''; return t.length>180?t.slice(0,180)+'…':t; }
-function el(tag,text,cls) { const n=document.createElement(tag); if(text!==undefined)n.textContent=String(text); if(cls)n.className=cls; return n; }
-function same(id,epoch) { return id===st.run&&epoch===st.epoch; }
-function pollingDelay(terminal,hidden,more) { return hidden?(terminal?60000:15000):more?250:terminal?15000:1800; }
-function runCliEvidence(s) {
-  const environment=s?.environment&&typeof s.environment==='object'?s.environment:{};
-  const descriptor=s?.cli_descriptor&&typeof s.cli_descriptor==='object'?s.cli_descriptor:{};
-  const identity=s?.cli_identity||s?.cli_identity_id||descriptor.identity_id||descriptor.id||environment.cli_identity||environment.identity||null;
-  const identityText=typeof identity==='string'?identity:(identity&&typeof identity.id==='string'?identity.id:'本轮记录未提供');
-  return {
-    version:s?.cli_version||environment.cli_version||descriptor.version||'本轮记录未提供',
-    identity:identityText,
-    environmentStatus:environment.status||'本轮记录未提供'
-  };
+
+const ACTIVE_STATUSES = new Set(['preflight','starting','executing','running','collecting','cancelling']);
+const FAIL_END = new Set(['failed','timeout','blocked','cancelled']);
+const FORMAL = 'reported';
+const PAGE_SIZE = 50, MAX_LOADED = 500, MAX_CONTINUE_PAGES = 3, MAX_EVENTS = 300;
+const OBSERVE_LIMIT = 40, BACKGROUND_BUDGET = 2, PREFETCH_PER_REFRESH = 10, MAX_SUPERSEDE_HOPS = 5;
+const gate = {B1:false, B2:false, B3:false};
+const TONE_SYMBOL = {active:'●',settled:'■',ok:'✓',attention:'!',bad:'✕',unknown:'?',history:'',none:'–'};
+function toneSymbol(fact){return fact.symbol||TONE_SYMBOL[fact.tone]||'';}
+
+function el(tag,text,cls){const n=document.createElement(tag);if(text!==undefined)n.textContent=String(text);if(cls)n.className=cls;return n;}
+function stamp(v){return typeof v==='number'?v*1000:Date.parse(v||'')||0;}
+function duration(v){const n=Math.max(0,Math.floor(Number(v)||0));return n>=3600?`${Math.floor(n/3600)} 时 ${Math.floor(n%3600/60)} 分`:n>=60?`${Math.floor(n/60)} 分 ${n%60} 秒`:`${n} 秒`;}
+function first(v){const t=typeof v==='string'?v.trim():'';return t.length>180?t.slice(0,180)+'…':t;}
+function firstSentence(v){const t=typeof v==='string'?v.trim():'';if(!t)return '';const m=t.match(/^[^。.!?！？\n]+[。.!?！？]?/);return first((m?m[0]:t).trim());}
+function decisionValue(v){return typeof v?.decision==='string'?v.decision:v?.decision?.decision||v?.decision?.status||'';}
+function structuredOf(result){return (result&&(result.structured||result.structured_output))||null;}
+function codexDone(v){const res=(typeof v?.decision==='object'&&v.decision)?v.decision.resolution:undefined;return decisionValue(v)==='returned'&&res==='completed_by_codex';}
+
+function taskKey(r){return r.task_id?r.task_id+'\u0000'+r.cwd:'run:'+r.run_id;}
+
+function emptyEntry(){return {summary:null,summaryAt:0,summarySeq:0,detail:null,detailAt:0,detailSeq:0,detailStale:false,attemptAt:0,events:[],cursor:0,moreEvents:false};}
+function mergeSummary(entry,row,now,seq){
+  entry=entry?{...entry}:emptyEntry();
+  if(seq!==undefined&&(seq<(entry.summarySeq||0)||seq<(entry.detailSeq||0)))return entry;
+  let stale=entry.detailStale;
+  if(entry.detail){
+    const changed=entry.detail.status!==row.status
+      ||JSON.stringify(entry.detail.decision||null)!==JSON.stringify(row.decision||null)
+      ||(entry.detail.superseded_by||null)!==(row.superseded_by||null);
+    if(changed)stale=true;
+  }
+  entry.summary=row;entry.summaryAt=now;entry.summarySeq=seq??entry.summarySeq;entry.detailStale=stale;
+  return entry;
 }
-function requestedValue(s, packet, key) { return s?.[`requested_${key}`]||s?.[key]||packet?.[key]||'本轮记录未提供'; }
-function actualModelText(s) {
-  const models=Array.isArray(s?.actual_models)?s.actual_models.filter(x=>typeof x==='string'&&x):[];
-  if(models.length)return [...new Set(models)].join('、');
-  if(s?.actual_model&&s?.actual_model_source)return s.actual_model;
-  return '待 provider 回报';
+function mergeDetail(entry,row,now,seq){
+  entry=entry?{...entry}:emptyEntry();
+  if(seq!==undefined&&(seq<(entry.detailSeq||0)||seq<(entry.summarySeq||0)))return entry;
+  entry.detail=row;entry.detailAt=now;entry.detailSeq=seq??entry.detailSeq;entry.detailStale=false;
+  entry.summary=entry.summary?{...entry.summary,status:row.status,decision:row.decision,superseded_by:row.superseded_by}:row;
+  entry.summaryAt=now;entry.summarySeq=seq??entry.summarySeq;
+  return entry;
 }
-function latestPublicEvent(s) {
-  if(s&&Object.hasOwn(s,'last_meaningful_event'))return s.last_meaningful_event;
-  return [s?.last_event,...st.events].filter(e=>e&&e.kind!=='provider').sort((a,b)=>(b.seq||0)-(a.seq||0))[0]||null;
+function viewOf(entry){
+  if(!entry||(!entry.summary&&!entry.detail))return {view:null,hasDetail:false};
+  const hasDetail=Boolean(entry.detail)&&!entry.detailStale;
+  const view=hasDetail?entry.detail:{...(entry.detail||{}),...(entry.summary||{})};
+  return {view,hasDetail};
 }
-function activityDescription(event) {
+
+function currentRoundOf(runs,cache){
+  if(!runs.length)return {state:'not_loaded',pointer:null};
+  const tips=runs.filter(r=>!r.superseded_by);
+  if(tips.length===0){
+    const top=runs.reduce((a,b)=>(b.revision||1)>(a.revision||1)?b:a);
+    return {state:'not_loaded',pointer:top.superseded_by||null,from:top};
+  }
+  if(tips.length!==1)return {state:'pending',reason:'轮次链不一致'};
+  const tip=tips[0];
+  if(runs.some(r=>r.run_id!==tip.run_id&&(r.revision||1)>=(tip.revision||1)))return {state:'pending',reason:'轮次证据冲突'};
+  if(cache){
+    const entry=cache.get(tip.run_id);
+    if(!entry||!viewOf(entry).hasDetail||!entry.summaryAt||!entry.detailAt||Date.now()-Math.min(entry.summaryAt,entry.detailAt)>=60000)
+      return {state:'pending',reason:'当前轮待确认'};
+  }
+  return {state:'known',run:tip,inconsistent:false};
+}
+function nextSupersedeHop(pointer,visited){
+  if(!pointer)return null;
+  if(visited.has(pointer))return null;
+  if(visited.size>=MAX_SUPERSEDE_HOPS)return null;
+  return pointer;
+}
+
+function isUnsettled(v){
+  if(!v)return false;
+  if(ACTIVE_STATUSES.has(v.status))return true;
+  if(v.status==='unknown')return true;
+  if(v.status===FORMAL&&!decisionValue(v))return true;
+  return false;
+}
+function needsObservation(v){
+  if(!v)return false;
+  const status=v.status;
+  if(ACTIVE_STATUSES.has(status))return true;
+  if(status==='unknown')return true;
+  if(status===FORMAL&&!decisionValue(v))return true;
+  if(status==='failed'||status==='timeout'||status==='blocked')return true;
+  if(decisionValue(v)==='returned'&&!codexDone(v)&&!v.superseded_by)return true;
+  return false;
+}
+
+function withHistory(fact,hist){
+  if(!hist)return fact;
+  if(fact.tone==='bad'||fact.tone==='attention'){return {...fact,label:fact.label+' · 历史'};}
+  return {...fact,tone:'history',label:fact.label+' · 历史'};
+}
+function activityDescription(event){
   if(event?.kind==='tool'&&event.summary==='tool path permitted')return ({Read:'已允许读取',Glob:'已允许查找文件',Grep:'已允许搜索内容'})[event.tool]||'已允许工具访问';
   if(event?.kind==='decision')return event.summary==='Codex completed the task; original report returned'?'Codex 已补齐并完成，原报告未采纳':event.status==='accepted'?'Codex 已记录验收通过':event.status==='returned'?'Codex 已记录退回原因':'Codex 已记录核验结论';
   const milestones={preflight:'正在检查执行条件',starting:'正在启动 Claude',executing:'Claude 正在执行',collecting:'正在收集结果',reported:'Claude 已交回报告，等待核验'};
   return milestones[event?.kind]||first(event?.summary)||first(event?.message)||first(event?.kind)||'公开活动';
 }
-function activityAt(s, event) { return stamp(event?.received_at||event?.at||event?.timestamp)||stamp(s?.last_activity_at); }
-function workspaceChangeText(s) {
+function activityAt(s,event){return stamp(event?.received_at||event?.at||event?.timestamp)||stamp(s?.last_activity_at);}
+function activityTimeText(value){return value?new Date(value).toLocaleString('zh-CN',{hour12:false}):'活动时间未记录';}
+function latestPublicEvent(v,events){
+  if(v&&Object.hasOwn(v,'last_meaningful_event'))return v.last_meaningful_event;
+  return [v?.last_event,...(events||[])].filter(e=>e&&e.kind!=='provider').sort((a,b)=>(b.seq||0)-(a.seq||0))[0]||null;
+}
+function workspaceChangeText(s){
   const w=s?.workspace_changes;
   if(!w||w.status==='unknown')return '文件影响尚不能确认，需核对前后快照。';
   if(Array.isArray(w.changes))return w.changes.length?`资料快照观察到 ${w.changes.length} 项差异，需核对来源。`:'声明的资料内容与目录结构未观察到变化。';
   return `前后快照观察到 ${w.changed_files.length} 个文件变化；开始前已有 ${w.preexisting_dirty_files.length} 个改动文件，结束时共 ${w.worktree_dirty_files.length} 个。变化不单独证明由 Claude 造成；忽略文件及中途变化不在此统计。`;
 }
-function activityTimeText(value) { return value?`最近公开活动 ${new Date(value).toLocaleString('zh-CN',{hour12:false})}`:'活动时间未记录'; }
-function maintenanceProgress(m) {
+function runCliEvidence(s){
+  const environment=s?.environment&&typeof s.environment==='object'?s.environment:{};
+  const descriptor=s?.cli_descriptor&&typeof s.cli_descriptor==='object'?s.cli_descriptor:{};
+  const identity=s?.cli_identity||s?.cli_identity_id||descriptor.identity_id||descriptor.id||environment.cli_identity||environment.identity||null;
+  const identityText=typeof identity==='string'?identity:(identity&&typeof identity.id==='string'?identity.id:'本轮记录未提供');
+  return {version:s?.cli_version||environment.cli_version||descriptor.version||'本轮记录未提供',identity:identityText,environmentStatus:environment.status||'本轮记录未提供'};
+}
+function requestedValue(s,packet,key){return s?.[`requested_${key}`]||s?.[key]||packet?.[key]||'本轮记录未提供';}
+function actualModelText(s){
+  const models=Array.isArray(s?.actual_models)?s.actual_models.filter(x=>typeof x==='string'&&x):[];
+  if(models.length)return [...new Set(models)].join('、');
+  if(s?.actual_model&&s?.actual_model_source)return s.actual_model;
+  return '待 provider 回报';
+}
+function maintenanceProgress(m){
   const phase=typeof m?.progress?.phase==='string'?m.progress.phase:'';
   const percent=Number(m?.progress?.percent);
   if(phase==='downloading')return Number.isFinite(percent)?`正在下载支持版本（${Math.max(0,Math.min(100,Math.floor(percent)))}%）。`:'正在下载支持版本。';
@@ -73,13 +379,13 @@ function maintenanceProgress(m) {
   if(phase==='qualifying'||phase==='validating'||(phase==='qualification'&&m?.qualification?.state==='pending'))return '正在验证候选兼容能力，会使用 Claude 额度。';
   return '正在获取支持版本。';
 }
-function maintenanceNotice(m) {
+function maintenanceNotice(m){
   if(!m)return '';
   const current=typeof m.current_version==='string'&&m.current_version?m.current_version:'当前版本待确认';
   const target=typeof m.target_version==='string'&&m.target_version?m.target_version:'目标版本待确认';
   const inProgress=['acquiring','discovering','qualifying','validating'].includes(m.state)||['downloading','discovering','qualifying','validating'].includes(m?.progress?.phase)||m?.qualification?.state==='pending';
   if(inProgress)return `CLI 正在维护：当前 ${current}；目标 ${target}。${maintenanceProgress(m)}任务影响：已有任务继续使用启动时的执行版本。`;
-  if(!m.notice_pending) {
+  if(!m.notice_pending){
     if(m.active_unqualified_for_contract)return `配置的 CLI ${current} 尚缺当前资格；基础只读任务预计使用 ${m.effective_dispatch_version||'尚无合格版本'}。具体版本以本轮执行记录为准。`;
     if(m.reason==='qualification_result_pending_maintenance')return first(m.message);
     return '';
@@ -87,9 +393,14 @@ function maintenanceNotice(m) {
   const explanation=first(m.message)||'维护结果需要说明。';
   return `CLI 维护通知：当前 ${current}；目标 ${target}。${explanation} 任务影响：已有任务继续使用启动时的执行版本。`;
 }
-function renderMaintenance(m) {
-  const note=maintenanceNotice(m),root=$('maintenanceNotice');
-  root.textContent=note;root.className='notice warn'+(note?'':' hidden');
+function renderMaintenance(m){
+  const note=maintenanceNotice(m),root=$('drawerMaintenance');
+  root.textContent=note||'当前没有需要说明的维护通知。';
+  const dot=$('maintenanceDot');
+  const pending=Boolean(m&&(m.notice_pending||['acquiring','discovering','qualifying','validating'].includes(m.state)||m.active_unqualified_for_contract));
+  dot.classList.toggle('hidden',!pending&&m?.state!=='unavailable');
+  dot.classList.toggle('unavailable',m?.state==='unavailable');
+  dot.setAttribute('aria-label',m?.state==='unavailable'?'维护状态暂不可用':'有说明');
   const details=[m?.source&&`来源 ${m.source}`,m?.scope&&`范围 ${m.scope}`,
     m?.effective_dispatch_version&&`基础任务预计 CLI ${m.effective_dispatch_version}（启动前仍需完整校验）`,
     m?.installed_plugin_release&&`已安装插件发布 ${m.installed_plugin_release}`,
@@ -97,219 +408,903 @@ function renderMaintenance(m) {
     m?.channel?.last_checked_at&&`上次检查 ${new Date(m.channel.last_checked_at*1000).toLocaleString('zh-CN',{hour12:false})}`,
     m?.qualification?.missing_groups?.length&&`尚未验证通过 ${m.qualification.missing_groups.join('、')}`,
     m?.qualification?.fallback_evidence?.length&&`保留版本承接 ${m.qualification.fallback_evidence.map(x=>`${x.group} → CLI ${x.version}`).join('、')}`].filter(Boolean).join(' · ');
-  const detail=$('maintenanceDetail');detail.textContent=details;detail.classList.toggle('hidden',!details);
+  $('drawerMaintenanceDetail').textContent=details;
 }
-async function api(path,params={}) {
-  const u=new URL(path,location.origin); Object.entries(params).forEach(([k,v])=>u.searchParams.set(k,String(v)));
-  const r=await fetch(u,{headers:{Authorization:'Bearer '+(hash.get('token')||'')},cache:'no-store',signal:AbortSignal.any([AbortSignal.timeout(10000),st.controller.signal])});
-  const d=await r.json(); if(!r.ok)throw Error(d.error||'读取失败'); return d;
+
+function execFact(v,hasDetail){
+  const status=v?.status;
+  const started=hasDetail?v.claude_started:undefined;
+  const by=hasDetail?((v.receipt&&v.receipt.blocked_by)||(v.result&&v.result.blocked_by)||null):undefined;
+  switch(status){
+    case 'preflight': return {tone:'none',label:'已创建 · 预检中',detail:''};
+    case 'starting':
+      return started===true?{tone:'active',label:'执行中',detail:''}:{tone:'active',label:'正在启动',detail:'Claude 尚未确认启动'};
+    case 'executing': case 'running': {
+      if(!hasDetail)return {tone:'active',label:'执行中',detail:'活动详情未载入'};
+      const event=latestPublicEvent(v,[]);
+      const at=activityAt(v,event);
+      const desc=event?activityDescription(event):'';
+      return {tone:'active',label:'执行中',detail:at?`${activityTimeText(at)}${desc?' · '+desc:''}`:(desc||'')};
+    }
+    case 'collecting': return {tone:'active',label:'收集结果',detail:''};
+    case 'cancelling': return {tone:'attention',label:'停止待确认',detail:'已请求停止，尚未收到进程停止回执。'};
+    case 'cancelled':
+      return started===false?{tone:'none',label:'启动前已取消',detail:''}:{tone:'none',label:'已停止',detail:'已按回执确认停止；工作区外副作用仍需核对。'};
+    case 'blocked': {
+      if(by==='preflight'&&started===false)return {tone:'bad',label:'预检阻止 · Claude 未启动',detail:''};
+      if(by==='preflight')return {tone:'bad',label:'预检阻止 · 启动状态未确认',detail:''};
+      if(by==='executor')return {tone:'bad',label:'执行者无法继续',detail:''};
+      if(by===undefined)return {tone:'bad',label:'被阻止',detail:'原因详情未载入'};
+      return {tone:'bad',label:'被阻止',detail:''};
+    }
+    case 'failed':
+      return started===false?{tone:'bad',label:'启动失败 · Claude 未启动',detail:''}:{tone:'bad',label:'执行失败',detail:''};
+    case 'timeout': return {tone:'bad',label:'已超时',detail:''};
+    case 'unknown':
+      return v.reconciliation?.outcome==='confirmed_stopped'?{tone:'none',label:'已核对停止',detail:''}:{tone:'unknown',label:'状态未知',detail:'无法确认进程状态；不代表已失败。'};
+    case 'reported': return {tone:'settled',label:'执行已结束',detail:''};
+    default: return {tone:'unknown',label:'状态待确认',detail:String(status||'')};
+  }
 }
-function action(s) {
-  if(completedByCodex(s))return ['',''];
-  if(s?.reconciliation?.outcome==='confirmed_stopped')return ['旧轮已核对停止，历史结果仍未验收；可在 Codex 指定新的任务方向。','核对恢复记录后，按新方向开启新一轮。'];
-  if(displayState(s)==='blocked'&&(s?.blocked_by||st.result?.blocked_by)==='executor') {
-    const value=st.result?.structured||st.result?.structured_output||{};
-    const summary=typeof value.summary==='string'?value.summary:(typeof s.summary==='string'?s.summary:'执行者需要补充材料或澄清规格。');
+function reportFact(v,hasDetail){
+  const status=v?.status,hist=Boolean(v?.superseded_by);
+  const r=hasDetail?v.result:undefined;
+  if(gate.B3&&v?.report?.contract_check?.passed===false){
+    const failures=v.report.contract_check.failures||[];
+    const allPlaceholder=failures.length>0&&failures.every(f=>f.kind==='placeholder');
+    return withHistory({tone:'bad',label:allPlaceholder?'缺乏实质内容（占位值）':'未通过报告契约',detail:'',kind:'contract_failed'},hist);
+  }
+  if(gate.B1&&v?.report?.integrity==='truncated')return withHistory({tone:'attention',label:'报告被截断',detail:'',kind:'truncated'},hist);
+  if(gate.B2&&v?.report?.collection_state==='pending')return withHistory({tone:'attention',label:'待收集',detail:'',kind:'pending'},hist);
+  if(status==='unknown')return withHistory({tone:'unknown',label:'不确定',detail:'',kind:'not_loaded'},hist);
+  if(status===FORMAL){
+    const complete=gate.B1&&v?.report?.integrity==='complete';
+    const decisionKind=codexDone(v)?'codex':decisionValue(v)==='accepted'?'accepted':decisionValue(v)==='returned'?'returned':'formal';
+    const kind=!hasDetail?'not_loaded':decisionKind;
+    const label=decisionKind==='accepted'?'已回报 · 已验收':decisionKind==='returned'?'已回报 · 已退回':decisionKind==='codex'?'已回报 · Codex 已补齐':complete?'已回报 · 完整':'已回报 · 待核验';
+    return withHistory({tone:'settled',label,detail:'',kind},hist);
+  }
+  if(FAIL_END.has(status)){
+    if(r===undefined)return withHistory({tone:'unknown',label:'详情未载入',detail:'',kind:'not_loaded'},hist);
+    if(structuredOf(r))return withHistory({tone:'attention',label:'有内容 · 未正常交回',detail:'',kind:'failed_with_content'},hist);
+    return withHistory({tone:'none',label:'未取得结构化报告',detail:'',kind:'failed_no_structured'},hist);
+  }
+  if(status==='collecting')return withHistory({tone:'none',label:'收集中',detail:'',kind:'none'},hist);
+  if(ACTIVE_STATUSES.has(status))return withHistory({tone:'none',label:'尚无报告',detail:'',kind:'none'},hist);
+  return withHistory({tone:'unknown',label:'状态待确认',detail:'',kind:'none'},hist);
+}
+function verifyFact(v,hasDetail){
+  const d=decisionValue(v);
+  const res=(typeof v?.decision==='object'&&v.decision)?v.decision.resolution:undefined;
+  const hist=Boolean(v?.superseded_by);
+  if(d==='returned'&&res==='completed_by_codex')
+    return hist?{tone:'history',symbol:'✓',label:'Codex 曾补齐完成 · 已有后续轮',detail:''}:{tone:'ok',label:'Codex 已补齐完成',detail:''};
+  if(d==='accepted')
+    return hist?{tone:'history',symbol:'✓',label:'已验收 · 已有后续轮',detail:''}:{tone:'ok',label:'通过',detail:''};
+  if(d==='returned')
+    return hist?{tone:'history',symbol:'✕',label:'已退回 · 已有后续轮',detail:''}:{tone:'bad',label:'已退回',detail:''};
+  if(FAIL_END.has(v?.status))return {tone:'none',label:'不适用',detail:'本轮未正常交回，不能记录验收结论。'};
+  const rp=reportFact(v,hasDetail);
+  let detail='报告交回后由 Codex 核验。';
+  if(rp.kind==='formal')detail='等待你在 Codex 核验。';
+  else if(rp.kind==='pending'||rp.kind==='truncated')detail='报告未收齐，暂时无法核验。';
+  return {tone:'none',label:'未核验',detail};
+}
+
+function groupFor(current,hasDetail){
+  if(current.state!=='known')return 'attention';
+  const c=current.run;
+  const vf=verifyFact(c,hasDetail);
+  if(vf.tone==='ok'||c.status==='cancelled')return 'closed';
+  if(ACTIVE_STATUSES.has(c.status))return 'active';
+  return 'attention';
+}
+function reasonLine(current,hasDetail){
+  if(current.state==='not_loaded')return {text:'当前轮待加载',tone:'unknown'};
+  if(current.state==='pending')return {text:'当前轮待确认',tone:'unknown'};
+  const c=current.run;
+  const ex=execFact(c,hasDetail),rp=reportFact(c,hasDetail),vf=verifyFact(c,hasDetail);
+  if(vf.tone==='ok'&&rp.kind==='codex')return {text:'Codex 已补齐完成 · 原报告未采纳',tone:'text2'};
+  if(c.status==='unknown')return {text:'状态未知 · 暂不要重派',tone:'unknown'};
+  if(rp.kind==='failed_with_content')return {text:'执行失败 · 有部分报告内容',tone:'attention'};
+  if(ex.label.indexOf('预检阻止')===0)return {text:'预检阻止 · Claude 未启动',tone:'bad'};
+  if(vf.label==='已退回')return {text:'已退回 · 待决定下一步',tone:'bad'};
+  if(rp.kind==='formal'&&vf.tone==='none'&&!FAIL_END.has(c.status))return {text:'已交回报告 · 待你在 Codex 核验',tone:'text2'};
+  if(ACTIVE_STATUSES.has(c.status))return {text:ex.detail?`执行中 · ${ex.detail}`:'执行中',tone:'active'};
+  const priority={bad:0,unknown:1,attention:2};
+  const facts=[ex,rp,vf].sort((a,b)=>(priority[a.tone]??3)-(priority[b.tone]??3));
+  const top=facts[0];
+  const tone=(top.tone==='settled'||top.tone==='history'||top.tone==='none')?'text2':top.tone;
+  return {text:top.label,tone};
+}
+function attentionRank(current,hasDetail){
+  if(current.state!=='known')return 6;
+  const c=current.run;
+  if(c.status==='unknown')return 0;
+  if(gate.B2&&c.completion_matched===false)return 1;
+  const rp=reportFact(c,hasDetail);
+  if(rp.kind==='truncated'||rp.kind==='contract_failed')return 2;
+  if(['failed','timeout','blocked'].includes(c.status))return 3;
+  const vf=verifyFact(c,hasDetail);
+  if(vf.label==='已退回')return 4;
+  if(rp.kind==='formal')return 5;
+  return 6;
+}
+function nextStepFor(current,hasDetail){
+  if(current.state!=='known')return null;
+  const c=current.run;
+  if(c.superseded_by)return null;
+  const ex=execFact(c,hasDetail),rp=reportFact(c,hasDetail),vf=verifyFact(c,hasDetail);
+  if(rp.kind==='formal'&&vf.tone==='none'&&!FAIL_END.has(c.status))
+    return {body:'报告已交回，请在 Codex 核验后记录结论。',prompt:`核验执行 ${c.run_id} 的报告，并记录 accepted 或 returned 及依据。`};
+  if(vf.label==='已退回')
+    return {body:'原报告已退回。可在 Codex 带着退回原因开启新一轮，或让 Codex 直接完成。',prompt:'按退回原因修正这项任务。'};
+  if(ex.label.indexOf('预检阻止')===0)
+    return {body:'Claude 未启动。先处理预检问题，再开启新一轮。',prompt:`检查执行 ${c.run_id} 的预检阻止原因，并给出处理步骤。`};
+  if(c.status==='blocked'&&ex.label==='执行者无法继续'){
+    const value=structuredOf(c.result)||{};
+    const summary=typeof value.summary==='string'?value.summary:'执行者需要补充材料或澄清规格。';
     const unresolved=Array.isArray(value.unresolved)&&value.unresolved.length?` 未确认项：${value.unresolved.join('；')}`:'';
-    return [`执行者无法继续：${summary}${unresolved}`,'根据执行者说明补充材料或澄清规格后，再决定下一步。'];
+    return {body:`${summary}${unresolved}`,prompt:'根据执行者说明补充材料或澄清规格后，再决定下一步。'};
   }
-  return ({reported:['',''],accepted:['',''],returned:['报告已退回，按负责人给出的原因修正。','按退回原因修正这项任务。'],
-    blocked:['本轮被预检阻止，先查看具体环境或范围问题。','检查这项执行被阻止的原因，并给出处理步骤。'],
-    failed:['执行未正常结束，需核对错误和文件状态。','核对这项执行失败的原因和文件状态。'],
-    timeout:['执行超时，需确认进程已停止并核对文件。','核对这项超时执行的进程和文件状态。'],
-    unknown:['状态无法确认；先核对实际进程和文件，暂不重派。','检查这项未知执行能否恢复；核对进程和文件后给出结论。'],
-    cancelling:['已请求停止，仍在等待确认。',''],cancelled:['本轮受监督进程已按回执停止。工作区外副作用仍需按任务核对。','核对残留文件后，按新的任务方向继续。'],
-    superseded:['本轮已被后续轮次替代，仅保留作历史证据。','查看这项任务的当前轮次。']})[displayState(s)]||['',''];
+  if(rp.kind==='failed_with_content')
+    return {body:'执行未正常交回，报告内容仅作失败证据。先核对失败原因和文件状态。',prompt:`核对执行 ${c.run_id} 的失败原因与文件状态；不要对本轮记录验收结论。`};
+  if(rp.kind==='failed_no_structured')
+    return {body:'执行未正常结束，需核对错误和文件状态。',prompt:'核对这项执行失败的原因和文件状态。'};
+  if(c.status==='unknown'){
+    return c.reconciliation?.outcome==='confirmed_stopped'
+      ?{body:'旧轮已核对停止，历史结果仍未验收；可在 Codex 指定新的任务方向。',prompt:'核对恢复记录后，按新方向开启新一轮。'}
+      :{body:'状态无法确认，不代表已经失败。先在 Codex 核对实际进程和文件；确认之前不要重派，避免同一目录出现两个执行。',prompt:`检查执行 ${c.run_id} 是否仍在运行；核对进程与工作区文件后给出结论，暂不重派。`};
+  }
+  if(c.status==='cancelling')return {body:'停止请求不等于已经停止。等待停止回执；确认前不要开启新一轮。',prompt:null};
+  if(c.status==='cancelled')return {body:'本轮已停止。工作区外副作用仍需按任务核对。',prompt:'核对残留文件后，按新的任务方向继续。'};
+  if(gate.B2&&c.completion_matched===false)
+    return {body:'执行已结束，但报告不完整。先在 Codex 核对子阶段产物，再决定补收还是开启新一轮。',prompt:`核对执行 ${c.run_id} 的子阶段产物与正式报告：列出已生成和缺失的部分；报告未齐前不要重派。`};
+  if(rp.kind==='truncated')
+    return {body:'只收到了报告前半部分。请在 Codex 读取正式报告产物；不要根据截断内容判断通过或失败。',prompt:`读取执行 ${c.run_id} 的正式报告产物（不是通知文本）；如果产物不存在，说明缺失原因。`};
+  if(rp.kind==='contract_failed')
+    return {body:'报告未通过交付契约校验（按 failures 列出原因）。请在 Codex 退回或重开。',prompt:`按契约校验失败项处理执行 ${c.run_id} 的报告，并决定是否重开。`};
+  return null;
 }
-function report(s) { const state=displayState(s); return completedByCodex(s)?['Codex 已完成','原 Claude 报告未采纳，补齐结果和依据见下方。']:state==='accepted'?['已验收','负责人已记录核验结论。']:state==='returned'?['已退回','修正依据见下方核验结论。']:state==='reported'?['报告待核验','Claude 自报结果尚待 Codex 核验。']:state==='superseded'&&acceptedThenSuperseded(s)?['已验收 · 已有后续轮','验收记录保留为历史事实，不能作为当前方向的验收依据。']:state==='superseded'?['历史报告','不能作为当前方向的验收依据。']:TERMINAL.has(state)?['本轮未验收','保留部分报告与失败证据。']:['尚无报告','等待执行者交回结果。']; }
-function renderRuns() {
-  const root=$('runs'); root.replaceChildren(); $('count').textContent=`${st.listOffset+1}–${st.listOffset+st.runs.length}`;
-  if(!st.runs.length)$('count').textContent='0';
-  for(const r of st.runs) { const b=el('button',undefined,'run'+(r.run_id===st.run?' selected':'')); b.type='button';
-    b.append(el('div',r.task_id||r.run_id,'run-title'),el('div',`第 ${r.revision||1} 轮 · ${label(r)}`,'run-meta'));
-    b.onclick=()=>selectRun(r.run_id); root.append(b); }
-  $('previousPage').disabled=st.listOffset===0; $('nextPage').disabled=!st.listMore;
+
+function pollingDelay(terminal,hidden,more){return hidden?(terminal?60000:15000):more?250:terminal?15000:1800;}
+function homePollingDelay(hasUnsettled,hidden){return hidden?60000:hasUnsettled?5000:15000;}
+function scheduleBackground(backfillQueue,observeQueue,prefetchQueue,budget){
+  const picks=[];
+  const reserveObserve=observeQueue.length>0?1:0;
+  let otherBudget=Math.max(0,budget-reserveObserve);
+  const other=backfillQueue.concat(prefetchQueue);
+  while(otherBudget>0&&other.length){picks.push(other.shift());otherBudget--;}
+  let observeBudget=reserveObserve+otherBudget;
+  while(observeBudget>0&&observeQueue.length){picks.push(observeQueue.shift());observeBudget--;}
+  return picks;
 }
-function roundOptions(s) {
-  const rows=st.runs.filter(r=>r.task_id===s.task_id&&r.cwd===s.cwd);
-  if(!rows.some(r=>r.run_id===s.run_id))rows.push(s);
-  rows.sort((a,b)=>b.revision-a.revision);
-  const select=$('roundSelect'),key=JSON.stringify(rows.map(r=>[r.run_id,r.revision,label(r)]));
-  if(select.dataset.key!==key) { select.replaceChildren(...rows.map(r=>{const option=el('option',`第 ${r.revision||1} 轮 · ${label(r)}`);option.value=r.run_id;return option;}));select.dataset.key=key; }
-  select.value=s.run_id;
-  $('previousRun').classList.toggle('hidden',!s.previous_run_id); $('currentRun').classList.toggle('hidden',!s.superseded_by);
+function reconcileLoadedOrder(existingOrder,freshPageIds){
+  const freshSet=new Set(freshPageIds);
+  const rest=existingOrder.filter(id=>!freshSet.has(id));
+  return [...freshPageIds,...rest].slice(0,MAX_LOADED);
 }
-function selectRun(id,updateHash=true) {
+function isNewCandidate(run,baseline,seenRunIds){
+  if(baseline.has(run.run_id))return false;
+  if(seenRunIds.has(run.run_id))return false;
+  return true;
+}
+function isNewTaskCandidate(run,existingTaskKeys){return !existingTaskKeys.has(taskKey(run));}
+function classifyEndpoint(kind){return (kind==='runs'||kind==='snapshot-selected'||kind==='events-selected')?'critical':'local';}
+function nextBackoff(current){if(!current)return 15000;if(current<30000)return 30000;return 60000;}
+function recoveryReady(flags,hasValidSelection){if(!hasValidSelection)return Boolean(flags.homeOk);return Boolean(flags.homeOk&&flags.snapshotOk&&flags.eventsOk);}
+
+const st={
+  run:hash.get('run')||'',epoch:0,cache:new Map(),loadedOrder:[],loadedSet:new Set(),nextOffset:0,hasMore:false,
+  extraIds:new Set(hash.get('run')?[hash.get('run')]:[]),
+  baseline:null,seenRunIds:new Set(),newTasks:[],knownTaskKeys:new Set(),
+  tab:'activity',artifactName:'',filter:'all',search:'',
+  selController:new AbortController(),bgController:new AbortController(),
+  homeTimer:null,selTimer:null,bgTimer:null,maintenanceTimer:null,homeInFlight:false,selInFlight:false,bgInFlight:false,
+  selRequestKey:null,requestSeq:0,homeSeq:0,recentHomeIds:new Set(),pagesLoaded:false,invalidRun:null,
+  backfillQueue:new Set(),observeCursorMap:new Map(),prefetchQueue:new Set(),visitedByTask:new Map(),backfillFailedAt:new Map(),backfillStopped:new Set(),observerOverflow:0,
+  maintenance:null,maintenanceAt:0,loadingMore:false,view:'list',focusReturn:null,taskFocusReturn:null,
+};
+const conn={connGen:0,status:'connecting',homeOk:false,snapshotOk:false,eventsOk:false,retryDelay:0,validSelection:false,lastCriticalSyncAt:0,failureLabel:'连接已断开'};
+
+function sameSelection(id,epoch,gen){return id===st.run&&epoch===st.epoch&&gen===conn.connGen;}
+async function api(path,params,opts){
+  opts=opts||{};
+  const controller=opts.controller||st.bgController;
+  const u=new URL(path,location.origin);
+  Object.entries(params||{}).forEach(([k,v])=>u.searchParams.set(k,String(v)));
+  const r=await fetch(u,{headers:{Authorization:'Bearer '+(hash.get('token')||'')},cache:'no-store',
+    signal:AbortSignal.any([AbortSignal.timeout(10000),controller.signal])});
+  const d=await r.json();
+  if(!r.ok){const err=new Error(d.error||'同步失败');err.status=r.status;throw err;}
+  return d;
+}
+
+function buildTasks(){
+  const tasks=new Map();
+  for(const runId of new Set([...st.loadedOrder,...st.extraIds])){
+    const entry=st.cache.get(runId);
+    const {view}=viewOf(entry);
+    if(!view)continue;
+    const key=taskKey(view);
+    if(!tasks.has(key))tasks.set(key,[]);
+    tasks.get(key).push(view);
+  }
+  return tasks;
+}
+function projectName(cwd){if(!cwd)return '';const parts=String(cwd).split('/').filter(Boolean);return parts.at(-1)||cwd;}
+function taskDisplay(runs){
+  const sorted=[...runs].sort((a,b)=>(a.revision||1)-(b.revision||1));
+  const current=currentRoundOf(sorted,st.cache);
+  const rep=current.state==='known'?current.run:sorted.at(-1);
+  const title=firstSentence(rep.objective)||rep.task_id||rep.run_id;
+  return {runs:sorted,current,title,project:projectName(rep.cwd),cwd:rep.cwd,rep};
+}
+
+function renderConnection(){
+  const pill=$('connection');
+  pill.classList.remove('offline','token-invalid');
+  if(conn.status==='offline'){pill.classList.add('offline');pill.textContent=conn.failureLabel+' · 显示 '+(conn.lastCriticalSyncAt?new Date(conn.lastCriticalSyncAt).toLocaleTimeString('zh-CN',{hour12:false}):'--')+' 的记录';}
+  else if(conn.status==='token_invalid'){pill.classList.add('token-invalid');pill.textContent='需要重新打开';}
+  else if(['online','recovered'].includes(conn.status))pill.textContent='已连接 · 同步于 '+(conn.lastCriticalSyncAt?new Date(conn.lastCriticalSyncAt).toLocaleTimeString('zh-CN',{hour12:false}):'--');
+  else pill.textContent='正在连接';
+}
+function renderBanner(){
+  const root=$('bannerArea');root.replaceChildren();
+  if(conn.status==='offline'){
+    const b=el('div',undefined,'banner warn');b.setAttribute('role','alert');
+    b.append(el('span',`本机服务${conn.failureLabel}，${conn.lastCriticalSyncAt?new Date(conn.lastCriticalSyncAt).toLocaleTimeString('zh-CN',{hour12:false}):'--'} 之后未同步。下方是上次同步的记录，不代表执行已停止，也不要据此重派。恢复：在 Codex 中说"重新打开 Claude 协作工作台"。`));
+    const copy=el('button','复制恢复指令','quiet small');copy.type='button';
+    copy.onclick=async()=>{try{await navigator.clipboard.writeText('重新打开 Claude 协作工作台');copy.textContent='已复制';}catch(_){copy.textContent='请手动复制';}};
+    b.append(copy);root.append(b);
+  } else if(conn.status==='token_invalid'){
+    const b=el('div','访问凭证已失效，请在 Codex 中重新打开工作台以获得新链接。','banner warn');b.setAttribute('role','alert');root.append(b);
+  } else if(conn.status==='recovered'){
+    const b=el('div',undefined,'banner ok');b.setAttribute('role','status');
+    b.append(el('span',`已恢复读取，${new Date().toLocaleTimeString('zh-CN',{hour12:false})} 完成同步。以下为最近同步的记录；断线期间的活动以各任务的公开活动记录为准。页面只读取记录，没有发起任何执行。`));
+    const ack=el('button','知道了','quiet small');ack.type='button';ack.onclick=()=>{conn.status='online';renderBanner();};
+    b.append(ack);root.append(b);
+  }
+}
+function markCriticalFailure(kind,err){
+  const previous=conn.status;
+  conn.homeOk=false;conn.snapshotOk=false;conn.eventsOk=false;
+  if(err&&err.status===401){
+    conn.status='token_invalid';conn.retryDelay=0;
+    clearTimeout(st.homeTimer);clearTimeout(st.selTimer);clearTimeout(st.bgTimer);clearTimeout(st.maintenanceTimer);
+    renderConnection();renderBanner();renderDetail();return;
+  }
+  conn.retryDelay=previous==='offline'?nextBackoff(conn.retryDelay):15000;
+  conn.failureLabel=err?.status?'同步失败':err?.name==='TimeoutError'?'读取超时':'连接已断开';
+  conn.status='offline';renderConnection();renderBanner();renderDetail();
+}
+function noteCriticalSuccess(kind){
+  if(kind==='runs')conn.homeOk=true;
+  if(kind==='snapshot-selected')conn.snapshotOk=true;
+  if(kind==='events-selected')conn.eventsOk=true;
+  conn.lastCriticalSyncAt=Date.now();
+  if(conn.status==='offline'){
+    if(recoveryReady(conn,conn.validSelection)){conn.status='recovered';conn.retryDelay=0;renderBanner();}
+  } else if(conn.status==='connecting'){conn.status='online';}
+  renderConnection();if(st.run)renderDetail();
+}
+function clearValidSelection(){conn.validSelection=false;}
+
+function renderChips(tasksByGroup){
+  const root=$('filterChips');root.replaceChildren();
+  const total=tasksByGroup.attention.length+tasksByGroup.active.length+tasksByGroup.closed.length;
+  const defs=[['all','全部',total],['attention','需处理',tasksByGroup.attention.length],['active','进行中',tasksByGroup.active.length],['closed','已收口',tasksByGroup.closed.length]];
+  for(const [key,label,count] of defs){
+    const b=el('button',`${label} ${count}`,'chip');b.type='button';b.setAttribute('aria-pressed',String(st.filter===key));
+    b.onclick=()=>{st.filter=key;renderList();};root.append(b);
+  }
+}
+function matchesSearch(display,query){
+  if(!query)return true;
+  const q=query.toLowerCase();
+  return [display.title,display.rep.task_id,display.rep.run_id,display.project].filter(Boolean).some(v=>String(v).toLowerCase().includes(q));
+}
+function renderList(){
+  const tasks=buildTasks();
+  const displays=[...tasks.values()].map(taskDisplay);
+  const groups={attention:[],active:[],closed:[]};
+  for(const d of displays){
+    const entry=st.cache.get(d.current.state==='known'?d.current.run.run_id:d.rep.run_id);
+    const hasDetail=entry?viewOf(entry).hasDetail:false;
+    d.group=groupFor(d.current,hasDetail);d.hasDetail=hasDetail;
+    groups[d.group].push(d);
+  }
+  renderChips(groups);
+  const projects=new Set(displays.map(d=>d.project).filter(Boolean));
+  const projectSelect=$('projectFilter');
+  const currentProjects=[...projectSelect.options].slice(1).map(o=>o.value).join(',');
+  if(currentProjects!==[...projects].sort().join(',')){
+    const keep=projectSelect.value;
+    const allOption=document.createElement('option');allOption.value='';allOption.textContent='全部项目';
+    projectSelect.replaceChildren(allOption);
+    for(const p of [...projects].sort()){const opt=document.createElement('option');opt.value=p;opt.textContent=p;projectSelect.append(opt);}
+    projectSelect.value=keep&&projects.has(keep)?keep:'';
+  }
+  const projectFilterValue=projectSelect.value;
+  const root=$('taskGroups');root.replaceChildren();
+  const order=[['attention','需要处理'],['active','进行中'],['closed','已收口']];
+  const activeGroups=st.filter==='all'?order:order.filter(([k])=>k===st.filter);
+  let shown=0;
+  for(const [key,label] of activeGroups){
+    let list=groups[key].filter(d=>(!projectFilterValue||d.project===projectFilterValue)&&matchesSearch(d,st.search));
+    if(key==='attention')list.sort((a,b)=>attentionRank(a.current,a.hasDetail)-attentionRank(b.current,b.hasDetail));
+    else if(key==='active')list.sort((a,b)=>stamp(b.rep.last_activity_at||b.rep.started_at)-stamp(a.rep.last_activity_at||a.rep.started_at));
+    else list.sort((a,b)=>stamp(b.rep.ended_at||b.rep.started_at)-stamp(a.rep.ended_at||a.rep.started_at));
+    if(!list.length)continue;
+    root.append(el('div',label,'group-label'));
+    for(const d of list){shown++;root.append(taskCard(d));}
+  }
+  if(!shown){
+    root.append(el('p',displays.length?'已载入的记录中没有匹配的任务。更早的记录需先"加载更早记录"。':'','meta'));
+  }
+  const runCount=st.loadedOrder.length,taskCount=tasks.size;
+  $('listFooter').textContent=`已载入 ${taskCount} 个任务 · ${runCount} 轮执行 · 计数不含未载入历史${st.observerOverflow?' · 另有 '+st.observerOverflow+' 个较早任务未实时刷新':''}`;
+  $('loadMoreBtn').disabled=!st.hasMore||st.loadedOrder.length>=MAX_LOADED;
+  $('loadMoreBtn').textContent=st.loadedOrder.length>=MAX_LOADED?'已达到载入上限':st.hasMore?'加载更早记录':'没有更早记录';
+  renderNewTaskNotice();
+}
+function taskCard(d){
+  const b=el('button',undefined,'task-card');b.type='button';b.setAttribute('role','listitem');
+  b.dataset.taskKey=taskKey(d.rep);
+  if(conn.status==='offline'||conn.status==='token_invalid')b.classList.add('offline-card');
+  const isSelected=d.runs.some(r=>r.run_id===st.run);
+  b.setAttribute('aria-current',String(isSelected));
+  const titleRow=el('div',undefined,'card-title');titleRow.append(document.createTextNode(d.title));
+  if(st.newTasks.includes(taskKey(d.rep)))titleRow.append(el('span','新','card-new-tag'));
+  const reason=reasonLine(d.current,d.hasDetail);
+  const reasonRow=el('div',reason.text,'card-reason');
+  reasonRow.style.color=`var(--${reason.tone==='text2'?'text-2':reason.tone+'-fg'})`;
+  const flagsRow=el('div',undefined,'card-flags');
+  if(d.current.state==='known'){
+    const ex=execFact(d.current.run,d.hasDetail),rp=reportFact(d.current.run,d.hasDetail),vf=verifyFact(d.current.run,d.hasDetail);
+    if(vf.tone==='ok'&&!['online','recovered'].includes(conn.status)){
+      vf.tone='unknown';vf.symbol='?';vf.label='已记录结论 · 同步待确认';
+    }
+    for(const [name,fact] of [['执行',ex],['报告',rp],['核验',vf]]){
+      const item=el('span',undefined,'flag-item');
+      const flag=el('span',toneSymbol(fact)||'–','flag tone-'+fact.tone);
+      flag.setAttribute('aria-hidden','true');
+      item.append(flag,el('span',name,'visually-hidden'),document.createTextNode(' '+name));
+      flagsRow.append(item);
+    }
+  }
+  const meta=[];
+  if(!$('projectFilter').value)meta.push(d.project);
+  if(d.rep.revision>1)meta.push(`第 ${d.rep.revision} 轮`);
+  const summaryAt=st.cache.get(d.rep.run_id)?.summaryAt||0;
+  const fresh=summaryAt&&(Date.now()-summaryAt)<60000;
+  const timeText=conn.status==='offline'?'断线前':!fresh&&summaryAt?'同步于 '+new Date(summaryAt).toLocaleTimeString('zh-CN',{hour12:false}):(d.rep.last_activity_at||d.rep.ended_at||d.rep.started_at)?activityTimeText(stamp(d.rep.last_activity_at||d.rep.ended_at||d.rep.started_at)):'';
+  meta.push(timeText);
+  flagsRow.append(el('span',meta.filter(Boolean).join(' · '),'card-meta'));
+  b.append(titleRow,reasonRow,flagsRow);
+  b.onclick=()=>{selectTask(d);};
+  return b;
+}
+function selectTask(d){
+  const target=d.current.state==='known'?d.current.run.run_id:d.rep.run_id;
+  st.newTasks=st.newTasks.filter(k=>k!==taskKey(d.rep));
+  st.taskFocusReturn=document.activeElement;
+  selectRun(target);
+  setView('detail');
+}
+function renderNewTaskNotice(){
+  const root=$('newTaskNotice');
+  if(!st.newTasks.length){root.classList.add('hidden');return;}
+  root.classList.remove('hidden');root.replaceChildren();
+  const taskRuns=st.newTasks.length===1?buildTasks().get(st.newTasks[0])||[]:[];
+  const confirmedStarted=taskRuns.some(r=>{const e=st.cache.get(r.run_id);return viewOf(e).hasDetail&&e.detail.claude_started===true;});
+  const text=st.newTasks.length===1?`新增任务：${st.newTasks[0].split('\u0000')[0]} · ${confirmedStarted?'Claude 已开始执行':'执行已创建'}。不会打断你当前查看的报告。`:`${st.newTasks.length} 个新增任务`;
+  root.append(el('span',text));
+  const btn=el('button',st.newTasks.length===1?'查看':'查看最新','quiet small');btn.type='button';
+  btn.onclick=()=>{const key=st.newTasks.at(-1);const tasks=buildTasks();const runs=tasks.get(key);if(runs){const d=taskDisplay(runs);selectTask(d);}st.newTasks=[];renderNewTaskNotice();};
+  root.append(btn);
+}
+
+function setView(view){st.view=view;document.documentElement.setAttribute('data-view',view);}
+function selectRun(id,updateHash=true){
   if(id===st.run)return;
-  st.controller.abort();st.controller=new AbortController();
-  st.run=id; st.epoch++; st.snapshot=null; st.events=[]; st.cursor=0; st.moreEvents=false; st.packet=null;
-  st.result=null; st.decision=null; st.loadedKey=''; st.artifact=''; st.lastSync=0;
-  for(const id of ['events','simpleEvents']) {$(id).dataset.signature='';$(id).replaceChildren();}
-  $('copyPrompt').textContent='复制给 Codex';
-  $('content').classList.add('hidden'); $('empty').classList.remove('hidden');
-  $('empty').querySelector('h1').textContent='正在载入这轮执行'; $('empty').querySelector('p').textContent='读取该轮真实记录。';
-  $('artifact').textContent='正在读取…'; $('readableSummary').textContent='正在读取…'; $('readableEvidence').replaceChildren();
-  $('evidenceDetails').open=false;
-  if(updateHash) { hash.set('run',id); history.replaceState(null,'','#'+hash.toString()); }
-  renderRuns(); schedule(0);
+  st.selController.abort();st.selController=new AbortController();
+  st.selInFlight=false;st.selRequestKey=null;
+  st.run=id;st.epoch++;st.artifactName='';st.invalidRun=null;
+  if(id&&!st.loadedSet.has(id))st.extraIds.add(id);
+  const entry=st.cache.get(id);
+  if(entry){entry.events=entry.events||[];entry.cursor=entry.cursor||0;}
+  conn.validSelection=Boolean(id);conn.snapshotOk=false;conn.eventsOk=false;
+  if(updateHash){hash.set('run',id);history.replaceState(null,'','#'+hash.toString());}
+  renderList();renderDetail();scheduleSelected(0);
 }
-function eventRows(root,items) {
-  const signature=items.map(e=>e.seq).join(','); if(root.dataset.signature===signature)return; root.dataset.signature=signature;
-  const existing=new Map([...root.children].filter(n=>n.dataset.seq).map(n=>[n.dataset.seq,n]));
-  const desired=[];
-  for(const e of items) { const seq=String(e.seq); let row=existing.get(seq);
-    if(!row) {row=el('div',undefined,'event');row.dataset.seq=seq;const when=stamp(e.received_at||e.at||e.timestamp),body=el('div');
-      body.append(el('strong',activityDescription(e)));
-      const detail=[e.status&&names[e.status],e.tool,e.file||e.path].filter(Boolean).join(' · ');if(detail)body.append(el('div',detail,'meta'));
-      row.append(el('time',when?new Date(when).toLocaleTimeString('zh-CN',{hour12:false}):'#'+seq),body);}
-    desired.push(row); }
-  if(!items.length)desired.push(el('p','尚无公开活动。没有活动不等于执行停止。','meta'));
-  root.replaceChildren(...desired);
+
+function factCard(name,fact,stale){
+  const card=el('div',undefined,'fact-card');card.dataset.tone=fact.tone;
+  card.append(el('div',name,'fact-name'));
+  const value=el('div',(toneSymbol(fact))+' '+fact.label,'fact-value');
+  card.append(value);
+  if(fact.detail)card.append(el('div',fact.detail,'fact-note'));
+  if(stale)card.append(el('div','最近读取的记录 · 可能已过时','fact-stale'));
+  return card;
 }
-function renderEvents() {
-  const query=$('search').value.toLowerCase();
-  eventRows($('events'),st.events.filter(e=>JSON.stringify(e).toLowerCase().includes(query)));
-  eventRows($('simpleEvents'),st.events.filter(e=>e.kind!=='provider').slice(-30).reverse());
-  $('eventWindow').textContent=`显示已载入的最近 ${st.events.length} 条；共 ${st.snapshot?.events_count??st.cursor} 条公开活动。${st.moreEvents?'正在追赶最新记录。':'完整日志保留在本机执行记录。'}`;
+function reportKindText(kind){
+  return ({not_loaded:'详情未载入',none:'无报告',formal:'已回报 · 待核验',accepted:'已通过核验',returned:'原 Claude 报告（已退回）',
+    codex:'Codex 补齐后的结果',failed_with_content:'有内容 · 未正常交回',failed_no_structured:'无结构化报告',
+    truncated:'报告被截断',pending:'待收集',contract_failed:'报告未通过契约校验'})[kind]||'';
 }
-function readableReport() {
-  const result=st.result, value=result?.structured||result?.structured_output||{}, d=st.decision?.decision&&typeof st.decision.decision==='object'?st.decision.decision:st.decision;
-  const closure=completedByCodex(st.snapshot),returned=decision(st.snapshot)==='returned';
-  $('readableSummary').textContent=closure?`Codex 补齐结果：${st.snapshot.decision.completion_summary}`:(returned?'原 Claude 报告（未采纳）：\n':'')+(typeof value.summary==='string'?value.summary:'尚未产生可读报告；完成后在此展示。');
-  $('workspaceChangeSummary').textContent=workspaceChangeText(st.snapshot);
-  $('verificationSummary').textContent=d?.reason?`Codex 核验：${d.reason}`:TERMINAL.has(displayState(st.snapshot))?'尚无负责人验收记录。':'结果返回后由 Codex 核验。';
-  const target=$('readableEvidence');target.replaceChildren();
-  if(closure&&typeof value.summary==='string'){target.append(el('h3','原 Claude 报告（未采纳）'),el('p',value.summary,'prose'));}
-  for(const [title,values] of [[returned?'原报告引用（未采纳）':'报告引用',value.evidence],['Claude 自报检查',value.checks],['未确认项',value.unresolved],['Codex 核验依据',d?.evidence]]) {
-    if(!Array.isArray(values)||!values.length)continue;
-    target.append(el('h3',title));const list=el('ul',undefined,'evidence-list');for(const item of values)list.append(el('li',String(item)));target.append(list);
+function renderReport(view,hasDetail){
+  const rp=reportFact(view,hasDetail);
+  $('reportTag').textContent=reportKindText(rp.kind)+(view.superseded_by?' · 历史':'');
+  const box=$('reportBody');box.className='report-box tone-'+rp.tone;box.replaceChildren();
+  const result=hasDetail?view.result:undefined;
+  const structured=structuredOf(result);
+  const d=(typeof view.decision==='object'&&view.decision)?view.decision:null;
+  if(rp.kind==='not_loaded'){box.append(el('p','报告详情未载入，正在读取…'));}
+  else if(rp.kind==='none'){
+    const text=ACTIVE_STATUSES.has(view.status)?'执行中，尚无结构化报告。':view.status==='collecting'?'正在收集结果。':view.status==='cancelling'?'已请求停止，本轮不再期待报告。':'本轮未取得结构化报告；可查看活动与回执。';
+    box.append(el('p',text));
   }
-  if(!target.children.length)target.append(el('p','尚无可展示的核验依据。','meta'));
+  else if(rp.kind==='failed_with_content'||rp.kind==='failed_no_structured'){
+    box.append(el('p','以下内容来自未正常交回的执行，仅作失败证据，不能对本轮记录验收结论。'));
+    for(const key of ['invariant_error','scope_error','result_validation_error','workflow_error','session_error']){
+      if(result&&result[key])box.append(el('p','失败原因：'+result[key],'meta'));
+    }
+    if(result&&Array.isArray(result.permission_denials)&&result.permission_denials.length)box.append(el('p','权限拒绝：'+result.permission_denials.map(String).join('；'),'meta'));
+    if(structured&&typeof structured.summary==='string'){
+      const details=el('details');details.append(el('summary','失败执行中的部分报告内容'),el('p',structured.summary,'prose'));box.append(details);
+    }
+  }
+  else if(rp.kind==='truncated'){box.append(el('p','以下是通知中收到的部分内容，不是正式报告全文'));box.append(el('p','正式报告产物：未取得……截断的内容不能用来判断通过或失败。'+(view.report?.reason?' '+view.report.reason:''),'meta'));}
+  else if(rp.kind==='pending'){
+    const isExited=FAIL_END.has(view.status)||view.status===FORMAL;
+    box.append(el('p',isExited?'外层会话已退出，正式报告还没有收齐。':'正式报告待收集。'));
+    box.append(el('p','这些事件不等于最终报告。','meta'));
+  }
+  else if(rp.kind==='contract_failed'){
+    box.append(el('p','报告未通过交付契约校验，不能作为交付结果。'));
+    for(const f of (view.report?.contract_check?.failures||[])){
+      const line=el('p',`${f.kind}：${f.path||''} ${f.detail||''}`+(f.kind==='placeholder'?' · 占位':''));box.append(line);
+    }
+    box.append(el('p','语义是否正确仍由 Codex 核验。','meta'));
+  }
+  else {
+    if(view.superseded_by)box.append(el('p','本轮已被后续轮次替代，仅供回看。','meta'));
+    if(rp.kind==='codex'&&d)box.append(el('p','Codex 补齐结果：'+(d.completion_summary||''),'prose'));
+    else if(typeof structured?.summary==='string')box.append(el('p',(rp.kind==='returned'?'原 Claude 报告（未采纳）：\n':'')+structured.summary,'prose'));
+    else box.append(el('p','尚未产生可读报告；完成后在此展示。','meta'));
+    if(rp.kind==='codex'&&structured&&typeof structured.summary==='string'){
+      const details=el('details');details.append(el('summary','原 Claude 报告（已退回，未采纳）'),el('p',structured.summary,'prose'));box.append(details);
+    }
+  }
+  $('reportSource').textContent=view.superseded_by?'历史记录':'';
+  const evidenceRoot=$('evidenceBody');evidenceRoot.replaceChildren();
+  const title=(rp.kind==='failed_with_content'||rp.kind==='failed_no_structured')?'失败证据与未确认项':'核验依据与未确认项';
+  $('evidenceSummary').textContent=title;
+  for(const [heading,values] of [[rp.kind==='returned'?'原报告引用（未采纳）':'报告引用',structured?.evidence],['Claude 自报检查',structured?.checks],['未确认项',structured?.unresolved],['Codex 核验依据',d?.evidence]]){
+    if(!Array.isArray(values)||!values.length)continue;
+    evidenceRoot.append(el('h3',heading));const list=el('ul',undefined,'evidence-list');for(const item of values)list.append(el('li',String(item)));evidenceRoot.append(list);
+  }
+  if(!evidenceRoot.children.length)evidenceRoot.append(el('p','尚无可展示的核验依据。','meta'));
   const usage=result?.usage_summary,parts=[];
-  if(usage)for(const [key,title] of [['input_tokens','输入 token'],['output_tokens','输出 token'],['cache_read_input_tokens','缓存读取 token'],['cache_creation_input_tokens','缓存写入 token']])if(typeof usage[key]==='number')parts.push(`${title} ${usage[key]}`);
+  if(usage)for(const [key,title2] of [['input_tokens','输入 token'],['output_tokens','输出 token'],['cache_read_input_tokens','缓存读取 token'],['cache_creation_input_tokens','缓存写入 token']])if(typeof usage[key]==='number')parts.push(`${title2} ${usage[key]}`);
   const cost=result?.total_cost_usd??result?.cost_usd;
   if(typeof cost==='number')parts.push(`API 计价 $${cost.toFixed(4)}`);
-  $('usage').textContent=parts.length?'Provider 回报：'+parts.join(' · ')+'。不等同订阅剩余额度。':'Provider 尚未提供可展示的用量。';
+  $('usageText').textContent=parts.length?'Provider 回报：'+parts.join(' · ')+'。不等同订阅剩余额度。':'Provider 尚未提供可展示的用量。';
 }
-function statusSummary(s) {
-  const state=displayState(s),record=typeof s?.decision==='object'?s.decision:st.decision;
-  if(completedByCodex(s))return first(s.decision.completion_summary);
-  if(state==='accepted'||state==='returned')return first(record?.reason)||'负责人已记录核验结论。';
-  if(state==='reported')return first(st.result?.structured?.summary)||first(s.summary)||'报告已返回，等待 Codex 核验。';
-  return first(s.summary)||'暂无额外公开说明。';
+function renderRoundTabs(taskRuns,view,current){
+  const root=$('roundTabs');root.replaceChildren();
+  const narrow=$('roundSelectNarrow');narrow.replaceChildren();
+  for(const r of taskRuns){
+    const isSelected=r.run_id===view.run_id;
+    const isCurrent=current.state==='known'&&current.run.run_id===r.run_id;
+    const tab=el('button',`第 ${r.revision||1} 轮${isCurrent?' · 当前':''}`,'round-tab');
+    tab.type='button';tab.setAttribute('role','tab');tab.setAttribute('aria-selected',String(isSelected));
+    tab.onclick=()=>selectRun(r.run_id);root.append(tab);
+    const opt=document.createElement('option');opt.value=r.run_id;opt.textContent=tab.textContent;opt.selected=isSelected;narrow.append(opt);
+  }
+  if(current.state==='not_loaded'){
+    const tab=el('button','待加载…','round-tab');tab.type='button';tab.setAttribute('role','tab');tab.setAttribute('aria-disabled','true');tab.disabled=true;root.append(tab);
+  }
+  narrow.onchange=e=>selectRun(e.target.value);
 }
-function render(s) {
-  const state=displayState(s),[stateText,prompt]=action(s),[reportText,reportDetail]=report(s),packet=st.packet||{};
-  $('empty').classList.add('hidden');$('content').classList.remove('hidden');$('status').textContent=label(s);
-  $('status').className='status'+(['failed','timeout'].includes(state)?' bad':!completedByCodex(s)&&['unknown','blocked','returned','superseded'].includes(state)?' warn':'');
-  $('round').textContent=`第 ${s.revision||1} 轮`;
-  const title=packet.title||first(packet.objective)||s.task_id||s.run_id;
-  $('objective').textContent=title;$('subObjective').textContent=packet.objective&&packet.objective!==title?first(packet.objective):'';
-  $('simpleStatus').textContent=label(s);$('statusDetail').textContent=statusSummary(s);
-  $('duration').textContent=duration(s.elapsed_seconds);$('lastSync').textContent=st.lastSync?`页面最后同步 ${new Date(st.lastSync).toLocaleTimeString('zh-CN',{hour12:false})}`:'等待同步';
-  const latestEvent=latestPublicEvent(s),latestAt=activityAt(s,latestEvent);
-  $('simpleActivity').textContent=latestEvent?activityDescription(latestEvent):'暂无新的公开活动';
-  $('simpleActivityAt').textContent=latestEvent?activityTimeText(latestAt):'没有公开活动不等于执行停止。';
-  $('report').textContent=reportText;$('reportDetail').textContent=reportDetail;
-  $('actionCard').classList.toggle('hidden',!stateText);$('nextStep').textContent=stateText;
-  $('prompt').textContent=prompt;$('prompt').classList.toggle('hidden',!prompt);$('copyPrompt').classList.toggle('hidden',!prompt);
-  const note=state==='unknown'&&!s.reconciliation?'当前状态无法确认；这不单独证明执行停止。':acceptedThenSuperseded(s)?'本轮已验收，之后已有后续轮；历史验收事实保留，但不能作为当前方向的验收依据。':state==='superseded'?'本轮已被后续轮次替代，保留供回看。':'';
-  $('notice').textContent=note;$('notice').className='notice'+(state==='unknown'?' warn':'')+(note?'':' hidden');
-  $('fullDuration').textContent=duration(s.elapsed_seconds);$('fullSync').textContent=$('lastSync').textContent;
-  $('requestedModel').textContent=requestedValue(s,packet,'model');$('actualModel').textContent=actualModelText(s);
-  $('requestedEffort').textContent=requestedValue(s,packet,'effort');$('eventCount').textContent=String(s.events_count??st.events.length);
-  const cli=runCliEvidence(s);
-  $('identity').replaceChildren(...[['执行编号',s.run_id],['工作目录',s.cwd],['Claude 会话',s.session_id||'等待初始化'],['本轮 CLI',cli.version],['CLI identity',cli.identity],['初始化模型（未证明实际调用）',s.initialized_model||'未记录'],['实际模型证据',s.actual_model_source||'尚无响应证据'],['运行环境',cli.environmentStatus],['上一轮',s.previous_run_id||'首轮 / 独立执行']].flatMap(([k,v])=>[el('dt',k),el('dd',v)]));
-  roundOptions(s);readableReport();renderEvents();
+function renderIdentity(view){
+  const cli=runCliEvidence(view);
+  $('identityBody').replaceChildren(...[['本轮 CLI',cli.version],['CLI identity',cli.identity],['请求模型',requestedValue(view,null,'model')],
+    ['请求 effort',requestedValue(view,null,'effort')],['实际模型',actualModelText(view)],['运行环境',cli.environmentStatus]].flatMap(([k,v])=>[el('dt',k),el('dd',v)]));
+  $('technicalFields').replaceChildren(...[['执行编号',view.run_id],['任务编号',view.task_id||'—'],['Claude 会话',view.session_id||'等待初始化'],
+    ['工作目录',view.cwd],['状态',`${view.status} · ${decisionValue(view)||'无核验'} · ${(typeof view.decision==='object'&&view.decision?.resolution)||'—'} · claude_started=${String(view.claude_started)}`],
+    ['上一轮',view.previous_run_id||'首轮 / 独立执行'],['后续轮',view.superseded_by||'无']].flatMap(([k,v])=>[el('dt',k),el('dd',v)]));
 }
-const groups={changes:[['diff','工作区 Diff'],['workspace_before','输入快照'],['workspace_after','结果快照']],result:[['result','Claude 报告'],['receipt','执行回执'],['decision','Codex 核验'],['decision_history','核验历史'],['reconciliation','恢复核验'],['environment','运行环境']],packet:[['packet','本轮要求']]};
-async function artifact(name) {
-  const id=st.run,epoch=st.epoch;st.artifact=name;$('artifact').textContent='正在读取…';
-  try {const a=await api('/api/artifact',{run_id:id,name});if(!same(id,epoch)||name!==st.artifact)return;
-    $('artifact').textContent=a.available?(typeof a.content==='string'?a.content:JSON.stringify(a.content,null,2)):'本项记录尚未产生。';
-    $('artifactNote').textContent=(name==='diff'?'此 Diff 可能含已有修改，需要结合输入快照核验。':'')+(a.truncated?'展示已截断；完整记录保留在本机。':'');
-  }catch(e){if(same(id,epoch))connectionError(e);}
+function actionReady(current){
+  if(current.state!=='known'||current.run.run_id!==st.run||st.invalidRun===st.run)return false;
+  const entry=st.cache.get(st.run);
+  return Boolean(conn.validSelection&&['online','recovered'].includes(conn.status)&&conn.homeOk&&conn.snapshotOk&&conn.eventsOk
+    &&entry&&viewOf(entry).hasDetail&&entry.summaryAt&&entry.detailAt&&Date.now()-Math.min(entry.summaryAt,entry.detailAt)<60000);
 }
-function historyView() {
-  const root=$('panel-history');root.replaceChildren();
-  root.append(el('p','以下为当前历史页中的相关轮次；可在左侧翻页查看更早记录。','meta'));
-  for(const r of st.runs.filter(r=>r.task_id===st.snapshot?.task_id&&r.cwd===st.snapshot?.cwd)) {const b=el('button',`第 ${r.revision||1} 轮 · ${label(r)}`,'revision');b.onclick=()=>selectRun(r.run_id);root.append(b);}
+function renderFacts(view,hasDetail,current){
+  const ex=execFact(view,hasDetail),rp=reportFact(view,hasDetail),vf=verifyFact(view,hasDetail);
+  if(vf.tone==='ok'&&!actionReady(current)){
+    vf.tone='unknown';vf.symbol='?';vf.label='已记录结论 · 当前性待确认';
+  }
+  const stale=!['online','recovered'].includes(conn.status)||current.state!=='known';
+  $('facts').replaceChildren(factCard('执行',ex,stale),factCard('报告',rp,stale),factCard('核验',vf,stale));
 }
-function switchTab(tab,focus=false) {
-  st.tab=tab;
-  for(const b of document.querySelectorAll('[role=tab]')) {const on=b.dataset.tab===tab;b.setAttribute('aria-selected',String(on));b.tabIndex=on?0:-1;if(on&&focus)b.focus();}
-  $('panel-activity').classList.toggle('hidden',tab!=='activity');$('panel-artifact').classList.toggle('hidden',!groups[tab]);$('panel-history').classList.toggle('hidden',tab!=='history');
-  $('panel-artifact').setAttribute('aria-labelledby','tab-'+tab);$('panel-history').setAttribute('aria-labelledby','tab-history');
-  if(tab==='history')historyView();
-  if(groups[tab]) {$('artifactButtons').replaceChildren(...groups[tab].map(([n,t])=>{const b=el('button',t,'quiet');b.type='button';b.onclick=()=>artifact(n);return b;}));artifact(groups[tab][0][0]);}
+function renderNextStep(current,hasDetail,isHistorical){
+  const box=$('nextStep');
+  const step=(!isHistorical&&actionReady(current))?nextStepFor(current,hasDetail):null;
+  if(!step){box.classList.add('hidden');return;}
+  const degraded=!actionReady(current);
+  box.classList.toggle('hidden',false);
+  $('nextStepBody').textContent=step.body;
+  $('nextStepPrompt').textContent=step.prompt||'';
+  $('nextStepPrompt').classList.toggle('hidden',!step.prompt);
+  $('copyPromptBtn').classList.toggle('hidden',!step.prompt||degraded);
+  $('copyPromptBtn').disabled=degraded;
 }
-function applyMode() {document.body.classList.toggle('full',st.mode==='full');$('mode').textContent=st.mode==='full'?'简洁模式':'完整模式';$('mode').setAttribute('aria-pressed',String(st.mode==='full'));}
-function connectionError(e) {
-  st.connected=false;$('connection').classList.add('offline');$('connection').textContent='连接中断 · 保留最后记录';
-  $('connectionNote').textContent=`详情连接已断开。${st.lastSync?'最后同步 '+new Date(st.lastSync).toLocaleTimeString('zh-CN',{hour12:false})+'。':''}当前展示可能是旧记录；这不单独证明执行停止。请在 Codex 说“重新打开这项执行详情”。${e?' '+e.message:''}`;
-  $('connectionNote').classList.remove('hidden');
+function renderDetail(){
+  const entry=st.cache.get(st.run);
+  const {view,hasDetail}=viewOf(entry);
+  $('emptyState').classList.toggle('hidden',Boolean(st.run));
+  $('detailContent').classList.toggle('hidden',!st.run);
+  if(!view||st.invalidRun===st.run){
+    if(st.run)$('detailTitle').textContent='该执行记录无法读取';
+    return;
+  }
+  const tasks=buildTasks();
+  const key=taskKey(view);
+  const taskRuns=(tasks.get(key)||[view]).sort((a,b)=>(a.revision||1)-(b.revision||1));
+  const current=currentRoundOf(taskRuns,st.cache);
+  const isHistorical=Boolean(view.superseded_by)||current.state==='known'&&current.run.run_id!==view.run_id;
+  $('breadcrumbProject').textContent=projectName(view.cwd);
+  $('breadcrumbCwd').textContent=view.cwd||'';
+  $('runIdLabel').textContent='执行编号 '+view.run_id;
+  const title=firstSentence(view.objective)||view.task_id||view.run_id;
+  $('detailTitle').textContent=title;
+  $('detailSub').textContent=view.objective&&view.objective!==title?first(view.objective):'';
+  $('timeInfo').textContent=`${view.started_at?new Date(stamp(view.started_at)).toLocaleTimeString('zh-CN',{hour12:false}):'--'} 开始 · 用时 ${duration(view.elapsed_seconds)} · ${view.ended_at?'已结束':'已运行'}`;
+  renderRoundTabs(taskRuns,view,current);
+  const banner=$('roundBanner');
+  if(current.state==='not_loaded'){
+    banner.classList.remove('hidden');banner.replaceChildren(el('span',`本轮已有后续轮（第 ${(view.revision||1)+1} 轮），正在读取…`));
+    scheduleBackfill(key);
+  } else if(current.state==='pending'){
+    banner.classList.remove('hidden');banner.replaceChildren(el('span','当前轮待确认；请等待最新记录同步。'));
+  } else if(isHistorical){
+    banner.classList.remove('hidden');banner.replaceChildren();
+    const currentLabel=`第 ${current.run.revision||1} 轮`;
+    banner.append(el('span',`正在查看第 ${view.revision||1} 轮（历史记录）。当前是 ${currentLabel}；历史轮的结论不作为当前验收依据。`));
+    const btn=el('button','回到当前轮','quiet small');btn.type='button';btn.onclick=()=>selectRun(current.run.run_id);banner.append(btn);
+  } else banner.classList.add('hidden');
+  renderFacts(view,hasDetail,current);
+  renderNextStep(current,hasDetail,isHistorical||current.state!=='known');
+  renderReport(view,hasDetail);
+  renderIdentity(view);
+  $('changesSummary').textContent=workspaceChangeText(view);
+  const changeButtons=$('changesButtons');changeButtons.replaceChildren();
+  for(const [name,label] of [['diff','工作区 Diff'],['workspace_before','输入快照'],['workspace_after','结果快照']]){
+    const b=el('button',label,'quiet small');b.type='button';b.onclick=()=>loadArtifact(name,$('technicalArtifact'));changeButtons.append(b);
+  }
+  const techButtons=$('technicalButtons');techButtons.replaceChildren();
+  for(const [name,label] of [['packet','本轮要求'],['result','Claude 报告'],['receipt','执行回执'],['decision','Codex 核验'],['decision_history','核验历史'],['reconciliation','恢复核验'],['environment','运行环境']]){
+    const b=el('button',label,'quiet small');b.type='button';b.onclick=()=>loadArtifact(name,$('technicalArtifact'));techButtons.append(b);
+  }
+  renderEvents(entry);
 }
-async function fetchEvents(id,epoch) {
-  let changed=false;
-  for(let page=0;page<3;page++) {
-    const d=await api('/api/events',{run_id:id,after:st.cursor,limit:200});if(!same(id,epoch))return false;
-    const values=d.events||[];if(values.length)changed=true;st.events.push(...values);
-    if(st.events.length>MAX_EVENTS)st.events.splice(0,st.events.length-MAX_EVENTS);
-    st.cursor=d.next_cursor??st.cursor;st.moreEvents=Boolean(d.has_more);if(!d.has_more)break;
-  }return changed;
+function renderEvents(entry){
+  const events=(entry&&entry.events)||[];
+  const query=$('activityFilter').value.toLowerCase();
+  const root=$('activityBody');root.replaceChildren();
+  const filtered=query?events.filter(e=>JSON.stringify(e).toLowerCase().includes(query)):events;
+  const rows=filtered.slice(-200).reverse();
+  if(!rows.length)root.append(el('p','尚无公开活动。没有活动不等于执行停止。','meta'));
+  for(const e of rows){
+    const row=el('div',undefined,'event-row');const when=stamp(e.received_at||e.at||e.timestamp);
+    const body=el('div');body.append(el('strong',activityDescription(e)));
+    const detail=[e.tool,e.file||e.path].filter(Boolean).join(' · ');if(detail)body.append(el('div',detail,'meta'));
+    row.append(el('time',when?new Date(when).toLocaleTimeString('zh-CN',{hour12:false}):'#'+e.seq),body);root.append(row);
+  }
+  $('activityCount').textContent=`已载入 ${events.length} 条 / 共 ${entry?.detail?.events_count??events.length} 条`;
 }
-function schedule(ms) {clearTimeout(st.timer);if(st.busy&&ms===0)st.refreshRequested=true;st.timer=setTimeout(tick,ms);}
-async function tick() {
-  if(st.busy)return;st.busy=true;const initialEpoch=st.epoch;
-  try {
-    if(st.run) {
-      const id=st.run,epoch=st.epoch,s=await api('/api/snapshot',{run_id:id});if(!same(id,epoch))return;
-      st.snapshot=s;st.runs=st.runs.map(r=>r.run_id===id?s:r);st.lastSync=Date.now();renderRuns();render(s);
-      if(st.cursor===0&&!st.events.length)st.cursor=Math.max(0,(s.last_event?.seq||0)-MAX_EVENTS);
-      const changed=await fetchEvents(id,epoch);if(!same(id,epoch))return;
-      const key=id+':'+JSON.stringify([s.status,s.decision,s.reconciliation]);
-      if(!st.packet||st.loadedKey!==key) {
-        const names=st.packet?['result','decision']:['packet','result','decision'];
-        const values=await Promise.all(names.map(name=>api('/api/artifact',{run_id:id,name})));if(!same(id,epoch))return;
-        for(let i=0;i<names.length;i++)st[names[i]]=values[i].available&&typeof values[i].content==='object'?values[i].content:null;
-        st.loadedKey=key;
-      }
-      st.lastSync=Date.now();render(s);
-      if(st.tab==='history')historyView();
-      else if(groups[st.tab]&&(!st.artifact||changed))artifact(st.artifact||groups[st.tab][0][0]);
-    }
-    if(!st.maintenanceAt||Date.now()-st.maintenanceAt>30000) {
-      st.maintenanceAt=Date.now();
-      try {st.maintenance=await api('/api/cli-maintenance');if(st.epoch!==initialEpoch)return;renderMaintenance(st.maintenance);}
-      catch(e){if(st.epoch!==initialEpoch)return;renderMaintenance({state:'unavailable',notice_pending:true,message:'版本维护状态暂不可用；本轮执行记录仍可查询。'});}
-    }
-    if(!st.listAt||Date.now()-st.listAt>30000) {
-      const offset=st.listOffset,list=await api('/api/runs',{offset,limit:PAGE_SIZE});
-      if(st.epoch!==initialEpoch||offset!==st.listOffset)return;
-      st.runs=list.runs||[];st.listMore=Boolean(list.has_more);st.listNext=list.next_offset;st.listAt=Date.now();
-      if(!st.run&&st.runs.length){selectRun(st.runs[0].run_id);return;}
-      renderRuns();
-    }
-    st.connected=true;$('connection').classList.remove('offline');$('connection').textContent='已连接 · 自动刷新';$('connectionNote').classList.add('hidden');
-  }catch(e){if(initialEpoch===st.epoch)connectionError(e);}
-  finally {st.busy=false;const immediate=st.refreshRequested||initialEpoch!==st.epoch;st.refreshRequested=false;schedule(immediate?0:pollingDelay(TERMINAL.has(displayState(st.snapshot)),document.hidden,st.moreEvents));}
+async function loadArtifact(name,targetEl){
+  const id=st.run,epoch=st.epoch,gen=conn.connGen;
+  st.artifactName=name;targetEl.textContent='正在读取…';
+  try{
+    const a=await api('/api/artifact',{run_id:id,name},{});
+    if(!sameSelection(id,epoch,gen)||name!==st.artifactName)return;
+    targetEl.textContent=a.available?(typeof a.content==='string'?a.content:JSON.stringify(a.content,null,2)):'本项记录尚未产生。';
+  }catch(e){if(sameSelection(id,epoch,gen))targetEl.textContent='该项记录暂不可读';}
 }
-document.addEventListener('visibilitychange',()=>schedule(document.hidden?15000:0));
-window.addEventListener('hashchange',()=>{const next=new URLSearchParams(location.hash.slice(1)),id=next.get('run')||'';const tokenChanged=next.get('token')!==hash.get('token');hash=next;
-  if(tokenChanged&&id===st.run){st.run='';}selectRun(id,false);st.listAt=0;schedule(0);});
-$('mode').onclick=()=>{st.mode=st.mode==='full'?'simple':'full';applyMode();};
-$('rawButton').onclick=()=>{st.mode='full';applyMode();switchTab('result',true);};
-$('historyButton').onclick=()=>{st.mode='full';applyMode();switchTab('history',true);};
-$('roundSelect').onchange=e=>selectRun(e.target.value);
-$('previousRun').onclick=()=>selectRun(st.snapshot.previous_run_id);
-$('currentRun').onclick=()=>selectRun(st.snapshot.superseded_by);
-$('previousPage').onclick=()=>{st.listOffset=Math.max(0,st.listOffset-PAGE_SIZE);st.listAt=0;schedule(0);};
-$('nextPage').onclick=()=>{st.listOffset=st.listNext;st.listAt=0;schedule(0);};
-$('copyPrompt').onclick=async()=>{const prompt=action(st.snapshot)[1];if(!prompt)return;try{await navigator.clipboard.writeText(`${prompt}\n执行编号：${st.run}`);$('copyPrompt').textContent='已复制';}catch(_){$('copyPrompt').textContent='请复制上方文字';}};
-$('search').addEventListener('input',()=>{$('events').dataset.signature='';renderEvents();});
-for(const b of document.querySelectorAll('[role=tab]')) {b.onclick=()=>switchTab(b.dataset.tab);b.onkeydown=e=>{const tabs=[...document.querySelectorAll('[role=tab]')],i=tabs.indexOf(b);let n=null;
-  if(e.key==='ArrowRight')n=tabs[(i+1)%tabs.length];if(e.key==='ArrowLeft')n=tabs[(i+tabs.length-1)%tabs.length];if(e.key==='Home')n=tabs[0];if(e.key==='End')n=tabs.at(-1);
-  if(n){e.preventDefault();switchTab(n.dataset.tab,true);}};}
-applyMode();if(!hash.get('token'))connectionError(new Error('请使用 Codex 返回的完整详情链接。'));else schedule(0);
 
+async function fetchEventsFor(id,epoch,gen){
+  const entry=st.cache.get(id);if(!entry)return false;
+  entry.events=entry.events||[];entry.cursor=entry.cursor||0;
+  let changed=false;
+  for(let page=0;page<3;page++){
+    const d=await api('/api/events',{run_id:id,after:entry.cursor,limit:200},{controller:st.selController});
+    if(!sameSelection(id,epoch,gen))return false;
+    const values=d.events||[];if(values.length)changed=true;
+    entry.events.push(...values);
+    if(entry.events.length>MAX_EVENTS)entry.events.splice(0,entry.events.length-MAX_EVENTS);
+    entry.cursor=d.next_cursor??entry.cursor;entry.moreEvents=Boolean(d.has_more);
+    if(!d.has_more)break;
+  }
+  return changed;
+}
+function scheduleSelected(ms){clearTimeout(st.selTimer);st.selTimer=setTimeout(selTick,ms);}
+async function selTick(){
+  if(!st.run||st.selInFlight||conn.status==='token_invalid'||st.invalidRun===st.run)return;
+  st.selInFlight=true;
+  const id=st.run,epoch=st.epoch,gen=conn.connGen;
+  const requestKey=`${gen}:${epoch}:${id}`;st.selRequestKey=requestKey;
+  const seq=++st.requestSeq;
+  try{
+    const s=await api('/api/snapshot',{run_id:id},{controller:st.selController});
+    if(!sameSelection(id,epoch,gen))return;
+    st.cache.set(id,mergeDetail(st.cache.get(id),s,Date.now(),seq));
+    st.seenRunIds.add(id);st.knownTaskKeys.add(taskKey(s));
+    noteCriticalSuccess('snapshot-selected');
+    const entry=st.cache.get(id);
+    if(!entry.cursor&&!entry.events.length)entry.cursor=Math.max(0,(s.last_event?.seq||0)-MAX_EVENTS);
+    await fetchEventsFor(id,epoch,gen);
+    if(!sameSelection(id,epoch,gen))return;
+    noteCriticalSuccess('events-selected');
+    renderDetail();
+  }catch(e){
+    if(!sameSelection(id,epoch,gen))return;
+    if(e.name==='AbortError')return;
+    if(e.status===400){clearValidSelection();st.invalidRun=id;renderDetail();return;}
+    markCriticalFailure('snapshot',e);
+  }finally{
+    if(st.selRequestKey===requestKey){st.selInFlight=false;st.selRequestKey=null;}
+    if(sameSelection(id,epoch,gen)&&conn.status!=='token_invalid'&&st.invalidRun!==id){
+      const entry=st.cache.get(id);const status=entry?.detail?.status;
+      const terminal=FAIL_END.has(status)||status===FORMAL;
+      scheduleSelected(conn.status==='offline'?conn.retryDelay:pollingDelay(terminal,document.hidden,Boolean(entry?.moreEvents)));
+    }
+  }
+}
+
+function hasAnyUnsettled(){for(const [,entry] of st.cache){const {view}=viewOf(entry);if(isUnsettled(view))return true;}return false;}
+function scheduleHome(ms){clearTimeout(st.homeTimer);st.homeTimer=setTimeout(homeTick,ms);}
+async function homeTick(){
+  if(conn.status==='token_invalid')return;
+  if(st.homeInFlight){scheduleHome(500);return;}
+  st.homeInFlight=true;const gen=conn.connGen,seq=++st.requestSeq;
+  try{
+    const list=await api('/api/runs',{offset:0,limit:PAGE_SIZE},{});
+    if(gen!==conn.connGen)return;
+    onHomeSuccess(list,seq);
+    noteCriticalSuccess('runs');
+  }catch(e){if(gen===conn.connGen&&e.name!=='AbortError')markCriticalFailure('runs',e);}
+  finally{st.homeInFlight=false;if(gen===conn.connGen&&conn.status!=='token_invalid')scheduleHome(conn.status==='offline'?conn.retryDelay:homePollingDelay(hasAnyUnsettled(),document.hidden));}
+}
+function onHomeSuccess(list,seq){
+  const rows=list.runs||[];
+  const now=Date.now();
+  if(seq!==undefined&&seq<st.homeSeq)return;
+  st.homeSeq=seq??st.homeSeq;
+  const knownTaskKeys=new Set(st.knownTaskKeys);
+  if(!st.baseline){
+    st.baseline=new Set(rows.map(r=>r.run_id));
+    for(const r of rows)st.knownTaskKeys.add(taskKey(r));
+  }
+  const freshIds=[];
+  for(const r of rows){
+    const previous=st.cache.get(r.run_id);
+    if(previous&&viewOf(previous).view?.superseded_by!==r.superseded_by)st.backfillStopped.delete(taskKey(r));
+    freshIds.push(r.run_id);
+    const isNewRun=isNewCandidate(r,st.baseline,st.seenRunIds);
+    const isNewTask=isNewTaskCandidate(r,knownTaskKeys);
+    st.cache.set(r.run_id,mergeSummary(st.cache.get(r.run_id),r,now,seq));
+    st.seenRunIds.add(r.run_id);
+    st.knownTaskKeys.add(taskKey(r));
+    if(isNewRun&&isNewTask&&st.baseline){
+      if(!st.run){selectRun(r.run_id);}
+      else if(!st.newTasks.includes(taskKey(r)))st.newTasks.push(taskKey(r));
+    }
+  }
+  st.loadedOrder=reconcileLoadedOrder(st.loadedOrder,freshIds);
+  st.loadedSet=new Set(st.loadedOrder);
+  st.recentHomeIds=new Set(freshIds);
+  if(!st.pagesLoaded){st.hasMore=Boolean(list.has_more);st.nextOffset=list.next_offset;}
+  refreshPrefetchQueue();
+  renderList();
+  if(st.run)renderDetail();
+}
+function refreshPrefetchQueue(){
+  const tasks=buildTasks();
+  let added=0;
+  for(const [key,runs] of tasks){
+    if(added>=PREFETCH_PER_REFRESH)break;
+    const current=currentRoundOf(runs,st.cache);
+    if(current.state==='not_loaded'){scheduleBackfill(key);continue;}
+    const tips=runs.filter(r=>!r.superseded_by);
+    if(tips.length!==1||current.state==='known'&&current.run.run_id===st.run)continue;
+    const candidate=tips[0];
+    if(candidate.run_id===st.run)continue;
+    const entry=st.cache.get(candidate.run_id);
+    const {hasDetail}=viewOf(entry);
+    if(hasDetail||st.prefetchQueue.has(candidate.run_id))continue;
+    if(current.state==='known'&&groupFor(current,hasDetail)!=='attention')continue;
+    st.prefetchQueue.add(candidate.run_id);added++;
+  }
+}
+async function loadMore(){
+  if(st.loadingMore||!st.hasMore||st.loadedOrder.length>=MAX_LOADED||conn.status==='token_invalid')return;
+  st.loadingMore=true;$('loadMoreBtn').disabled=true;
+  let offset=st.nextOffset,attempt=0;
+  try{
+    while(attempt<1+MAX_CONTINUE_PAGES){
+      const gen=conn.connGen,seq=++st.requestSeq;
+      const page=await api('/api/runs',{offset,limit:PAGE_SIZE},{});
+      if(gen!==conn.connGen)return;
+      const before=st.loadedOrder.length;
+      for(const row of (page.runs||[])){
+        st.seenRunIds.add(row.run_id);st.knownTaskKeys.add(taskKey(row));
+        if(!st.loadedSet.has(row.run_id)&&st.loadedOrder.length>=MAX_LOADED)continue;
+        st.cache.set(row.run_id,mergeSummary(st.cache.get(row.run_id),row,Date.now(),seq));
+        if(!st.loadedSet.has(row.run_id)&&st.loadedOrder.length<MAX_LOADED){st.loadedSet.add(row.run_id);st.loadedOrder.push(row.run_id);}
+      }
+      const added=st.loadedOrder.length-before;
+      st.pagesLoaded=true;st.hasMore=Boolean(page.has_more);offset=page.next_offset;st.nextOffset=offset;attempt++;
+      if(added>0||!st.hasMore||st.loadedOrder.length>=MAX_LOADED)break;
+    }
+    if(st.loadedOrder.length>MAX_LOADED){st.loadedOrder=st.loadedOrder.slice(0,MAX_LOADED);st.loadedSet=new Set(st.loadedOrder);}
+  }catch(e){/* local pagination failure keeps existing list usable */}
+  finally{st.loadingMore=false;renderList();}
+}
+
+const BACKFILL_RETRY_DELAY = 15000;
+function scheduleBackfill(taskKeyValue){
+  if(!st.backfillStopped.has(taskKeyValue))st.backfillQueue.add(taskKeyValue);
+}
+function backfillCandidates(tasks){
+  const queue=[];
+  for(const [key,runs] of tasks){
+    const current=currentRoundOf(runs,st.cache);
+    if(current.state==='not_loaded')scheduleBackfill(key);
+  }
+  for(const key of st.backfillQueue){
+    const current=currentRoundOf(tasks.get(key)||[],st.cache);
+    if(current.state!=='not_loaded'){st.backfillQueue.delete(key);st.visitedByTask.delete(key);continue;}
+    const visited=st.visitedByTask.get(key)||new Set();
+    if(!nextSupersedeHop(current.pointer,visited)){st.backfillStopped.add(key);st.backfillQueue.delete(key);continue;}
+    if(Date.now()-(st.backfillFailedAt.get(key)||0)<BACKFILL_RETRY_DELAY)continue;
+    queue.push('backfill:'+key);
+  }
+  return queue;
+}
+
+async function bgTick(){
+  if(conn.status==='token_invalid')return;
+  if(document.hidden){scheduleBg(60000);return;}
+  if(st.bgInFlight){scheduleBg(1000);return;}
+  st.bgInFlight=true;const gen=conn.connGen;
+  const tasks=buildTasks();
+  const backfill=backfillCandidates(tasks);
+  const observeQueue=[];
+  for(const id of st.loadedOrder){
+    if(id===st.run||st.recentHomeIds.has(id))continue;
+    const entry=st.cache.get(id);const {view}=viewOf(entry||{});
+    if(!view?.superseded_by&&(entry?.detailStale||needsObservation(view)))observeQueue.push(id);
+  }
+  observeQueue.sort((a,b)=>(st.cache.get(a)?.attemptAt||0)-(st.cache.get(b)?.attemptAt||0));
+  st.observerOverflow=Math.max(0,observeQueue.length-OBSERVE_LIMIT);
+  const trimmedObserve=observeQueue.slice(0,OBSERVE_LIMIT);
+  const prefetch=[...st.prefetchQueue].slice(0,PREFETCH_PER_REFRESH);
+  const picks=scheduleBackground(backfill,trimmedObserve,prefetch,BACKGROUND_BUDGET);
+  try{
+    for(const pick of picks){
+      const isBackfill=pick.startsWith('backfill:');
+      const key=isBackfill?pick.slice(9):null;
+      const current=isBackfill?currentRoundOf(buildTasks().get(key)||[],st.cache):null;
+      if(isBackfill&&current.state!=='not_loaded')continue;
+      const runId=isBackfill?current.pointer:pick;
+      const entry=st.cache.get(runId);if(entry)entry.attemptAt=Date.now();
+      const seq=++st.requestSeq;
+      try{
+        const s=await api('/api/snapshot',{run_id:runId},{});
+        if(gen!==conn.connGen)return;
+        if(isBackfill){
+          if(s.run_id!==runId||taskKey(s)!==key||(s.revision||1)<=(current.from?.revision||1)){
+            st.backfillStopped.add(key);st.backfillQueue.delete(key);continue;
+          }
+          const visited=st.visitedByTask.get(key)||new Set();visited.add(runId);st.visitedByTask.set(key,visited);
+          st.backfillFailedAt.delete(key);
+        }
+        st.cache.set(runId,mergeDetail(st.cache.get(runId),s,Date.now(),seq));
+        if(isBackfill)st.extraIds.add(runId);
+        st.seenRunIds.add(runId);st.knownTaskKeys.add(taskKey(s));
+        st.prefetchQueue.delete(runId);
+      }catch(_){
+        if(isBackfill)st.backfillFailedAt.set(key,Date.now());
+        /* Keep last good snapshot and retry local reads on a later turn. */
+      }
+    }
+  }finally{st.bgInFlight=false;if(gen===conn.connGen&&conn.status!=='token_invalid'){renderList();if(st.run)renderDetail();scheduleBg(5000);}}
+}
+function scheduleBg(ms){clearTimeout(st.bgTimer);st.bgTimer=setTimeout(bgTick,ms);}
+
+function scheduleMaintenance(ms){clearTimeout(st.maintenanceTimer);st.maintenanceTimer=setTimeout(maintenanceTick,ms);}
+async function maintenanceTick(){
+  if(conn.status==='token_invalid')return;
+  const gen=conn.connGen;
+  st.maintenanceAt=Date.now();
+  try{const value=await api('/api/cli-maintenance',{},{});if(gen!==conn.connGen)return;st.maintenance=value;renderMaintenance(value);}
+  catch(_){if(gen===conn.connGen)renderMaintenance({state:'unavailable',notice_pending:true,message:'版本维护状态暂不可用；本轮执行记录仍可查询。'});}
+  finally{if(gen===conn.connGen&&conn.status!=='token_invalid')scheduleMaintenance(30000);}
+}
+
+function reconnect(){
+  conn.connGen++;conn.status='connecting';conn.homeOk=false;conn.snapshotOk=false;conn.eventsOk=false;
+  st.selController.abort();st.selController=new AbortController();
+  st.bgController.abort();st.bgController=new AbortController();
+  st.baseline=null;st.homeInFlight=false;st.selInFlight=false;st.selRequestKey=null;st.bgInFlight=false;st.invalidRun=null;
+  conn.validSelection=Boolean(st.run);
+  scheduleHome(0);scheduleBg(0);if(st.run)scheduleSelected(0);
+}
+window.addEventListener('hashchange',()=>{
+  const next=new URLSearchParams(location.hash.slice(1)),id=next.get('run')||'';
+  const tokenChanged=next.get('token')!==hash.get('token');
+  hash=next;
+  if(tokenChanged){reconnect();}
+  if(id!==st.run)selectRun(id,false);
+  if(id)setView('detail');
+});
+document.addEventListener('visibilitychange',()=>{scheduleHome(0);if(!document.hidden){scheduleBg(0);if(st.run)scheduleSelected(0);}});
+$('projectFilter').onchange=()=>renderList();
+$('searchInput').addEventListener('input',()=>{st.search=$('searchInput').value;renderList();});
+$('activityFilter').addEventListener('input',()=>renderEvents(st.cache.get(st.run)));
+$('loadMoreBtn').onclick=loadMore;
+function returnToList(){
+  setView('list');
+  const selected=st.cache.get(st.run);const key=selected?taskKey(viewOf(selected).view):null;
+  const card=key?[...document.querySelectorAll('.task-card')].find(c=>c.dataset.taskKey===key):null;
+  if(card)card.focus();else if(st.taskFocusReturn)st.taskFocusReturn.focus();
+}
+$('backToList').onclick=returnToList;
+$('openWindowBtn').onclick=()=>window.open(location.href,'_blank');
+$('copyRunId').onclick=async()=>{try{await navigator.clipboard.writeText(st.run);$('copyRunId').textContent='已复制';}catch(_){$('copyRunId').textContent='请手动复制';}};
+$('copyPromptBtn').onclick=async()=>{
+  const entry=st.cache.get(st.run);const {view,hasDetail}=viewOf(entry);
+  if(!view||st.invalidRun===st.run)return;
+  const tasks=buildTasks();const runs=tasks.get(taskKey(view))||[view];const current=currentRoundOf(runs);
+  if(!actionReady(current))return;
+  const step=nextStepFor(current,hasDetail);if(!step||!step.prompt)return;
+  try{await navigator.clipboard.writeText(`${step.prompt}\n执行编号：${st.run}`);$('copyPromptBtn').textContent='已复制';}
+  catch(_){$('copyPromptBtn').textContent='请手动复制';}
+};
+$('maintenanceBtn').onclick=()=>{
+  $('drawerOverlay').classList.remove('hidden');$('maintenanceBtn').setAttribute('aria-expanded','true');
+  st.focusReturn=document.activeElement;$('drawerClose').focus();
+  $('drawerConnection').textContent=['online','recovered'].includes(conn.status)?'已连接':conn.status==='offline'?'连接中断':conn.status==='token_invalid'?'凭证失效':'连接中';
+  $('drawerCli').textContent=st.run?runCliEvidence(viewOf(st.cache.get(st.run)).view).version:'尚未选择执行记录';
+  renderMaintenance(st.maintenance);
+};
+function closeDrawer(){$('drawerOverlay').classList.add('hidden');$('maintenanceBtn').setAttribute('aria-expanded','false');if(st.focusReturn)st.focusReturn.focus();}
+$('drawerClose').onclick=closeDrawer;
+$('drawerOverlay').addEventListener('click',e=>{if(e.target===$('drawerOverlay'))closeDrawer();});
+document.addEventListener('keydown',e=>{
+  if(!$('drawerOverlay').classList.contains('hidden')){
+    if(e.key==='Escape'){e.preventDefault();closeDrawer();return;}
+    if(e.key==='Tab'){
+      const targets=[...$('drawer').querySelectorAll('button:not(:disabled),a[href],input:not(:disabled),select:not(:disabled),[tabindex="0"]')];
+      const first=targets[0]||$('drawerClose'),last=targets[targets.length-1]||first;
+      if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}
+      else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}
+    }
+    return;
+  }
+  if(e.key==='Escape'){
+    if(st.view==='detail'&&getComputedStyle($('backToList')).display!=='none')returnToList();
+  }
+  if(e.key==='/'&&document.activeElement.tagName!=='INPUT'){e.preventDefault();$('searchInput').focus();}
+});
+function boot(){
+  setView(st.run?'detail':'list');conn.validSelection=Boolean(st.run);
+  if(!hash.get('token')){markCriticalFailure('runs',new Error('请使用 Codex 返回的完整详情链接。'));return;}
+  scheduleHome(0);scheduleBg(2000);scheduleMaintenance(0);if(st.run)scheduleSelected(0);
+}
+boot();
 </script></body></html>
