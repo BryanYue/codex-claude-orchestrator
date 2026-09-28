@@ -106,6 +106,9 @@ class BuildDistributionTests(unittest.TestCase):
         self.assertEqual(first["version"], VERSION)
         self.assertEqual(first["source_commit"], commit)
         self.assertEqual(first["contract_digest"], second["contract_digest"])
+
+        for relative in bd.EXECUTABLE_RELATIVE_PATHS:
+            self.assertEqual((Path(first["directory"]) / relative).stat().st_mode & 0o777, 0o755)
         self.assertEqual((Path(first["archive"] + ".sha256")).read_text(),
                          f"{first['sha256']}  {Path(first['archive']).name}\n")
 

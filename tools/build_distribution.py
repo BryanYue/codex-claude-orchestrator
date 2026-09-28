@@ -247,6 +247,7 @@ def build(*, source_root: Path, output: Path | None = None) -> dict:
             target = staging / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(content)
+            target.chmod(EXEC_MODE if relative in EXECUTABLE_RELATIVE_PATHS else FILE_MODE)
             manifest[relative.as_posix()] = hashlib.sha256(content).hexdigest()
         release_manifest = {
             "schema_version": 1,

@@ -31,11 +31,15 @@ bash Install.command --rollback <上一步返回的备份ID>
 
 首发在 macOS Apple Silicon 实测；Intel 尚未单独实测，Windows 不在本版范围。安装器要求在标准 /Applications 目录中检测到 Codex.app 或 ChatGPT.app 内置且支持 plugin 命令的 Codex CLI。仅安装 PATH Codex CLI 的宿主当前不在支持范围，不能作为桌面兼容性证据；--check 不执行安装，但条件不满足会返回非零退出码。
 
-## 0.5.0：Git 分发准备（A4/A5）
+## 0.5.0：协作工作台与 Git 分发准备
 
-本版把源码整理为独立 Git 仓库源，新增可复用的构建工具与首次安装文档；本节只描述这部分改动本身，不代表已完成完整 0.5.0 验收——实际通过情况以 [发布验证](RELEASE-VERIFICATION.md) 为准，不在此重复宣称测试结果。
+本版提供按任务组织的只读协作工作台，并把源码整理为独立 Git 仓库，新增可复现构建和首次安装说明。实际验证与限制见 [发布验证](RELEASE-VERIFICATION.md)。
 
-- 新增 `tools/build_distribution.py`：从干净、已提交的 Git commit 构建分发包；校验根包版本（`.codex-plugin/plugin.json` 基础版本号与 `pyproject.toml`、`uv.lock` 中的 `codex-claude-orchestrator` 版本一致，第三方依赖锁定内容不受影响）；拒绝覆盖已有输出、拒绝 symlink 和未登记的文件类型；生成确定性排序/时间戳/权限的 ZIP，使同一 Git 提交、同一输出文件名的重复构建可核对哈希；随包写出 `FILE-SHA256.json` 与 `RELEASE-MANIFEST.json`（版本、源提交、执行契约摘要）。也校验 `launch.sh`、`Install.command` 在 Git 中记录为可执行模式（100755），因为 Git 安装路径依赖这个位，ZIP 安装路径依赖打包时写入的权限位。用法：`python3 tools/build_distribution.py --source-root <repo> --output <目标目录>`（默认输出到 `<repo>/dist/codex-claude-orchestrator-macos-<version>`）。
+- 按任务和项目聚合执行轮次；执行、报告、Codex 核验分别显示。历史轮、详情未载入、过时记录和失败但保留报告内容各有明确提示。
+- 同一主任务首次派发时请求打开一次工作台；后续执行通过工作台列表查看。queued 也记为已发出请求，监督子代理不再另外开页。显式重开仍指向原执行；不承诺跨 MCP 进程或跨 Codex 任务自动复用同一浏览器标签。
+- 新增响应式明暗主题、窄面板轮次选择、搜索筛选、只读下一步指令、维护抽屉和键盘焦点处理。保留原 HTTP 权限与执行核心。
+
+- 新增 `tools/build_distribution.py`：从干净、已提交的 Git commit 构建分发包；校验根包版本（`.codex-plugin/plugin.json` 基础版本号与 `pyproject.toml`、`uv.lock` 中的 `codex-claude-orchestrator` 版本一致，第三方依赖锁定内容不受影响）；拒绝覆盖已有输出、拒绝 symlink 和未登记的文件类型；生成确定性排序/时间戳/权限的 ZIP，使同一 Git 提交、同一输出文件名的重复构建可核对哈希；随包写出 `FILE-SHA256.json` 与 `RELEASE-MANIFEST.json`（版本、源提交、执行契约摘要）。也校验 `launch.sh`、`Install.command` 在 Git 中记录为可执行模式（100755），因为 Git 安装路径依赖这个位，ZIP 安装路径依赖打包时写入的权限位。用法（Python >=3.11）：`uv run --project plugins/codex-claude-orchestrator --frozen python tools/build_distribution.py --source-root <repo> --output <目标目录>`（默认输出到 `<repo>/dist/codex-claude-orchestrator-macos-<version>`）。
 - 新增 [Git marketplace 说明](docs/git-marketplace.md) 与 [安装与恢复说明](docs/install-and-recovery.md)：区分 ZIP 与 Git 两条首次安装路径；uv/Python/依赖/CLI/认证的分步准备；本机同名市场迁移的具体步骤与失败回退；并明确区分"本地 Git-ready"（可克隆、可复现构建）与"真实远端已验证"（实际执行过 Git 取源与安装）两种不同结论，不把前者当后者宣称。
 - `plugins/codex-claude-orchestrator/scripts/launch.sh` 新增 `--prepare-dependencies` 显式模式：只执行 `uv sync --frozen --no-dev` 做冷启动依赖预热，不启动 MCP server、不发起任何模型调用、不修改 global/PATH/profile/认证；`.mcp.json` 的默认启动路径（不带该参数）行为不变。
 - 插件与根包版本号同步为 0.5.0；`uv.lock` 中第三方依赖的锁定内容未改动。
@@ -211,10 +215,10 @@ uv run python scripts/run_tests.py --suite all
 
 回归入口为测试子进程提供独立 TMPDIR，结束后清理测试自己的 lock/marker，不触碰真实运行记录。可用 `--suite plugin` 或 `--suite bridge` 做定向回归。
 
-`tools/build_distribution.py` 独立于插件的 uv 环境，只用标准库；对应测试用标准 `unittest`，会在临时目录里 `git init` 一个最小夹具仓库，不触碰当前工作树：
+`tools/build_distribution.py` 只用 Python >=3.11 标准库；macOS 的系统 `python3` 可能更旧。下面使用项目锁定环境中的 Python，测试用标准 `unittest`，会在临时目录里创建最小 Git 夹具，不触碰当前工作树：
 
 ```bash
-python3 tools/tests/test_build_distribution.py
+uv run --project plugins/codex-claude-orchestrator --frozen --no-dev python tools/tests/test_build_distribution.py
 ```
 
 自动回归、真实 Claude 调用、原生宿主接入和浏览器观察分别记录；小夹具通过不证明生产长任务零偏差。整体结构为：用户 → 主 Codex + Skill/规格 → 原生 Codex 监督席 → MCP Runtime → Claude；证据原路返回，由主 Codex 核验。
