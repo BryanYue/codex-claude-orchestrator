@@ -749,7 +749,7 @@ function renderList(){
   renderNewTaskNotice();
 }
 function taskCard(d){
-  const b=el('button',undefined,'task-card');b.type='button';b.setAttribute('role','listitem');
+  const b=el('button',undefined,'task-card');b.type='button';
   b.dataset.taskKey=taskKey(d.rep);
   if(conn.status==='offline'||conn.status==='token_invalid')b.classList.add('offline-card');
   const isSelected=d.runs.some(r=>r.run_id===st.run);
