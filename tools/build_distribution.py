@@ -42,7 +42,7 @@ CONTRACT_RELATIVE_PATHS = (
 
 OMIT_DIR_NAMES = {".venv", "__pycache__", ".uv-cache", ".git", "dist",
                   ".pytest_cache", "coverage", ".mypy_cache", ".ruff_cache"}
-ALLOWED_SUFFIXES = {".md", ".json", ".py", ".lock", ".toml", ".yaml", ".yml", ".sh", ".html", ".command"}
+ALLOWED_SUFFIXES = {".md", ".json", ".py", ".lock", ".toml", ".yaml", ".yml", ".sh", ".html", ".command", ".png"}
 ALLOWED_BARE_NAMES = {".gitignore"}
 VERSION_PATTERN = re.compile(r"^\d+\.\d+\.\d+$")
 SERVER_VERSION_PATTERN = re.compile(r'MCPServer\(\s*["\']claude-orchestrator["\'],\s*version=["\']([^"\']+)["\']')

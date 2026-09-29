@@ -131,6 +131,25 @@ class BuildDistributionTests(unittest.TestCase):
             self.assertEqual((readme_info.external_attr >> 16) & 0o777, 0o644)
             self.assertEqual(launcher_info.date_time, bd.ZIP_EPOCH)
 
+    def test_plugin_png_is_packaged_and_hashed_without_changes(self):
+        import base64
+
+        repo = RepositoryFixture(self.base / "repo")
+        relative = bd.PLUGIN_RELATIVE / "assets/icon.png"
+        content = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8"
+            "/x8AAwMCAO+aX1cAAAAASUVORK5CYII=")
+        (repo.root / relative).parent.mkdir()
+        (repo.root / relative).write_bytes(content)
+        repo.commit()
+
+        result = bd.build(source_root=repo.root, output=self.base / "out")
+        self.assertEqual((Path(result["directory"]) / relative).read_bytes(), content)
+        hashes = json.loads((Path(result["directory"]) / "FILE-SHA256.json").read_text())
+        self.assertEqual(hashes[relative.as_posix()], hashlib.sha256(content).hexdigest())
+        with zipfile.ZipFile(result["archive"]) as archive:
+            self.assertEqual(archive.read(f"out/{relative.as_posix()}"), content)
+
     def test_refuses_to_overwrite_existing_output_without_touching_it(self):
         repo = RepositoryFixture(self.base / "repo")
         repo.commit()

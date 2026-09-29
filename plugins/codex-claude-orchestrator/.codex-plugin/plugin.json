@@ -1,6 +1,6 @@
 {
   "name": "codex-claude-orchestrator",
-  "version": "0.5.0+codex.20260928103906",
+  "version": "0.5.0+codex.20260929020601",
   "description": "Project-aware Codex\u2013Claude orchestration with portable specifications, native Codex supervision, configurable routing, MCP execution and compact progress details.",
   "author": {
     "name": "Local team"
@@ -20,7 +20,10 @@
       "\u8fd9\u4e2a\u9879\u76ee\u4ee5\u540e\u91c7\u7528 Codex\u2013Claude \u534f\u4f5c\u6d41\u7a0b\u3002",
       "\u6309\u5df2\u786e\u8ba4\u7684\u8ba1\u5212\u7ee7\u7eed\uff0c\u5b8c\u6210\u540e\u6838\u5bf9\u539f\u59cb\u9a8c\u6536\u3002",
       "\u8fd9\u6b21\u8ba9 Claude \u6267\u884c\uff0c\u663e\u793a\u7b80\u6d01\u8fdb\u5ea6\u3002"
-    ]
+    ],
+    "logo": "./assets/icon.png",
+    "logoDark": "./assets/icon.png",
+    "composerIcon": "./assets/icon.png"
   },
   "mcpServers": "./.mcp.json"
 }
