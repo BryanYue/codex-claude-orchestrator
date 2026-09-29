@@ -4,7 +4,7 @@
 
 ## 从个人 Git marketplace 安装
 
-维护者：**BryanYue**。仓库：[BryanYue/codex-claude-orchestrator](https://github.com/BryanYue/codex-claude-orchestrator)，目前为私有试用，安装者需要仓库读取权限。
+维护者：**BryanYue**。仓库：[BryanYue/codex-claude-orchestrator](https://github.com/BryanYue/codex-claude-orchestrator)，现已公开，可通过 HTTPS 匿名读取源码并添加 Git marketplace，无需仓库邀请。
 
 ```bash
 codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v0.5.0
@@ -236,6 +236,6 @@ uv run --project plugins/codex-claude-orchestrator --frozen --no-dev python tool
 
 发布验证同时覆盖隔离夹具、MCP 协议、浏览器和安装。具体版本与覆盖以随包 RELEASE-VERIFICATION.md 为准；不将历史版本的通过数当作本版证据。普通请求在新桌面任务中从路由到委派的完整自动入口，需要在目标宿主正常权限下走查；本机 MCP 直连不替代这项验收。
 
-源码与 Git marketplace 由个人仓库 BryanYue/codex-claude-orchestrator 维护，使用固定发布 ref 安装。具体取源、升级、回退步骤见 [Git marketplace 说明](docs/git-marketplace.md)，实际验证范围见 [发布验证](RELEASE-VERIFICATION.md)。问题请通过仓库 Issues 提交，并去除凭据、viewer token 与业务代码。当前未指定开源许可证，私有试用不代表公开授权。
+源码与 Git marketplace 由个人仓库 BryanYue/codex-claude-orchestrator 维护，使用固定发布 ref 安装。具体取源、升级、回退步骤见 [Git marketplace 说明](docs/git-marketplace.md)，实际验证范围见 [发布验证](RELEASE-VERIFICATION.md)。问题请通过仓库 Issues 提交，并去除凭据、viewer token 与业务代码。当前未指定开源许可证。
 
 要停用项目入口，向 Codex 说“这个项目不再自动采用该协作流程”。插件只移除精确未改的自有块，保留其他规则和证据。要卸载客户端插件，在 Codex 插件界面卸载；任务记录按团队规则另行保留。

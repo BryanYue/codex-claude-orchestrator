@@ -37,9 +37,12 @@ a source document cannot certify installation of an archive that does not yet ex
 
 ## Distribution and host boundaries
 
-- The private GitHub remote is BryanYue/codex-claude-orchestrator. Actual
-  fixed-commit Git installation, upgrade, rollback and missing-ref recovery
-  passed on 2026-09-29; exact coverage is recorded below.
+- The GitHub remote is BryanYue/codex-claude-orchestrator. Actual fixed-commit
+  Git installation, upgrade, rollback and missing-ref recovery passed while
+  the repository was private on 2026-09-29; exact coverage is recorded below.
+  It was subsequently made public at the owner's request. Anonymous HTTPS
+  `git ls-remote`, with system/global Git config and credential helpers
+  disabled, read HEAD and the unchanged v0.5.0 tag successfully.
 - ZIP and Git sources retain distinct install/recovery paths. Git installation
   did not invoke the ZIP installer. Other network/authentication/interruption
   failures remain untested; one recovered invalid ref is not universal coverage.
@@ -99,9 +102,8 @@ updates do not change the plugin source or its complete manifest version.
   Existing runs keep their execution identity; no historical receipt is rewritten.
 - Synthetic UI data and offline tests are not actual provider/Workflow execution.
   Real review smoke tests, where recorded separately, do not validate Workflow.
-- Publisher: BryanYue; private preview repository. No open-source license is
-  assigned. Licensing and third-party brand usage must be resolved before
-  broader public distribution.
+- Publisher: BryanYue; public preview repository. No open-source license is
+  assigned. Third-party brand usage has not been separately reviewed.
 
 Original archives and private evidence are retained outside the public source.
 This summary omits actual run/session identifiers, internal paths, account data

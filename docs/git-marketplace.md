@@ -1,8 +1,9 @@
 # Git marketplace distribution
 
 Repository: [BryanYue/codex-claude-orchestrator](https://github.com/BryanYue/codex-claude-orchestrator).
-This is a private macOS preview. Installation requires a GitHub account with
-read access. It is a Git marketplace, not an OpenAI public-directory listing.
+This macOS preview repository is public. HTTPS reads and Git marketplace
+fetches do not require a GitHub account or repository invitation. This is a
+Git marketplace distribution; no OpenAI public-directory listing is claimed.
 No open-source license has been selected.
 
 ## Identity and fixed releases
@@ -19,20 +20,20 @@ No open-source license has been selected.
 ## First installation
 
 Use a Codex desktop installation with the `codex plugin` commands, plus uv,
-Python >=3.11 and an authenticated Claude Code installation. GitHub repository
-access and Claude authentication are separate. A connected GitHub app does
-not automatically authenticate terminal Git or the desktop's Git subprocess.
+Python >=3.11 and an authenticated Claude Code installation. Reading this
+public Git repository needs no GitHub authentication; Claude authentication
+and usage allowance are still required for actual delegation.
 
-First confirm that Git can read the private repository using your own account:
+First confirm that Git can reach the public repository:
 
 ```bash
 git ls-remote https://github.com/BryanYue/codex-claude-orchestrator.git
 ```
 
-If this fails, fix Git HTTPS credentials (or use an authorized SSH URL) before
-changing any installed marketplace. With multiple GitHub accounts, check the
-actual account and Git credential helper; `gh auth switch` alone does not
-switch an SSH key. Never put a token in a remote URL or repository file.
+If this fails, check network/proxy settings and any URL rewrites or credential
+helper errors before changing an installed marketplace. Public HTTPS reads
+need no token. An SSH URL still requires working SSH authentication;
+`gh auth switch` alone does not switch an SSH key.
 
 For a machine without an existing `codex-claude-team` marketplace:
 
@@ -117,5 +118,5 @@ remove/add/install sequence to select this rollback SHA.
 Report issues at [GitHub Issues](https://github.com/BryanYue/codex-claude-orchestrator/issues)
 with the plugin version, operating system and a sanitized error. Do not attach
 repository credentials, viewer tokens, private source or raw execution logs.
-Private repository access, broader publication, licensing and third-party
-brand usage are separate from the local install mechanism.
+Repository visibility, licensing and third-party brand usage are separate
+from the local install mechanism.
