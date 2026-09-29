@@ -113,14 +113,18 @@ every failure path has been exercised.
 2. **Remove the old market entry.** The locally checked CLI exposes
    `codex plugin marketplace remove codex-claude-team --json`. Check the
    installed CLI's help if that command is unavailable. After the operation,
-   read both marketplace and plugin state: removing a source is not evidence
-   that the cached plugin was removed, disabled or preserved.
+   read both marketplace and plugin state. On the CLI tested for 0.5.0,
+   this removal also removed the plugin from the installed inventory; the
+   reinstall in step 4 is required. Do not infer cache deletion or running
+   process termination from that inventory change.
 3. **Add the target Git source with a fixed ref** (see
    [git-marketplace.md](git-marketplace.md) for the exact `add`/`--ref`
    invocation and why a moving branch should not be used for a first rollout).
 4. **Install the same plugin id** (`codex plugin add codex-claude-orchestrator@codex-claude-team`)
-   and verify with `codex plugin list --json` that version, source and `ref`/
-   commit match what step 3 targeted.
+   and verify with `codex plugin list --json` that version, enabled state
+   and marketplace source match. The tested list output omits the pinned
+   ref: also compare the fetched market root's `git rev-parse HEAD` with the
+   selected commit and inspect the persisted ref read-only when needed.
 5. **On any failure at steps 2–4**, read actual state before recovery. If the
    candidate source was added, remove that candidate same-name entry first;
    if removal itself failed or its result is unknown, stop instead of adding

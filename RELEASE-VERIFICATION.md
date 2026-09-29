@@ -37,18 +37,55 @@ a source document cannot certify installation of an archive that does not yet ex
 
 ## Distribution and host boundaries
 
-- The private GitHub remote is BryanYue/codex-claude-orchestrator. Remote
-  installation and N-to-N+1-to-N verification are pending for this candidate;
-  this text must be updated from observed results after the experiment.
+- The private GitHub remote is BryanYue/codex-claude-orchestrator. Actual
+  fixed-commit Git installation, upgrade, rollback and missing-ref recovery
+  passed on 2026-09-29; exact coverage is recorded below.
 - ZIP and Git sources retain distinct install/recovery paths. Git installation
-  does not invoke the ZIP installer. General failure recovery remains a
-  procedure unless a specific exercised failure is recorded.
+  did not invoke the ZIP installer. Other network/authentication/interruption
+  failures remain untested; one recovered invalid ref is not universal coverage.
 - Opening-policy tests cover requested, queued and failed replies. A queued reply
   does not prove a visible browser. Cross-thread/cross-MCP stable viewer entry and
   automatic reuse of an existing host tab are not implemented guarantees.
 - Existing tasks retain their loaded Skill/MCP. Start a new Codex task after
   reinstalling. A fresh MCP protocol test is not proof of a new task's natural
   language routing or automatic host-opening behavior.
+
+## 2026-09-29 real Git marketplace verification
+
+Host: macOS 26.6.2 / arm64, desktop-bundled `codex-cli 0.158.0-alpha.2.1`.
+Private HTTPS access used the repository owner's authenticated GitHub account.
+
+| Stage | Exact source commit | Full plugin version | Result |
+| --- | --- | --- | --- |
+| N: first Git install | `a40de37f583e51f333e61b93b0b2636d7620c1da` | `0.5.0+codex.20260929020601` | Installed/enabled; 63 plugin files match Git snapshot and cache |
+| N+1: upgrade | `51c55ca5100f540540c549428a02e5f507460fdf` | `0.5.0+codex.20260929032040` | Installed/enabled; publisher changes to BryanYue; 63 files match |
+| N: rollback | `a40de37f583e51f333e61b93b0b2636d7620c1da` | `0.5.0+codex.20260929020601` | Original version/metadata restored; 63 files match |
+
+Each stage used the official remove/add/install CLI and a real GitHub source,
+then compared the persisted fixed ref, fetched Git HEAD, manifest version,
+icon bytes and all plugin source/cache files. Other 20 installed plugins and
+all other marketplace records remained unchanged. Removing the marketplace
+also removed this plugin's inventory entry on this host; reinstall was explicit.
+
+At each stage, the actual installed launcher initialized a fresh MCP session
+(version 0.5.0, 24 tools) after dependency warmup. Three finished historical
+records were read from an isolated copy; the selected report digest stayed
+identical and original historical files stayed unchanged. MCP initialization
+and these reads took 0.39s / 4.48s / 0.38s respectively. These are warm-host
+observations, not cold downloads or end-to-end model task timings.
+
+One deliberately invalid 40-zero commit failed during checkout. The test then
+restored N's Git URL/ref, enabled registration and matching cache contents.
+Refreshing the pinned N marketplace left the ref/version at N, despite a newer
+commit being present on the remote default branch.
+
+The harness used a separate CLI store with manual update policy and issued no
+Claude start/doctor/model calls. It did not reset HOME or CODEX_HOME, change the
+user's existing CLI update policy, or terminate existing task MCP processes.
+Natural-language routing and automatic browser-opening behavior in a new Codex
+task remain separate user smoke checks. No second account or machine was tested.
+The release tag's plugin tree matches N+1; subsequent release documentation
+updates do not change the plugin source or its complete manifest version.
 
 ## Supported scope and remaining limitations
 

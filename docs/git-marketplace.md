@@ -43,9 +43,14 @@ codex plugin marketplace list --json
 codex plugin list --json
 ```
 
-Check the Git URL and ref in the market record and the installed/enabled
-plugin's complete manifest version. The base MCP version remains 0.5.0;
-full plugin versions also contain a cache-refresh suffix.
+Check `marketplaceSource.sourceType=git` and the Git URL, plus the installed/
+enabled plugin's complete manifest version. The current CLI omits the pinned
+ref from these list outputs: compare `git -C /market/root rev-parse HEAD` with
+the selected published commit (or inspect the persisted marketplace ref
+read-only). A plugin entry may still say `source=local` because it points into
+the fetched Git snapshot; the marketplace source establishes its Git origin.
+The base MCP version remains 0.5.0; full plugin versions also contain a
+cache-refresh suffix.
 
 Before opening a new Codex task, prepare the locked Python dependencies from
 that exact fetched plugin directory (the market inventory exposes its root):
@@ -76,7 +81,9 @@ codex plugin list --json
 ```
 
 `FULL_COMMIT_SHA_OR_TAG` is the selected published ref, not literal text to
-copy. These commands are sequential: stop on an error, inspect current state,
+copy. On the tested CLI, removing the market also removes its installed plugin
+from the inventory. Reinstall explicitly after adding the selected source.
+These commands are sequential: stop on an error, inspect current state,
 and restore the recorded source before retrying. Do not remove any other
 marketplace or erase cached executions. The full recovery procedure is in
 [install-and-recovery.md](install-and-recovery.md#migrating-from-the-local-catalog-to-a-git-source).
@@ -97,8 +104,15 @@ plugin. Changing the pinned ref explicitly uses the sequence above.
 [RELEASE-VERIFICATION.md](../RELEASE-VERIFICATION.md) distinguishes actual
 remote installation, upgrade/rollback and MCP protocol checks from source
 checks, synthetic UI tests and real Claude execution. The remote experiment
-is pending until that document records the observed result; creating a GitHub
-repository or pushing a commit alone is not installation evidence.
+was completed on 2026-09-29 for the two fixed commits recorded there, including
+an invalid-ref recovery and pinned refresh. This is a single-host result,
+not a second-machine, new-user or Claude model execution test.
+
+Verified rollback reference for this preview:
+`a40de37f583e51f333e61b93b0b2636d7620c1da` (full plugin version
+`0.5.0+codex.20260929020601`). It retains the older publisher metadata;
+`v0.5.0` contains the personal publisher metadata. Use the same explicit
+remove/add/install sequence to select this rollback SHA.
 
 Report issues at [GitHub Issues](https://github.com/BryanYue/codex-claude-orchestrator/issues)
 with the plugin version, operating system and a sanitized error. Do not attach
