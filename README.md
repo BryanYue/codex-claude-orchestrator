@@ -8,7 +8,8 @@
 
 <p align="center">
   <strong>在 Codex 里，让 Claude 一起把事情做好。</strong><br>
-  Codex 组织任务与检查结果，Claude 参与实施或审查，你在一个对话里掌握进展。
+  Codex 组织任务并检查结果，Claude 参与实施或审查。<br>
+  你在一个对话里掌握进展。
 </p>
 
 <p align="center">
