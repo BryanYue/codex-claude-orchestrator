@@ -11,7 +11,7 @@ a source document cannot certify installation of an archive that does not yet ex
 - Full offline runner: 240 plugin tests and 72 bridge tests passed after final
   browser corrections, including the modal keyboard regression. A later narrow
   desktop bundle-path fix has separate installer regression coverage.
-- Builder regression: 28 tests passed, including tracked-HEAD-only packaging,
+- Builder regression: 29 tests passed (including PNG asset hashing), including tracked-HEAD-only packaging,
   inherited Git-environment isolation, linked worktrees, output/sidecar collisions,
   symlinks, immutable bytes, deterministic ZIP hashes and executable modes.
 - Actual dashboard script executes in Node VM tests for summary/detail freshness,
@@ -37,12 +37,12 @@ a source document cannot certify installation of an archive that does not yet ex
 
 ## Distribution and host boundaries
 
-- Git-ready means a relocatable source layout with documented official CLI
-  installation and a reproducible builder. No remote repository has been selected,
-  pushed or installed. Remote installation and N-to-N+1-to-N Git migration remain
-  unverified, including real same-name-source failure recovery.
-- The migration matrix is a procedure review, not an executed real CLI migration.
-  The original local catalog is updated through the existing ZIP installer only.
+- The private GitHub remote is BryanYue/codex-claude-orchestrator. Remote
+  installation and N-to-N+1-to-N verification are pending for this candidate;
+  this text must be updated from observed results after the experiment.
+- ZIP and Git sources retain distinct install/recovery paths. Git installation
+  does not invoke the ZIP installer. General failure recovery remains a
+  procedure unless a specific exercised failure is recorded.
 - Opening-policy tests cover requested, queued and failed replies. A queued reply
   does not prove a visible browser. Cross-thread/cross-MCP stable viewer entry and
   automatic reuse of an existing host tab are not implemented guarantees.
@@ -62,8 +62,9 @@ a source document cannot certify installation of an archive that does not yet ex
   Existing runs keep their execution identity; no historical receipt is rewritten.
 - Synthetic UI data and offline tests are not actual provider/Workflow execution.
   Real review smoke tests, where recorded separately, do not validate Workflow.
-- No license or remote publisher identity is invented. Choose repository ownership,
-  visibility and licensing before public distribution.
+- Publisher: BryanYue; private preview repository. No open-source license is
+  assigned. Licensing and third-party brand usage must be resolved before
+  broader public distribution.
 
 Original archives and private evidence are retained outside the public source.
 This summary omits actual run/session identifiers, internal paths, account data

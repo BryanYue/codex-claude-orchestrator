@@ -1,16 +1,17 @@
 {
   "name": "codex-claude-orchestrator",
-  "version": "0.5.0+codex.20260929020601",
+  "version": "0.5.0+codex.20260929032040",
   "description": "Project-aware Codex\u2013Claude orchestration with portable specifications, native Codex supervision, configurable routing, MCP execution and compact progress details.",
   "author": {
-    "name": "Local team"
+    "name": "BryanYue",
+    "url": "https://github.com/BryanYue"
   },
   "skills": "./skills/",
   "interface": {
     "displayName": "Codex\u2013Claude \u534f\u4f5c",
     "shortDescription": "\u6309\u9879\u76ee\u89c4\u683c\u81ea\u7136\u63a8\u8fdb\uff0c\u81ea\u52a8\u9009\u62e9\u6267\u884c\u8005\uff0c\u67e5\u770b\u7b80\u6d01\u8fdb\u5ea6\u4e0e\u6838\u9a8c\u7ed3\u679c\u3002",
     "longDescription": "\u6574\u5408\u9879\u76ee\u89c4\u683c\u3001Skill\u3001Codex \u539f\u751f\u76d1\u7763\u5b50\u4ee3\u7406\u3001Claude CLI \u4e0e MCP\u3002\u652f\u6301\u9879\u76ee\u4e00\u6b21\u91c7\u7528\u3001\u6309\u4efb\u52a1\u504f\u597d\u6216\u624b\u52a8\u6307\u5b9a\u6267\u884c\u8005\u3001\u7cbe\u786e\u7eed\u8dd1\u4e0e\u6539\u5411\u3002\u9ed8\u8ba4\u7b80\u6d01\u8be6\u60c5\uff0c\u53ef\u5c55\u5f00\u6216\u5207\u5b8c\u6574\u89c6\u56fe\uff1b\u4e3b Codex \u4fdd\u7559\u76ee\u6807\u548c\u9a8c\u6536\u8d23\u4efb\u3002",
-    "developerName": "Local team",
+    "developerName": "BryanYue",
     "category": "Productivity",
     "capabilities": [
       "Interactive",
@@ -23,7 +24,10 @@
     ],
     "logo": "./assets/icon.png",
     "logoDark": "./assets/icon.png",
-    "composerIcon": "./assets/icon.png"
+    "composerIcon": "./assets/icon.png",
+    "websiteURL": "https://github.com/BryanYue/codex-claude-orchestrator"
   },
-  "mcpServers": "./.mcp.json"
+  "mcpServers": "./.mcp.json",
+  "repository": "https://github.com/BryanYue/codex-claude-orchestrator",
+  "homepage": "https://github.com/BryanYue/codex-claude-orchestrator#readme"
 }

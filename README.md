@@ -2,7 +2,18 @@
 
 把项目规格、Skill、Codex 原生监督子代理、Claude CLI、MCP、持久 Runtime 和简洁详情装在同一个包里。你在 Codex 主任务中正常提需求，Codex 负责选择执行者、同步进度、纠正方向和核验结果。
 
-## 同事如何开始
+## 从个人 Git marketplace 安装
+
+维护者：**BryanYue**。仓库：[BryanYue/codex-claude-orchestrator](https://github.com/BryanYue/codex-claude-orchestrator)，目前为私有试用，安装者需要仓库读取权限。
+
+```bash
+codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v0.5.0
+codex plugin add codex-claude-orchestrator@codex-claude-team
+```
+
+已有同名本地市场时，先按[迁移与回退说明](docs/git-marketplace.md#change-a-fixed-ref-or-migrate-from-zip)切换来源。Git 安装后先预热锁定依赖，再开新 Codex 任务；不要执行下方 ZIP 安装器来修复 Git 安装，否则会切回本地 catalog。仓库访问、Python 依赖、Claude CLI 及其登录分别准备，完整步骤见 [Git 安装说明](docs/git-marketplace.md)。
+
+## 使用 ZIP 安装包开始
 
 1. 安装并登录 **Codex 桌面客户端**、**Claude Code CLI**；安装 `uv`（[官方说明](https://docs.astral.sh/uv/getting-started/installation/)，已有 Homebrew 可用 `brew install uv`）。
 2. 解压完整安装包，在终端运行 `bash /解压目录/Install.command`；也可双击 **Install.command**。若下载后的 Gatekeeper 阻止双击，使用上述 bash 入口，不必关闭系统安全设置。安装器校验包内哈希并检查环境，使用官方 Codex plugin 命令安装。Claude 尚未安装或登录时也可以先安装插件，再由诊断提示补齐；实际委派仍会被预检阻止。
@@ -225,6 +236,6 @@ uv run --project plugins/codex-claude-orchestrator --frozen --no-dev python tool
 
 发布验证同时覆盖隔离夹具、MCP 协议、浏览器和安装。具体版本与覆盖以随包 RELEASE-VERIFICATION.md 为准；不将历史版本的通过数当作本版证据。普通请求在新桌面任务中从路由到委派的完整自动入口，需要在目标宿主正常权限下走查；本机 MCP 直连不替代这项验收。
 
-后续可将整个 marketplace 根放到团队私有 Git 仓库，以 tag 固定版本，通过官方 marketplace 安装；具体命令与 Git-ready/远端已验证的区分见 [Git marketplace 说明](docs/git-marketplace.md)。本版交付本地安装包与 Git-ready 源码，尚未发布外部仓库，也没有实际远端安装证据。
+源码与 Git marketplace 由个人仓库 BryanYue/codex-claude-orchestrator 维护，使用固定发布 ref 安装。具体取源、升级、回退步骤见 [Git marketplace 说明](docs/git-marketplace.md)，实际验证范围见 [发布验证](RELEASE-VERIFICATION.md)。问题请通过仓库 Issues 提交，并去除凭据、viewer token 与业务代码。当前未指定开源许可证，私有试用不代表公开授权。
 
 要停用项目入口，向 Codex 说“这个项目不再自动采用该协作流程”。插件只移除精确未改的自有块，保留其他规则和证据。要卸载客户端插件，在 Codex 插件界面卸载；任务记录按团队规则另行保留。

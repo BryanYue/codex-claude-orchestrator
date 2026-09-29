@@ -101,9 +101,9 @@ order:
 This machine may already have a marketplace named `codex-claude-team` pointing
 at the local catalog (`~/.codex/claude-orchestrator/catalog`). Because the host
 CLI keys a marketplace by name, adding a Git source under the same name is not
-a conflict-free operation. The sequence below is the **documented** procedure
-and its failure/rollback shape; it has not been run against a real local
-market or a real remote host in this task (see the note at the end).
+a conflict-free operation. The sequence below changes only this marketplace. Its observed coverage is
+recorded in RELEASE-VERIFICATION.md; the procedure alone is not proof that
+every failure path has been exercised.
 
 1. **Record current state before touching anything.**
    ```bash
@@ -138,12 +138,9 @@ market or a real remote host in this task (see the note at the end).
    it is not hot-replaced by a later switch. Open a new Codex task to pick up
    whichever version is now installed.
 
-**Verification boundary:** this procedure is a source migration plan. The
-release verification records any controlled failure replay separately; this
-document does not itself prove that such a replay ran. It does **not** include
-running this migration against the real
-local `codex-claude-team` catalog on any machine, and it does not include a
-real Git remote to migrate to — see
-[git-marketplace.md](git-marketplace.md#what-git-ready-means-here-and-what-it-does-not)
-for that distinction. Do not read this section as evidence that a real
-migration has been performed or verified.
+**Verification boundary:** consult [RELEASE-VERIFICATION.md](../RELEASE-VERIFICATION.md)
+for the tested fixed refs, host and outcomes. Successful remote installation
+and MCP initialization do not prove a new task's natural-language routing,
+automatic browser reuse, a cold second machine or another user's credentials.
+Failure recovery is tested only where explicitly recorded; do not infer that
+every interruption or permission failure was exercised.
