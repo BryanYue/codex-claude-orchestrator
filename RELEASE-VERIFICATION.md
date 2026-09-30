@@ -1,4 +1,76 @@
+# 0.6.0 verification and supported scope
+
+Full plugin version: `0.6.0+codex.20260930055451`. Fixed release target: `v0.6.0`.
+This section records the 2026-09-30 source and host checks; the v0.5.0 record
+below remains unchanged apart from its scope note. No user Claude CLI,
+login settings or installed plugin cache was changed to obtain these results.
+
+## Verified source and execution behavior
+
+- Final regression coverage: 346 plugin tests, 125 Bridge tests and 29
+  distribution tests (500 unique tests, no skips). The final full run passed
+  all behavior assertions; one new test expected ValueError where the
+  established failed-run decision interface raises RuntimeError. Correcting
+  that test's exception class and rerunning it passed. Original logs are
+  retained. An earlier pass updated the unreleased-version and discarded-
+  report assertions to the user's authorized release/report requirements;
+  failure status, permission denials and scope checks were not relaxed.
+- The actual earlier denied-Glob run was replayed read-only: before the fix,
+  coverage was 17 of 18; after it, all 18 have audit evidence (17 allowed,
+  1 denied, no missing IDs). The denial still blocks successful execution.
+  Valid provider reports remain readable as unaccepted evidence when a run
+  fails; malformed reports retain validation errors. Denial entries no
+  longer embed the entire result event.
+- New identity tests cover the plugin's own Git revision, dirty source,
+  unrelated parent repositories, ZIP manifest provenance, legacy/corrupt
+  records, frozen identities and nonblocking handling of a FIFO. A real new
+  Claude run records the full plugin version, source revision and actual
+  code digest before dispatch. The ZIP builder emits the same digest scheme.
+- The new content manifest's seven Markdown hashes were verified. The
+  protected orchestration-protocol.md bytes retain SHA-256
+  `63479da00c8cf9a2467d0efe860fe327a364fb51b7592eece18266319cd6a17b`.
+  Reviewed activation, sticky disable, explicit rollback and per-run content
+  binding retain the earlier real-MCP and regression evidence.
+- Real Claude implementation used the user's local CLI 2.1.285 and actual
+  `claude-sonnet-5-5`; 68 of 68 guarded tool calls had audit evidence and no
+  permission denials. Codex supplemented the implementation and recorded
+  returned/completed_by_codex after independent checks.
+- The earlier three-seat whole-repository Workflow and accepted closing
+  review remain evidence for unchanged code. The release-delta saved Workflow
+  completed and its child had 65/65 audited tools. Its parent run remains
+  failed: one malformed StructuredOutput request was rejected by the CLI
+  before a hook ran (parent coverage 3/4). The new failed-report preservation
+  kept the full report readable. Codex independently resolved its three low
+  severity code/guidance findings and documented the expected unknown Git
+  revision in metadata-free caches; the failed run was not marked accepted.
+- The current plugin-file digest (as computed by the builder and runtime) is
+  `a30a111d0e8f0bd988a07dc8b3b7dab999d312021488ef43bb115ff9d014909b`.
+  An installed cache without Git metadata can be matched by this digest and
+  the full plugin version; no commit is guessed. Reading the actual old
+  installed cache with the new collector confirmed this unknown-revision
+  layout. That read-only check is not a new-version installation test.
+
+## Delivery boundaries
+
+- Source tests and the actual package build do not establish installation
+  into a user's active Codex process. The user will update from the published
+  fixed ref and reload the plugin. Existing processes keep loaded code.
+- No new-host cold install, every Claude version/provider, long-run load
+  test or hard DNS/header timeout stress test is claimed. Response-body
+  deadlines, failed/offline content checks and previous approved snapshots
+  have regression coverage.
+- CLI versions are diagnostic. Only the user's installed/configured CLI is
+  selected; required flags, authentication and run evidence still gate use.
+- Git remote ref and content availability are checked again after pushing.
+  No GitHub Release asset upload or automatic local plugin update is part of
+  this source delivery. The old v0.5.0 tag is not moved.
+
+---
+
 # 0.5.0 verification and supported scope
+
+> The section below is retained historical v0.5.0 evidence. Its test counts, tool counts, CLI qualification and unchanged-contract statements do not describe 0.6.0.
+
 
 The integrated candidate contains the read-only task workbench, single-opening
 host guidance, dependency warmup and reproducible Git-based distribution tooling.

@@ -1,11 +1,100 @@
 """Shareable diagnostics must not expose task-scoped provider identifiers."""
+import fcntl
+import hashlib
+import json
+import os
 from pathlib import Path
 import sys
+import tempfile
+import time
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
+import cli_validation
 import diagnostics
+
+
+class ReadOnlyValidationHistoryTests(unittest.TestCase):
+    JOB_ID = "qualification-abcdefghijklmnop"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.cli_root = Path(self.tmp.name) / "historical-cli"
+        self.job = self.cli_root / "jobs" / self.JOB_ID
+        self.job.mkdir(parents=True)
+        (self.cli_root / "selection.json").write_text('{"mode":"explicit","active":"retained-identity","generation":3}\n')
+        (self.cli_root / "update-policy.json").write_text('{"mode":"manual"}\n')
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def record(self, **fields):
+        now = time.time()
+        state = {"job_id": self.JOB_ID, "identity_id": "fixture-identity", "status": "running",
+                 "phase": "testing", "groups": ["core"], "activate_on_success": True,
+                 "selection_generation": 3, "contract_id": "fixture-contract",
+                 "created_at": now, "updated_at": now, "nonce": "fixture-nonce"}
+        state.update(fields)
+        (self.job / "job.json").write_text(json.dumps(state))
+        return state
+
+    def tree(self):
+        entries = {}
+        for path in sorted(self.cli_root.rglob("*")):
+            key = str(path.relative_to(self.cli_root))
+            entries[key] = "dir" if path.is_dir() else hashlib.sha256(path.read_bytes()).hexdigest()
+        return entries
+
+    def diagnose(self):
+        with mock.patch.dict(os.environ, {"CLAUDE_ORCHESTRATOR_CLI_ROOT": str(self.cli_root)}):
+            return diagnostics._validation_status(self.JOB_ID)
+
+    def test_nonterminal_history_is_reported_without_locks_reconciliation_or_writes(self):
+        for status, phase in (("running", "testing"), ("cancel_requested", "cancelling"),
+                              ("running", "committing")):
+            with self.subTest(status=status, phase=phase):
+                self.record(status=status, phase=phase)
+                if phase == "committing":
+                    report = {"schema_version": 1, "status": "completed", "phase": "completed",
+                              "job_id": self.JOB_ID, "identity_id": "fixture-identity",
+                              "bridge_contract_id": "fixture-contract",
+                              "matrix": {name: {"status": "pass"} for name in cli_validation.GROUPS}}
+                    (self.job / "report.json").write_text(json.dumps(report))
+                before = self.tree()
+                result = self.diagnose()
+                self.assertEqual(self.tree(), before)
+                self.assertEqual((result["status"], result["phase"]), (status, phase))
+                self.assertIs(result["read_only"], True)
+                self.assertEqual(result["reconciliation"], "not_performed")
+                self.assertEqual(result["worker_lock"], "absent")
+                for name in ("state.lock", "events.lock", "worker.lock", "events.jsonl"):
+                    self.assertFalse((self.job / name).exists(), name)
+
+    def test_existing_worker_lock_is_observed_through_a_read_only_descriptor(self):
+        self.record()
+        lock = self.job / "worker.lock"
+        lock.write_bytes(b"")
+        before = self.tree()
+        self.assertEqual(self.diagnose()["worker_lock"], "free")
+        with lock.open("a+") as holder:
+            fcntl.flock(holder.fileno(), fcntl.LOCK_EX)
+            self.assertEqual(self.diagnose()["worker_lock"], "held")
+        self.assertEqual(self.tree(), before)
+
+    def test_terminal_history_and_explicit_legacy_status_keep_their_existing_behavior(self):
+        self.record(status="completed", phase="completed", outcome="inconclusive")
+        before = self.tree()
+        result = self.diagnose()
+        self.assertEqual(self.tree(), before)
+        self.assertEqual(result["status"], "completed")
+        self.assertNotIn("reconciliation", result)
+
+        self.record()
+        legacy = cli_validation.status(self.JOB_ID, environ={"CLAUDE_ORCHESTRATOR_CLI_ROOT": str(self.cli_root)})
+        self.assertEqual((legacy["status"], legacy["phase"]), ("completed", "worker_lost"))
+        self.assertTrue((self.job / "report.json").is_file())
 
 
 class RecentProviderCallTests(unittest.TestCase):

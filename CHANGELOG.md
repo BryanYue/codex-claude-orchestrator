@@ -4,6 +4,49 @@
 
 以下为版本变更记录，保留实现与验证细节。首次使用见[快速开始](docs/getting-started.zh-CN.md)，实际验证范围见[发布验证](RELEASE-VERIFICATION.md)。
 
+## 0.6.0：本机 CLI、动态协调内容与运行证据修复
+
+运行证据：hook 的允许、拒绝与缺少审计分别统计，权限拒绝仍使运行失败；执行失败也保留可解析报告并明确未验收；拒绝列表仅保存拒绝条目。每轮冻结完整插件版本、来源 revision 和实际代码摘要。失败摘要与简洁预览明确标注未验收；Git 探针失败保留真实诊断，缺 Git 元数据的安装缓存不猜提交号。`claude_decide` 只接收未被取代的 reported 轮次，失败运行由 Codex 完成的任务处置记录在既有 PROGRESS 中，原失败事实不改写。
+
+动态协调内容：同仓库 references 目录的 Markdown 可隔离暂存，经 Codex 按 digest 安全评估后启用；新任务固定快照，续跑不随更新变化。停用保持到显式恢复，支持已审查版本回退，原协议正文不变。
+
+用量范围：新增 model_usage/usage_report，分别展示主代理回报、按模型的 CLI 会话累计及客户端估算费用；缺项保持未知，续跑不冒充本轮新增费用。新增内容接口、Bridge 模块和分发契约需一次插件升级，之后正文更新可独立进行。
+
+**本机 CLI 策略。** 新派单、续跑、环境检查、诊断、模型目录、安装器和工作台都只使用用户本机已安装或明确配置的 Claude CLI（`CLAUDE_BIN` → 插件 `claude_bin` → PATH，保留 nvm/npm shim 路径；`launch.sh` 与 `Install.command` 保持调用方 PATH 优先，常见安装目录只作后备）。版本号只作诊断，不再有版本白名单；任务按 `--help` 的精确 flag（与实际任务命令一致，含 `--verbose`；`doctor --verify` 另需 `--no-session-persistence`）、本地登录状态和显式预算 flag 准入，help 明确标为“声明的语法”而非已验证行为。行为继续由 hook 自检、hook 覆盖、会话身份和结构化结果校验确认；普通角色新增运行后工具集核对，出现 `--tools` 以外的工具即失败（`tool_policy_error`）。续跑要求同一可执行文件，用户升级后明确拒绝并提示 fresh；旧版本的私有 CLI 身份不能借续跑、模型目录或资格描述符再次执行。
+
+**版本管理退役。** 移除后台维护循环和派单时的维护/等待；`claude_cli_update` 除取消旧验证任务外只返回说明、不改状态；`claude_models` 不再接受 `identity_id`；安装器不再准备私有 CLI；子进程不再设置 `DISABLE_AUTOUPDATER`；工作台“维护”区改为本机 CLI 状态。`cli_store.py`、`cli_validation.py`、`official_releases.py` 中的下载、捕获、资格和切换实现只作为历史代码保留，用于读取既有记录，生产入口不再调用；`~/.codex/claude-orchestrator/cli` 下的历史身份、回执和选择文件不删除、不参与派单。
+
+2026-09-30 Workflow 补审修复：Bridge 在启动 Claude 前持久记录本轮 lane 占用意图，确认子进程停止且终态证据落盘后只移除自己的标记；Runtime 与 Bridge 同时异常退出仍阻止跨状态目录重派。独立 Bridge 因既有 unknown 被拒绝时会写失败回执并退出 1，仍不启动 Claude。启动结果不确定时保留恢复门禁。
+
+CLI 提示补齐失效配置路径的恢复方式；历史维护锁改为只读共享观察，不可读明确为未知。工作台刷新保持键盘焦点且不拉动滚动位置，复制反馈两秒复位并隔离旧异步结果，预检文案不把未确认启动写成未启动。Viewer 对非 ASCII 鉴权头返回 401，采用项目的来源字段先校验类型。模型目录超时测试先确认夹具进程就绪，生产超时与停止断言不变。本版同步更新完整插件版本、MCP/根包版本与 v0.6.0 安装说明；v0.5.0 标签和历史发布验收记录保留。
+
+审查问题对应：
+
+- F01（capture 失败丢失下载）、F11（latest 漏写 GnuPG）：随生产下载与 latest 通道退役而消除；历史代码中 capture 失败时也会把已验证字节放回断点缓存。
+- F02：版本探针失败保留退出码、信号或超时类型，以及限长、脱敏的 stdout/stderr（历史存储代码与桥接环境检查均适用）。
+- F03：Git 子目录 cwd 下，status 路径统一换算为 cwd 坐标，内容哈希不再误为 missing；cwd 之外的改动记为 `../` 路径并继续判越界。子目录前缀只去掉 Git 的换行，名称首尾空格保留。
+- REMOTE-F1-ISOLATION（F03 同族，锁身份维度）：执行锁、活动/unknown 准入、unknown marker 与恢复改用同一 worktree 身份（`git rev-parse --show-toplevel` 的真实路径），Runtime 与独立 bridge 共用；继承锁 FD 按该身份核对。根目录、子目录和兄弟子目录不能再同时派单，也不能绕过彼此的 unknown；linked worktree 与 artifacts 目录保持独立。cwd、owned/protected 坐标和 task/revision 身份不变。新记录保存 `lane_identity`；marker 带 lane 身份，同一 lane 已有他人 marker 时另存而不覆盖，reconcile 只清本 run 的 marker。旧记录/marker 按记录的 cwd 归属，无法定位时保守阻断；旧记录的 cwd 已删除或无法解析为 worktree 时，重启生成的 marker 只用该路径作键、不声明 lane 身份，所有 Runtime/状态目录仍按其路径归属到所在 worktree；旧子目录活动记录还须拿到旧的精确 cwd 锁才会被判定或恢复。根目录锁/marker 键不变；混合版本边界见[进阶说明](docs/advanced-usage.zh-CN.md#执行与数据边界)。
+- F04/F05：本机 CLI 状态读取的任何异常只降级该字段，不遮蔽已创建的 run；MCP 关闭时 Runtime 与 Viewer 的清理相互独立，Viewer 启动失败也会关闭 Runtime。
+- F06：保留版本的大小进入 inventory 与诊断，只统计记录大小与实际文件一致的版本，旧记录缺项单独计数。
+- F12：首页当前轮候选的详情超过 45 秒会在有界后台预算内补读；保留 60 秒可信新鲜度门禁。
+- F13：`unknown` 且已读取结构化报告时展示已记录内容，并注明不能据此验收或重派。
+- F14/F20：状态读取失败会被缓存并在打开抽屉时继续显示，同时标出旧数据的读取时间；换用新 token 链接后重新调度状态读取，旧连接代的响应不覆盖新状态。
+- F15：技术记录明确提示“展示已截断，完整记录保留在本机”，并区分记录不存在、正在写入和读取失败。
+- F16：权限拒绝显示工具、目标与原因，未知结构使用限长 JSON。
+- F17：窄面板首次无任务时在列表中显示引导，与搜索无结果区分。
+- F18：任务列表与轮次标签支持 roving tabindex、方向键和 Home/End；普通刷新重绘轮次标签时，焦点仍在原轮次，不抢其他控件的焦点。
+- F19：执行身份与技术记录显示 `execution_evidence` 来源及说明。
+- C01：切换到未载入或无效的执行记录时清空其他记录的报告、身份与技术字段。
+
+Workflow 复审后续修复：
+
+- WF-R1：带已确立 `lane_identity` 的 unknown 记录，其子目录 cwd 被删除后，`inspect_recovery` 改在仍存在的 worktree 根目录取证，快照与摘要仍按原 packet 的 cwd 坐标计算（与该 cwd 自身快照一致），packet 与记录不改写。仅当 cwd 是该 lane 下规范形式的严格子路径、确实不存在（未被文件或 symlink 占位）、最近存活的祖先是真实目录且其 worktree 根仍为该 lane、且（有记录时）派单 packet 哈希一致才允许；旧记录（无 `lane_identity`）、错误 lane、嵌套仓库、symlink 祖先和 packet 缺失/不一致仍无法取证。cwd 仍存在时，带 lane 身份的 Git 记录同样先核对身份：cwd 须为解析到自身的真实目录（本身或祖先都不能是 symlink），其 worktree 根仍为该 lane；被 symlink 指向其他 worktree/仓库/同仓库其他目录、或被嵌套仓库、新 linked worktree 占位的路径不会被当作原工作区取证。无 lane 身份的旧记录在 cwd 存在时沿用原行为。进程已停止、独占 lane、期望摘要与 marker 归属门禁不变。
+- WF-R2：找不到 CLI 时的提示不再无条件推荐 `Install.command --configure-claude-bin`；`CLAUDE_BIN` 适用于所有安装方式，安装器持久化只适用于带 `FILE-SHA256.json` 的 ZIP 分发包。CLI 选择与安装行为不变。
+- WF-R3：`claude_cli_status`/诊断读取旧验证任务改用只读的 `cli_validation.read_status`：不创建锁文件、不对账、不写报告/事件、不触碰 selection；非终态记录原样返回并标注 `reconciliation: not_performed`，只以只读描述符观察已有 `worker.lock`。显式 `cancel` 与历史 `status` 行为保留。
+- WF-R5：`workflow_review` 子进程环境设置 `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS` 为本次 run 的超时（毫秒，最小 1000，从不为 0），避免 `claude -p` 在默认 10 分钟空闲等待后停止仍在运行的 Workflow；只作用于该子进程，不改 `os.environ` 或用户设置，外层超时、取消与进程组清理不变。提示词说明 Workflow 工具结果只是启动确认、不要查看私有 journal、等待自动完成通知，完成前的结构化结果只是中间结果。`parse_stream` 只接受在匹配的完成通知（同一 tool_use_id、同一会话、父会话消息、与 `task_started` 绑定的 task_id）之后出现的父级结果；完成前的结果即使随后出现完成通知也判为 blocked（`workflow_final_after_completion`、`workflow_interim_result_count`）。
+- WF-R6：Workflow 子代理的工具调用及其 hook 拒绝不一定出现在父级 stream 或 CLI 的 `permission_denials` 中。收口时从本 run 的 `activity.jsonl` 汇总 PreToolUse hook 记录的拒绝，追加到 `permission_denials`（`source: bridge_pretooluse_hook`，含 activity 序号、工具、tool_use_id、原因，以及是否出现在父级 stream / CLI 拒绝中），写入 `hook_denial_error`，并判 run 失败；适用于所有角色。CLI 报告的拒绝、hook 覆盖、工具集、会话、范围与完成通知门禁不变，被拒绝的操作仍被拒绝，读取范围不放宽。
+- WF-R4（运行状态根不跟随 `CODEX_HOME`）不作为缺陷处理：状态根默认 `~/.codex/claude-orchestrator`、由 `CLAUDE_ORCHESTRATOR_STATE_DIR` 显式覆盖，行为不变，只在进阶说明中写明。
+
 ## 0.5.0：协作工作台与 Git 分发准备
 
 本版提供按任务组织的只读协作工作台，并把源码整理为独立 Git 仓库，新增可复现构建和首次安装说明。实际验证与限制见 [发布验证](RELEASE-VERIFICATION.md)。

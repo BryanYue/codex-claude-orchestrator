@@ -52,7 +52,6 @@ def run_suites(root: Path, suite: str, *, execute: Callable[..., subprocess.Comp
         environment = dict(os.environ)
         environment["TMPDIR"] = str(isolated_tmp)
         environment["CLAUDE_ORCHESTRATOR_CLI_ROOT"] = str(isolated_tmp / "cli-store")
-        environment["CLAUDE_ORCHESTRATOR_UPDATE_POLICY"] = "manual"
         for name in selected_suites(suite):
             try:
                 completed = execute(command_for(root, name), cwd=root, env=environment, check=False)

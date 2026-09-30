@@ -83,6 +83,32 @@ assert.equal(context.document.activeElement,launcher);
         result = subprocess.run([node, '-'], input=source, text=True, capture_output=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_local_cli_recovery_action_is_fully_visible(self):
+        node = shutil.which('node')
+        if not node:
+            self.skipTest('Node is required for the executable UI regression')
+        script = re.search(r'<script>(.*?)</script>', (ROOT / 'assets/dashboard.html').read_text(), re.S).group(1)
+        harness = HARNESS_PRELUDE + r'''
+const settings='/Users/example/.codex/claude-orchestrator/settings.json';
+const lead='已保存的 Claude CLI 设置已失效，请先核对当前配置来源与记录的可执行文件位置是否一致。'.repeat(12);
+const recovery=`请在启动 Codex 的环境中设置 CLAUDE_BIN，或在 ${settings} 中将 claude_bin 改为现有 claude 可执行文件的绝对路径，然后重新检查。`;
+const nextAction=lead+recovery;
+assert.ok(nextAction.length>500&&nextAction.length<800,'fixture should be roughly 600 characters');
+assert.ok(nextAction.indexOf('CLAUDE_BIN')>180,'recovery action must sit beyond the old 180-character cut');
+run(`st.maintenance=${JSON.stringify({state:'cli_missing',message:'未找到可用的 Claude CLI。',next_action:nextAction})};st.maintenanceFailure=null;renderMaintenance();`);
+const shown=byId('drawerMaintenanceDetail').textContent;
+assert.ok(shown.includes(recovery),'full recovery action must be displayed');
+assert.ok(shown.includes('CLAUDE_BIN'));
+assert.ok(shown.includes(settings));
+assert.ok(shown.startsWith('下一步：'));
+assert.ok(!shown.includes('…'),'next_action must not be truncated');
+run(`st.maintenance=${JSON.stringify({state:'cli_missing',message:'x',next_action:'   '})};renderMaintenance();`);
+assert.equal(byId('drawerMaintenanceDetail').textContent,'','blank next_action adds no hint');
+'''
+        source = 'const SOURCE=' + __import__('json').dumps(script) + ';\n' + harness
+        result = subprocess.run([node, '-'], input=source, text=True, capture_output=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_states_cache_current_round_facts_and_scheduling(self):
         node = shutil.which('node')
         if not node:
@@ -196,6 +222,16 @@ assert.equal(context.document.activeElement,launcher);
   assert.match(run("nextStepFor({state:'known',run:{run_id:'run-x',status:'reported',decision:null}},true).prompt"),/核验执行 run-x 的报告/);
   assert.equal(run("nextStepFor({state:'known',run:{run_id:'run-x',status:'reported',decision:{decision:'returned'}}},true).prompt"),'按退回原因修正这项任务。');
   assert.match(run("nextStepFor({state:'known',run:{run_id:'run-x',status:'blocked',receipt:{blocked_by:'preflight'},claude_started:false}},true).prompt"),/预检阻止原因/);
+  for(const started of ['false','null','true']){
+    const blocked=`{run_id:'run-x',status:'blocked',receipt:{blocked_by:'preflight'},claude_started:${started}}`;
+    const texts=[run(`execFact(${blocked},true).label`),run(`reasonLine({state:'known',run:${blocked}},true).text`),
+      run(`nextStepFor({state:'known',run:${blocked}},true).body`)];
+    for(const text of texts){
+      if(started==='false')assert.match(text,/Claude 未启动/);
+      else{assert.doesNotMatch(text,/未启动/,`claude_started=${started} must not be reported as not started: ${text}`);assert.match(text,/启动状态未确认/);}
+    }
+    assert.match(run(`nextStepFor({state:'known',run:${blocked}},true).prompt`),/预检阻止原因/);
+  }
   const executorStep=run("nextStepFor({state:'known',run:{run_id:'run-x',status:'blocked',result:{blocked_by:'executor',structured:{summary:'缺材料',unresolved:['范围']}}}},true)");
   assert.match(executorStep.body,/缺材料/);assert.match(executorStep.body,/范围/);
   assert.match(run("nextStepFor({state:'known',run:{run_id:'run-x',status:'unknown',reconciliation:{outcome:'confirmed_stopped'}}},true).body"),/历史结果仍未验收/);

@@ -14,7 +14,7 @@ sys.path.insert(0, str(ROOT / "skills/codex-claude-orchestrator/scripts"))
 import bridge
 import cli_store
 import cli_validation
-from executable_locator import discover_system_claude, locate_claude
+from executable_locator import locate_claude
 
 try:
     import cli_updates
@@ -92,41 +92,35 @@ def _recent_real_provider_call(runs: list[dict] | None) -> dict:
     return {"status": "not_recorded", "note": "No persisted supervised provider response is available."}
 
 
-def _store_inventory() -> dict:
+def _legacy_records() -> dict:
+    """Retained managed-CLI history; read without hashing, locks or writes."""
     try:
-        value = cli_store.inventory()
-        if isinstance(value, dict):
-            versions = value.get("versions", [])
-            sizes = [item["size"] for item in versions if isinstance(item, dict)
-                     and type(item.get("size")) is int and item["size"] >= 0]
-            value["storage_summary"] = {"verified_retained_bytes": sum(sizes),
-                                        "unmeasured_versions": len(versions) - len(sizes),
-                                        "excludes": ["download_partials", "run_evidence"],
-                                        "automatic_cleanup": False}
-        return value if isinstance(value, dict) else {"status": "unavailable", "reason": "CLI inventory had an invalid shape"}
+        value = cli_store.legacy_records()
+        return value if isinstance(value, dict) else {"status": "unavailable", "reason": "legacy CLI records had an invalid shape"}
     except (OSError, RuntimeError, ValueError) as exc:
         return {"status": "unavailable", "reason": str(exc)}
 
 
 def _validation_status(job_id: str | None) -> dict | None:
+    """Retired validation history is read without locks, reconciliation or writes."""
     if job_id is None:
         return None
     try:
-        value = cli_validation.status(job_id)
+        value = cli_validation.read_status(job_id)
         return value if isinstance(value, dict) else {"status": "unavailable", "reason": "validation status had an invalid shape"}
     except (OSError, RuntimeError, ValueError) as exc:
         return {"status": "unavailable", "job_id": job_id, "reason": str(exc)}
 
 
 def _maintenance_status() -> dict:
-    """Read the updater's persisted public state; never start or acknowledge an update."""
+    """Read the local CLI status; version management itself is retired."""
     if cli_updates is None:
-        return {"state": "unavailable", "reason": "CLI maintenance module is unavailable"}
+        return {"state": "unavailable", "reason": "local CLI status module is unavailable"}
     try:
         value = cli_updates.status()
-        return value if isinstance(value, dict) else {"state": "unavailable", "reason": "CLI maintenance status had an invalid shape"}
-    except (OSError, RuntimeError, ValueError) as exc:
-        return {"state": "unavailable", "reason": str(exc)}
+        return value if isinstance(value, dict) else {"state": "unavailable", "reason": "local CLI status had an invalid shape"}
+    except Exception as exc:
+        return {"state": "unavailable", "reason": f"{type(exc).__name__}: {exc}"}
 
 
 def collect(cwd: str, *, recent_runs: list[dict] | None = None, job_id: str | None = None) -> dict:
@@ -150,16 +144,17 @@ def collect(cwd: str, *, recent_runs: list[dict] | None = None, job_id: str | No
             host['error'] = 'host_check_unavailable'
     environment = bridge.check_environment(folder, verify=False)
     discovery = locate_claude()
-    system_discovery = discover_system_claude()
-    inventory = _store_inventory()
+    legacy = _legacy_records()
     validation = _validation_status(job_id)
     maintenance = _maintenance_status()
     # Intentionally exclude the account identifier and full environment payload.
     claude = {key: environment.get(key) for key in ('ready', 'status') if key in environment}
     claude['version'] = (environment.get('cli') or {}).get('version')
+    claude['version_policy'] = 'diagnostic_only'
     claude['auth_status'] = (environment.get('auth') or {}).get('status')
     claude['credential_validity'] = (environment.get('auth') or {}).get('credential_validity')
-    claude['compatibility'] = (environment.get('cli') or {}).get('profile')
+    claude['compatibility'] = {key: value for key, value in (environment.get('compatibility') or {}).items()
+                               if key in ('status', 'evidence', 'behavior_verified', 'missing_flags', 'missing_groups')}
     claude['discovery'] = {
         key: discovery.get(key) for key in ('path', 'source', 'configured', 'candidate', 'settings_path')
     }
@@ -170,7 +165,7 @@ def collect(cwd: str, *, recent_runs: list[dict] | None = None, job_id: str | No
     auth = environment.get("auth") if isinstance(environment.get("auth"), dict) else {"status": "not_checked"}
     probe = environment.get("probe") if isinstance(environment.get("probe"), dict) else {"status": "not_requested"}
     compatibility = environment.get("compatibility") if isinstance(environment.get("compatibility"), dict) else {
-        "status": (environment.get("cli") or {}).get("profile", {}).get("status", "unknown"),
+        "status": "unknown",
         "capabilities": (environment.get("cli") or {}).get("capabilities", {}),
         "unavailable_capabilities": (environment.get("cli") or {}).get("unavailable_capabilities", []),
     }
@@ -178,16 +173,20 @@ def collect(cwd: str, *, recent_runs: list[dict] | None = None, job_id: str | No
         "path": (environment.get("cli") or {}).get("path"),
         "source": (environment.get("cli") or {}).get("source"),
         "version": (environment.get("cli") or {}).get("version"),
-        "identity": (environment.get("cli") or {}).get("identity"),
+        "version_policy": "diagnostic_only",
         "dispatch_ready": bool(environment.get("ready")),
         "status": environment.get("status"),
         "compatibility": compatibility,
     }
+    for key in ("version_probe", "help_probe"):
+        if isinstance((environment.get("cli") or {}).get(key), dict):
+            active[key] = environment["cli"][key]
     cli_management = {
-        "schema_version": 1,
-        "system": system_discovery,
+        "schema_version": 2,
+        "policy": "user_local_cli",
+        "version_management": "retired",
         "active": active,
-        "inventory": inventory,
+        "legacy_records": legacy,
         "validation": validation,
         "maintenance": maintenance,
         "dimensions": {
@@ -197,7 +196,8 @@ def collect(cwd: str, *, recent_runs: list[dict] | None = None, job_id: str | No
             "recent_real_provider_call": _recent_real_provider_call(recent_runs),
             "compatibility": compatibility,
         },
-        "note": "Candidate or validation state is observational and never changes active dispatch readiness by itself.",
+        "note": ("Dispatch uses only this local CLI. Retained managed records and historical validation jobs are "
+                 "observational and never select or block an executable."),
     }
     uv_ready = shutil.which('uv') is not None
     steps = []

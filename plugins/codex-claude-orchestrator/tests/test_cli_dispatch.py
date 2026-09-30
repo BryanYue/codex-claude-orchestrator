@@ -1,4 +1,4 @@
-"""A dispatch and its correction remain bound to the captured executable."""
+"""A dispatch and its correction remain bound to the same local executable."""
 import json
 import os
 import unittest
@@ -7,7 +7,6 @@ from unittest.mock import patch
 
 import test_runtime as fixtures
 import bridge
-import cli_store
 
 
 class PinnedDispatchTests(unittest.TestCase):
@@ -36,20 +35,23 @@ class PinnedDispatchTests(unittest.TestCase):
         self.assertEqual(pinned["selection"]["path"], str(self.fake))
         self.assertEqual(final["environment"]["cli_identity"]["sha256"], pinned["sha256"])
 
-    def test_resume_uses_original_binary_after_active_path_changes(self):
+    def test_resume_is_refused_after_the_user_switches_local_cli_and_fresh_uses_the_new_one(self):
         first = self.runtime.start(self.packet())
         initial = self.finish(first["run_id"])["snapshot"]
-        replacement = self.root / "new-cli"
-        replacement.write_text("#!/bin/sh\nexit 88\n")
-        replacement.chmod(0o755)
-        os.environ["CLAUDE_BIN"] = str(replacement)
+        upgraded = self.root / "upgraded-cli.py"
+        upgraded.write_text(self.fake.read_text() + "\n# user upgrade\n")
+        upgraded.chmod(0o755)
+        os.environ["CLAUDE_BIN"] = str(upgraded)
         packet = self.packet(2)
         packet["correction"] = {"finding_id": "f1", "kind": "local", "reason": "check again", "attempt": 1}
-        second = self.runtime.start(packet, resume_run_id=first["run_id"])
-        final = self.finish(second["run_id"])["snapshot"]
-        self.assertEqual(final["status"], "reported")
-        self.assertEqual(initial["session_id"], final["session_id"])
-        self.assertEqual(initial["environment"]["cli_identity"], final["environment"]["cli_identity"])
+        with self.assertRaisesRegex(bridge.BridgeError, "resume_cli_identity_changed.*fresh revision"):
+            self.runtime.start(packet, resume_run_id=first["run_id"])
+        self.assertEqual(len(self.runtime.list_runs()), 1, "a refused resume must not create a run")
+        fresh = self.finish(self.runtime.start(self.packet(3))["run_id"])["snapshot"]
+        self.assertEqual(fresh["status"], "reported")
+        self.assertNotEqual(initial["session_id"], fresh["session_id"])
+        pinned = json.loads((Path(fresh["run_dir"]) / "cli-selection.json").read_text())
+        self.assertEqual(pinned["selection"]["path"], str(upgraded))
 
     def test_changed_binary_before_bridge_launch_fails_with_recoverable_receipt(self):
         original = bridge.create_cli_descriptor
@@ -126,29 +128,34 @@ class PinnedDispatchTests(unittest.TestCase):
         self.assertEqual(final["status"], "blocked")
         self.assertFalse((Path(final["run_dir"]) / "child.json").exists())
 
-    def test_managed_capability_gap_is_not_reported_as_uninstalled(self):
-        selection = {"path": None, "source": "managed_native", "candidate": "retained-id", "identity": {"id": "retained-id"}, "action": "validate required groups"}
-        result = bridge.check_environment(self.repo, selection=selection, required_groups=["workflow"])
-        self.assertEqual(result["status"], "cli_capability_unverified")
-        self.assertTrue(result["installation"]["installed"])
-        self.assertEqual(result["auth"]["status"], "not_checked")
+    def test_legacy_private_identity_descriptor_cannot_be_resumed(self):
+        first = self.runtime.start(self.packet())
+        initial = self.finish(first["run_id"])["snapshot"]
+        path = Path(initial["run_dir"]) / "cli-selection.json"
+        descriptor = json.loads(path.read_text())
+        descriptor["identity_id"] = "darwin-arm64-2.1.278-deadbeefdeadbeefdead"
+        descriptor["selection"] = {**descriptor["selection"], "source": "managed_native",
+                                   "identity": {"id": descriptor["identity_id"]}}
+        path.write_text(json.dumps(descriptor))
+        correction = {**self.packet(2), "correction": {"finding_id": "f1", "kind": "local", "reason": "check", "attempt": 1}}
+        with self.assertRaisesRegex(bridge.BridgeError, "resume_cli_identity_retired"):
+            self.runtime.start(correction, resume_run_id=first["run_id"])
+        with self.assertRaisesRegex(bridge.BridgeError, "cli_selection_retired"):
+            bridge.verify_cli_descriptor({**descriptor, "contract_id": bridge.bridge_contract_id()})
 
-    def test_supported_upgrade_preserves_task_requiring_old_optional_limit(self):
-        newer_path = self.root / "newer-cli"
-        newer_path.write_text(self.fake.read_text().replace("print('2.1.276')", "print('2.1.278')"))
-        newer_path.chmod(0o755)
-        # Mock only macOS signature verification; selection and packet routing
-        # use real private objects and released capability profiles.
-        with patch.object(cli_store, "_native_check", return_value=None):
-            older = cli_store.capture(str(self.fake))
-            newer = cli_store.capture(str(newer_path))
-            cli_store.activate(older["id"])
-            cli_store.activate(newer["id"])
-            ordinary = bridge.create_cli_descriptor(self.packet())
-            limited = bridge.create_cli_descriptor({**self.packet(), "budget": {"max_turns": 3}})
-            self.assertEqual(ordinary["identity_id"], newer["id"])
-            self.assertEqual(limited["identity_id"], older["id"])
-            self.assertEqual(cli_store.get_selection()["active"], newer["id"])
+    def test_missing_budget_flag_blocks_instead_of_switching_to_another_cli(self):
+        store = Path(os.environ["CLAUDE_ORCHESTRATOR_CLI_ROOT"])
+        store.mkdir(parents=True, exist_ok=True)
+        (store / "selection.json").write_text(json.dumps({
+            "schema_version": 1, "generation": 2, "active": "darwin-arm64-2.1.276-deadbeefdeadbeefdead",
+            "previous": None, "history": [], "mode": "managed"}))
+        limited = {**self.packet(), "budget": {"max_turns": 3}}
+        final = self.finish(self.runtime.start(limited)["run_id"])["snapshot"]
+        self.assertEqual(final["status"], "blocked")
+        self.assertEqual(final["receipt"]["reason"], "budget_capability_unavailable")
+        self.assertFalse((Path(final["run_dir"]) / "child.json").exists())
+        pinned = json.loads((Path(final["run_dir"]) / "cli-selection.json").read_text())
+        self.assertEqual(pinned["selection"]["path"], str(self.fake))
 
 
 if __name__ == "__main__":

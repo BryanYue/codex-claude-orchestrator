@@ -97,23 +97,16 @@ def _models(response: object) -> list[dict]:
     return models
 
 
-def collect(cwd: str, *, identity_id: str | None = None, timeout: float = 20) -> dict:
+def collect(cwd: str, *, timeout: float = 20) -> dict:
     folder = Path(cwd)
     if not folder.is_absolute() or not folder.is_dir():
         raise ValueError("cwd must be an existing absolute directory")
-    if identity_id is None:
-        decision = locate_claude()
-    else:
-        import cli_store
-        identity = cli_store.identity(identity_id)
-        decision = {"path": identity["path"], "source": "qualification", "identity": identity}
-    identity = decision.get("identity") or {}
+    decision = locate_claude()
     result = {"source": "claude_cli_initialize", "checked_at": time.time(),
-              "cli": {"path": decision.get("path"), "identity_id": identity.get("id"),
-                      "version": identity.get("version"), "sha256": identity.get("sha256")},
+              "cli": {"path": decision.get("path"), "source": decision.get("source")},
               "status": "unavailable", "models": [], "model_request_sent": False,
               "remote_invocation_verified": False,
-              "note": "CLI-advertised metadata for this executable and configuration. Aliases follow Claude/provider configuration; only a real run proves access and the actual model. Retained capability fallback may use another CLI."}
+              "note": "CLI-advertised metadata for the local Claude CLI and its configuration. Aliases follow Claude/provider configuration; only a real run proves access and the actual model."}
     if not decision.get("path"):
         return {**result, "reason": "cli_unavailable"}
     request_id = "model-catalog-" + uuid.uuid4().hex

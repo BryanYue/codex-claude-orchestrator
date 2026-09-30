@@ -33,14 +33,14 @@ class RuntimeTests(unittest.TestCase):
 import json, os, sys, time
 a=sys.argv[1:]
 if a == ['--version']: print('2.1.276'); raise SystemExit
-if a == ['--help']: print('-p --model --effort --output-format --json-schema --session-id --resume --permission-mode --tools --allowedTools --disallowedTools --settings --strict-mcp-config --mcp-config --disable-slash-commands'); raise SystemExit
+if a == ['--help']: print('-p --model --effort --output-format --verbose --json-schema --session-id --resume --permission-mode --tools --allowedTools --disallowedTools --settings --strict-mcp-config --mcp-config --disable-slash-commands --no-session-persistence'); raise SystemExit
 if a == ['auth','status','--json']: print(json.dumps({'loggedIn':True,'authMethod':'test'})); raise SystemExit
 def opt(x): return a[a.index(x)+1] if x in a else None
 s=opt('--resume') or opt('--session-id')
 print(json.dumps({'type':'system','subtype':'init','session_id':s,'model':'test-model'}), flush=True)
 if os.environ.get('RUNTIME_FAKE_SLEEP'): time.sleep(3)
 print(json.dumps({'type':'assistant','session_id':s,'message':{'model':'provider-model','content':[]}}), flush=True)
-print(json.dumps({'type':'result','subtype':'success','session_id':s,'modelUsage':{'provider-model':{'inputTokens':1}},'usage':{'input_tokens':1},'structured_output':{'status':'completed','summary':'done','evidence':['fake'], 'checks':[], 'unresolved':[]}}), flush=True)
+print(json.dumps({'type':'result','subtype':'success','session_id':s,'modelUsage':{'provider-model':{'inputTokens':1}},'usage':{'input_tokens':1},'permission_denials':([{'tool_name':'Read','reason':'denied'}] if os.environ.get('RUNTIME_FAKE_DENY') else []),'structured_output':{'status':'completed','summary':'done','evidence':['fake'], 'checks':[], 'unresolved':[]}}), flush=True)
 """)
         self.enterContext(mock.patch.dict(os.environ, {"CLAUDE_ORCHESTRATOR_CLI_ROOT": str(self.root / "isolated-cli-store"),
                                                         "CLAUDE_CONFIG_DIR": str(self.root / "claude-config")}))
@@ -101,6 +101,19 @@ print(json.dumps({'type':'result','subtype':'success','session_id':s,'modelUsage
         self.assertTrue((Path(final["run_dir"]) / "runtime_bridge.stdout.log").exists())
         decision = self.runtime.record_decision(start["run_id"], "accepted", "coordinator checked", ["fake evidence"])
         self.assertEqual(decision["decision"]["decision"], "accepted")
+
+    def test_failed_report_is_retained_without_a_success_sounding_status_summary(self):
+        with mock.patch.dict(os.environ, {"RUNTIME_FAKE_DENY": "1"}):
+            run_id = self.runtime.start(self.packet())["run_id"]
+            final = self.finish(run_id)["snapshot"]
+        self.assertEqual(final["status"], "failed")
+        self.assertEqual(final["result"]["structured"]["summary"], "done")
+        self.assertIn("failed", final["summary"])
+        self.assertIn("未验收", final["summary"])
+        self.assertNotEqual(final["summary"], "done")
+        with self.assertRaisesRegex(RuntimeError, "non-superseded reported"):
+            self.runtime.record_decision(run_id, "returned", "Codex completed", ["checked source"],
+                                         "completed_by_codex", "done")
 
     def test_returned_report_can_close_after_independent_codex_completion(self):
         run_id = self.runtime.start(self.packet())["run_id"]
@@ -534,8 +547,11 @@ print(json.dumps({'type':'result','subtype':'success','session_id':s,'modelUsage
             processes.append(proc)
             return proc
 
+        bridge_script = str(Path(bridge.__file__).resolve())
+
         def fail_watcher_start(_thread):
-            if not processes:
+            # Popen also serves Git probes (lane identity); only the bridge counts.
+            if not any(list(proc.args)[1:3] == [bridge_script, "run"] for proc in processes):
                 self.fail("fixture watcher start ran before bridge Popen")
             self.wait_for_child()
             raise RuntimeError("fixture system cannot create watcher thread")
@@ -558,7 +574,10 @@ print(json.dumps({'type':'result','subtype':'success','session_id':s,'modelUsage
         with self.assertRaises(RuntimeError):
             self.runtime.start(self.packet(revision=2))
 
-        processes[0].wait(timeout=8)
+        bridge_processes = [proc for proc in processes if proc.pid == record["bridge_pid"]]
+        self.assertEqual(len(bridge_processes), 1)
+        self.assertEqual(list(bridge_processes[0].args)[1:3], [bridge_script, "run"])
+        bridge_processes[0].wait(timeout=8)
         recovered = self.runtime.snapshot(run_id)
         self.assertEqual(recovered["status"], "cancelled")
         child = json.loads((Path(record["run_dir"]) / "child.json").read_text())

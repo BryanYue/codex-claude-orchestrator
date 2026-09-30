@@ -19,7 +19,28 @@ class ModelCatalogTests(unittest.TestCase):
         path = root / "claude"
         path.write_text("#!/usr/bin/env python3\nimport sys,json,time\n" + behavior)
         path.chmod(0o700)
-        return {"path": str(path), "source": "managed_native", "identity": {"id": "fixture", "version": "9.0.0"}}
+        return {"path": str(path), "source": "CLAUDE_BIN"}
+
+    def after_fixture_ready(self, marker: Path, started: list[int]):
+        """Run the real exchange, and its production timeout, only after the fixture wrote ``marker``.
+
+        Interpreter startup can outlast a short timeout under load; waiting here
+        keeps the timeout window about the exchange rather than startup.
+        """
+        exchange = model_catalog._exchange
+
+        def ready_then_exchange(proc, request, timeout):
+            deadline = time.monotonic() + 10
+            while not marker.exists():
+                if time.monotonic() > deadline:
+                    raise AssertionError(f"fixture did not write {marker.name} within 10 s")
+                time.sleep(.01)
+            pid = int(marker.read_text())
+            os.kill(pid, 0)
+            started.append(pid)
+            return exchange(proc, request, timeout)
+
+        return patch.object(model_catalog, "_exchange", new=ready_then_exchange)
 
     def test_dynamic_new_category_no_user_prompt_or_account_leak(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -54,12 +75,16 @@ print(json.dumps({'type':'control_response','response':{'subtype':'success','req
     def test_timeout_cleans_up_owned_process(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            decision = self.fixture(root, "import os,pathlib\npathlib.Path('pid').write_text(str(os.getpid()))\ntime.sleep(60)\n")
-            with patch.object(model_catalog, "locate_claude", return_value=decision):
+            decision = self.fixture(root, "import os,pathlib\np=pathlib.Path('pid.tmp');p.write_text(str(os.getpid()));os.replace(p,'pid')\ntime.sleep(60)\n")
+            started = []
+            with patch.object(model_catalog, "locate_claude", return_value=decision), \
+                 self.after_fixture_ready(root / "pid", started):
                 result = model_catalog.collect(str(root), timeout=0.5)
             self.assertEqual(result["reason"], "model_catalog_timeout")
+            self.assertEqual(result["cleanup_status"], "confirmed")
+            self.assertEqual(len(started), 1, "the fixture was alive when the timeout window opened")
             with self.assertRaises(ProcessLookupError):
-                os.kill(int((root / "pid").read_text()), 0)
+                os.kill(started[0], 0)
 
     def test_malformed_metadata_is_not_accepted(self):
         for value in [None, [], [{"value": ""}], [{"value": "opus"}, {"value": "opus"}]]:
@@ -99,12 +124,15 @@ print(json.dumps({'type':'control_response','response':{'subtype':'success','req
     def test_timeout_after_parent_exit_still_stops_descendant_holding_stdout(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            decision = self.fixture(root, "import subprocess,os,pathlib\nchild=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'])\npathlib.Path('child-pid').write_text(str(child.pid))\ntime.sleep(.1)\n")
+            decision = self.fixture(root, "import subprocess,os,pathlib\nchild=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'])\np=pathlib.Path('child-pid.tmp');p.write_text(str(child.pid));os.replace(p,'child-pid')\ntime.sleep(.1)\n")
             child_pid = None
+            started = []
             try:
-                with patch.object(model_catalog, "locate_claude", return_value=decision):
+                with patch.object(model_catalog, "locate_claude", return_value=decision), \
+                     self.after_fixture_ready(root / "child-pid", started):
                     result = model_catalog.collect(str(root), timeout=0.5)
                 child_pid = int((root / "child-pid").read_text())
+                self.assertEqual(started, [child_pid], "the descendant was alive when the timeout window opened")
                 self.assertEqual(result["reason"], "model_catalog_timeout")
                 for _ in range(50):
                     try:

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import secrets
@@ -20,43 +21,52 @@ ARTIFACTS = {
     "environment": "environment.json", "decision": "decision.json", "decision_history": "decision-history.json",
     "git_before": "git_before.json", "git_after": "git_after.json", "diff": "diff.patch",
     "workspace_before": "workspace_before.json", "workspace_after": "workspace_after.json",
-    "reconciliation": "reconciliation.json",
+    "reconciliation": "reconciliation.json", "content_binding": "content-binding.json",
 }
 
 _MAINTENANCE_FIELDS = frozenset({
-    "policy", "state", "channel", "current_version", "target_version", "message", "reason", "next_action",
-    "notice_id", "notice_pending", "progress", "error", "source", "scope", "installed_plugin_release",
-    "supported_target", "auto_qualify", "effective_dispatch_version", "effective_dispatch_reason", "effective_dispatch_groups",
-    "active_unqualified_for_contract", "dispatch_message",
+    "policy", "version_management", "state", "reason", "message", "next_action", "notice_pending",
+    "current_version", "version_note", "error",
 })
+_WORKER_LOCK_STATES = frozenset({"absent", "free", "held", "unreadable"})
 
 
 def read_cli_maintenance() -> dict:
-    """Return only the updater's public read model; this endpoint never starts work."""
+    """Return only the local CLI status read model; this endpoint never starts work."""
     if cli_updates is None:
-        return {"state": "unavailable", "reason": "CLI maintenance module is unavailable"}
+        return {"state": "unavailable", "reason": "local CLI status module is unavailable"}
     try:
         value = cli_updates.status()
-    except (OSError, RuntimeError, ValueError) as exc:
-        return {"state": "unavailable", "reason": str(exc)}
+    except Exception as exc:
+        return {"state": "unavailable", "reason": f"{type(exc).__name__}: {exc}"}
     if not isinstance(value, dict):
-        return {"state": "unavailable", "reason": "CLI maintenance status had an invalid shape"}
+        return {"state": "unavailable", "reason": "local CLI status had an invalid shape"}
     public = {key: value[key] for key in _MAINTENANCE_FIELDS if key in value}
-    channel = public.get("channel")
-    if isinstance(channel, dict):
-        public["channel"] = {key: channel[key] for key in ("source", "scope", "mode", "discovery_state", "last_checked_at", "next_check_at") if key in channel}
-        public.setdefault("source", channel.get("source"))
-        public.setdefault("scope", channel.get("scope"))
-    qualification = value.get("qualification")
-    if isinstance(qualification, dict):
-        public["qualification"] = {key: qualification[key] for key in
-                                   ("state", "missing_groups", "attempt_final", "job_id", "job_status") if key in qualification}
-        fallback = qualification.get("fallback_evidence")
-        if isinstance(fallback, list):
-            public["qualification"]["fallback_evidence"] = [
-                {key: item[key] for key in ("group", "version") if key in item}
-                for item in fallback if isinstance(item, dict)]
+    local = value.get("local_cli")
+    if isinstance(local, dict):
+        public["local_cli"] = {key: local[key] for key in ("path", "source") if key in local}
+    legacy = value.get("legacy_managed_state")
+    if isinstance(legacy, dict):
+        running = legacy.get("maintenance_worker_running")
+        public["legacy_managed_state"] = {
+            "present": bool(legacy.get("present")), "ignored_for_dispatch": True,
+            "retained_versions": len(legacy.get("versions") or []),
+            # An unobserved lock stays None; bool() would report it as stopped.
+            "maintenance_worker_running": running if isinstance(running, bool) else None,
+        }
+        lock = legacy.get("maintenance_worker_lock")
+        if lock in _WORKER_LOCK_STATES:
+            public["legacy_managed_state"]["maintenance_worker_lock"] = lock
     return public
+
+
+def _authorized(header, token: str) -> bool:
+    """Compare as bytes: compare_digest raises TypeError for non-ASCII str.
+
+    http.server decodes header bytes as latin-1, so encoding back is lossless.
+    """
+    supplied = header.encode("latin-1", "replace") if isinstance(header, str) else b""
+    return hmac.compare_digest(supplied, ("Bearer " + token).encode("ascii"))
 
 
 def read_artifact(runtime, run_id: str, name: str) -> dict:
@@ -68,9 +78,10 @@ def read_artifact(runtime, run_id: str, name: str) -> dict:
     if path.is_symlink() or (path.exists() and path.resolve().parent != folder):
         raise ValueError("Artifact escapes run directory")
     if not path.is_file():
-        return {"name": name, "available": False, "content": None}
+        return {"name": name, "available": False, "state": "missing", "content": None}
     limit = 300_000
     with path.open("rb") as handle:
+        size = os.fstat(handle.fileno()).st_size
         data = handle.read(limit + 1)
     clipped = len(data) > limit
     value = data[:limit].decode("utf-8", "replace")
@@ -78,8 +89,10 @@ def read_artifact(runtime, run_id: str, name: str) -> dict:
         try:
             value = json.loads(value)
         except json.JSONDecodeError:
-            return {"name": name, "available": False, "content": None, "note": "Artifact is being written; retry."}
-    return {"name": name, "available": True, "content": value, "truncated": clipped}
+            return {"name": name, "available": False, "state": "writing", "content": None,
+                    "note": "Artifact is being written or incomplete; retry."}
+    return {"name": name, "available": True, "state": "available", "content": value, "truncated": clipped,
+            "size_bytes": size, "display_limit_bytes": limit}
 
 
 class Viewer:
@@ -122,7 +135,7 @@ class Viewer:
                 route = urlparse(self.path)
                 if route.path == "/":
                     return self.send(200, (ROOT / "assets/dashboard.html").read_bytes(), "text/html; charset=utf-8")
-                if not hmac.compare_digest(self.headers.get("Authorization", ""), "Bearer " + viewer.token):
+                if not _authorized(self.headers.get("Authorization"), viewer.token):
                     return self.send(401, {"error": "Reopen the details link supplied by Claude tools."})
                 q = parse_qs(route.query)
                 run_id = q.get("run_id", [""])[0]

@@ -13,11 +13,10 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
-from executable_locator import NVM_ACTION, cli_environment, configure_claude_bin, discover_system_claude, locate_claude, settings_path  # noqa: E402
+from executable_locator import NVM_ACTION, cli_environment, configure_claude_bin, locate_claude, settings_path  # noqa: E402
 import cli_store  # noqa: E402
 sys.path.insert(0, str(ROOT / "skills/codex-claude-orchestrator/scripts"))
 import bridge  # noqa: E402
-import executable_locator  # noqa: E402
 
 
 class LauncherTests(unittest.TestCase):
@@ -38,7 +37,7 @@ class LauncherTests(unittest.TestCase):
 shift
 case "$1" in
   --version) echo 9.9.999 ;;
-  --help) echo '-p --model --effort --output-format --json-schema --session-id --resume --permission-mode --tools --allowedTools --disallowedTools --settings --strict-mcp-config --mcp-config --disable-slash-commands' ;;
+  --help) echo '-p --model --effort --output-format --verbose --json-schema --session-id --resume --permission-mode --tools --allowedTools --disallowedTools --settings --strict-mcp-config --mcp-config --disable-slash-commands --no-session-persistence' ;;
   auth) echo '{"loggedIn":true}' ;;
   *) echo "nvm-node-ok $1" ;;
 esac
@@ -86,26 +85,26 @@ esac
         environment = self.env(CODEX_HOME=str(self.base / ".codex"))
         saved = configure_claude_bin(str(self.nvm_claude), environment)
         self.assertEqual(saved, settings_path(environment))
-        self.assertEqual(cli_store.get_selection(environment)["mode"], "external")
+        self.assertFalse(cli_store.store_root(environment).exists(),
+                         "configuring the local CLI must not create or change retired managed state")
         found = locate_claude(environment)
         self.assertEqual(found["path"], str(self.nvm_claude))
         self.assertEqual(found["source"], "plugin_settings")
 
     def test_bridge_uses_selected_nvm_symlink_parent_for_every_preflight_command(self):
         environment = self.env(CLAUDE_BIN=str(self.nvm_claude))
-        profiles = {"9.9.999": {"tested": True, "capabilities": {}}}
         with patch.dict(os.environ, environment, clear=True):
-            report = bridge.check_environment(self.base, profiles=profiles)
+            report = bridge.check_environment(self.base)
         self.assertTrue(report["ready"], report)
+        self.assertEqual(report["cli"]["version"], "9.9.999")
         self.assertEqual(report["cli"]["path"], str(self.nvm_claude))
         self.assertEqual(report["cli"]["source"], "CLAUDE_BIN")
 
     def test_bridge_preflight_reads_persisted_nvm_symlink_without_process_claude_bin(self):
         environment = self.env(CODEX_HOME=str(self.base / ".codex"))
         configure_claude_bin(str(self.nvm_claude), environment)
-        profiles = {"9.9.999": {"tested": True, "capabilities": {}}}
         with patch.dict(os.environ, environment, clear=True):
-            report = bridge.check_environment(self.base, profiles=profiles)
+            report = bridge.check_environment(self.base)
         self.assertTrue(report["ready"], report)
         self.assertEqual(report["cli"]["path"], str(self.nvm_claude))
         self.assertEqual(report["cli"]["source"], "plugin_settings")
@@ -119,6 +118,23 @@ esac
         manifest = json.loads((ROOT / ".codex-plugin/plugin.json").read_text())
         self.assertTrue(observed["uv_env"].endswith("/venvs/" + manifest["version"]))
 
+    def test_launch_keeps_caller_path_ahead_of_fallback_directories(self):
+        caller = self.base / "caller-bin"; caller.mkdir()
+        for directory, label in ((caller, "caller"), (self.bin, "fallback")):
+            claude = directory / "claude"
+            claude.write_text(f"#!/bin/sh\necho {label}\n"); claude.chmod(0o755)
+        uv = caller / "uv"
+        uv.write_text("#!/bin/sh\nprintf '{\"uv\":\"caller\",\"claude\":\"%s\",\"path\":\"%s\"}\\n' \"$(claude)\" \"$PATH\"\n")
+        uv.chmod(0o755)
+        caller_path = f"{caller}:/usr/bin:/bin"
+        proc = subprocess.run(["bash", str(ROOT / "scripts/launch.sh")], text=True, capture_output=True,
+                              env=self.env(PATH=caller_path), check=True)
+        observed = json.loads(proc.stdout)
+        self.assertEqual(observed["uv"], "caller")
+        self.assertEqual(observed["claude"], "caller")
+        self.assertTrue(observed["path"].startswith(caller_path + ":"))
+        self.assertIn(str(self.bin), observed["path"].split(":"))
+
     def test_install_command_uses_uv_and_the_complete_manifest_version(self):
         proc = subprocess.run(["bash", str(ROOT.parent.parent / "Install.command"), "--check"], text=True,
                               capture_output=True, env=self.env(), check=True)
@@ -128,8 +144,8 @@ esac
         self.assertNotIn("python3", (ROOT.parent.parent / "Install.command").read_text())
 
     def _write_fake_uv(self, script: str) -> Path:
-        # $HOME/.local/bin is prepended first by launch.sh, so this fixture
-        # always wins over any real `uv` on the test machine's PATH.
+        # The fixture PATH is /usr/bin:/bin, so launch.sh reaches this uv through
+        # its $HOME/.local/bin fallback before any Homebrew or /usr/local copy.
         uv = self.bin / "uv"
         uv.write_text(script)
         uv.chmod(0o755)
@@ -172,47 +188,52 @@ esac
         observed = json.loads(proc.stdout.strip())
         self.assertEqual(observed["argv1"], "run")
 
-    def test_managed_selection_wins_over_mutable_claude_bin_and_disables_only_its_updater(self):
-        managed = {"id": "darwin-arm64-2.1.278-deadbeef", "path": str(self.base / "private/claude"),
-                   "version": "2.1.278", "sha256": "d" * 64, "platform": "darwin", "machine": "arm64",
-                   "source": "/Users/example/.local/share/claude/versions/2.1.278", "created_at": 1.0,
-                   "generation": 4, "selection_reason": "active", "qualification": {"source": "local_qualification"}}
-        with patch.object(executable_locator.cli_store, "get_selection", return_value={"mode": "managed", "active": managed["id"], "generation": 4}), \
-                patch.object(executable_locator, "_bridge_contract_id", return_value="bridge-contract-test"), \
-                patch.object(executable_locator.cli_store, "select", return_value=managed):
-            found = executable_locator.locate_claude(self.env(CLAUDE_BIN=str(self.nvm_claude)))
-        self.assertEqual(found["source"], "managed_native")
-        self.assertEqual(found["path"], managed["path"])
-        self.assertEqual(found["identity"]["id"], managed["id"])
-        child = cli_environment(found, self.env(CLAUDE_BIN=str(self.nvm_claude)))
-        self.assertEqual(child["DISABLE_AUTOUPDATER"], "1")
+    def legacy_managed_store(self) -> Path:
+        store = self.base / "legacy-cli-store"
+        private = store / "versions" / "darwin-arm64-2.1.278-deadbeefdeadbeefdead"
+        private.mkdir(parents=True)
+        (private / "claude").write_text("#!/bin/sh\necho private-copy\n")
+        (private / "claude").chmod(0o700)
+        (store / "selection.json").write_text(json.dumps({
+            "schema_version": 1, "generation": 4, "active": private.name, "previous": None,
+            "history": [private.name], "mode": "managed"}))
+        return store
 
-    def test_unqualified_managed_selection_does_not_fall_back_to_path_or_claude_bin(self):
-        identity_id = "darwin-arm64-2.1.279-deadbeef"
-        with patch.object(executable_locator.cli_store, "get_selection", return_value={"mode": "managed", "active": identity_id, "generation": 5}), \
-                patch.object(executable_locator, "_bridge_contract_id", return_value="bridge-contract-test"), \
-                patch.object(executable_locator.cli_store, "select", return_value=None):
-            found = executable_locator.locate_claude(self.env(CLAUDE_BIN=str(self.nvm_claude)))
-        self.assertEqual(found["source"], "managed_native")
+    def test_legacy_managed_selection_never_overrides_the_local_cli(self):
+        store = self.legacy_managed_store()
+        environment = self.env(CLAUDE_BIN=str(self.nvm_claude), CLAUDE_ORCHESTRATOR_CLI_ROOT=str(store))
+        found = locate_claude(environment)
+        self.assertEqual(found["source"], "CLAUDE_BIN")
+        self.assertEqual(found["path"], str(self.nvm_claude))
+        self.assertNotIn("identity", found)
+        self.assertTrue((store / "selection.json").is_file(), "history is preserved, not deleted")
+
+    def test_legacy_managed_selection_does_not_block_or_replace_missing_local_cli(self):
+        store = self.legacy_managed_store()
+        found = locate_claude(self.env(CLAUDE_ORCHESTRATOR_CLI_ROOT=str(store)))
         self.assertIsNone(found["path"])
-        self.assertEqual(found["candidate"], identity_id)
-        self.assertIn("no retained qualification", found["action"])
+        self.assertIsNone(found["source"])
+        self.assertTrue(found["action"].startswith(NVM_ACTION))
 
-    def test_system_discovery_ignores_plugin_settings_and_managed_selection(self):
+    def test_discovery_precedence_is_claude_bin_then_settings_then_path(self):
         system = self.base / "system-bin/claude"; system.parent.mkdir()
         system.write_text("#!/bin/sh\nexit 0\n"); system.chmod(0o755)
         environment = self.env(CODEX_HOME=str(self.base / ".codex"), PATH=str(system.parent))
+        self.assertEqual(locate_claude(environment)["path"], str(system))
         configure_claude_bin(str(self.nvm_claude), environment)
-        found = discover_system_claude(environment)
-        self.assertEqual(found["source"], "PATH")
-        self.assertEqual(found["path"], str(system))
+        self.assertEqual(locate_claude(environment)["source"], "plugin_settings")
+        override = {**environment, "CLAUDE_BIN": str(system)}
+        self.assertEqual(locate_claude(override)["source"], "CLAUDE_BIN")
+        self.assertEqual(locate_claude(override)["path"], str(system))
 
-    def test_qualification_child_disables_auto_update_only_when_identity_is_bound(self):
-        descriptor = {"source": "qualification", "path": str(self.nvm_claude), "identity": {"id": "candidate"}}
-        qualified = cli_environment(descriptor, self.env())
-        self.assertEqual(qualified["DISABLE_AUTOUPDATER"], "1")
-        unbound = cli_environment({"source": "qualification", "path": str(self.nvm_claude)}, self.env())
-        self.assertNotIn("DISABLE_AUTOUPDATER", unbound)
+    def test_child_environment_never_changes_the_users_update_setting(self):
+        for decision in ({"source": "CLAUDE_BIN", "path": str(self.nvm_claude)},
+                         {"source": "managed_native", "path": str(self.nvm_claude), "identity": {"id": "legacy"}},
+                         {"source": "qualification", "path": str(self.nvm_claude), "identity": {"id": "candidate"}}):
+            with self.subTest(source=decision["source"]):
+                child = cli_environment(decision, self.env())
+                self.assertNotIn("DISABLE_AUTOUPDATER", child)
+                self.assertTrue(child["PATH"].startswith(str(self.nvm_claude.parent) + ":"))
 
 
 if __name__ == "__main__":

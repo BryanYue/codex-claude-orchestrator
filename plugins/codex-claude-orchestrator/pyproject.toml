@@ -1,6 +1,6 @@
 [project]
 name = "codex-claude-orchestrator"
-version = "0.5.0"
+version = "0.6.0"
 description = "Supervised Claude Code execution with MCP and local progress views"
 requires-python = ">=3.11"
 dependencies = ["mcp==2.2.0"]

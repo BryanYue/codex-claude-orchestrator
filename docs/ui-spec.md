@@ -360,11 +360,13 @@ else /* 多个无 superseded_by（数据不一致） */  → current = { state:'
 |---|---|---|
 | 过程 · 公开活动 | 摘要右侧“已载入 N 条 / 共 M 条”。每行：时间 + `activityDescription()` + 工具/文件。顶部筛选输入。脚注“只显示公开工具事件，不含私有推理；一段时间没有新活动不等于执行已停止。” | `/api/events`，保留现有分页、尾部窗口与积压追赶行为 |
 | 文件变化 | `workspaceChangeText()`；按钮打开工作区 Diff / 输入快照 / 结果快照 | detail.workspace_changes、artifact |
-| 本轮执行身份 | 本轮 CLI（+ 选择原因，仅有 `cli_selection_reason` 时）、全局配置 CLI（+“仅供参考”）、请求模型、请求 effort、实际模型、执行证据（`execution_evidence`：provider_event / bridge_lifecycle / unconfirmed）、用量。本轮与全局都已知且不同 → 摘要加标签“本轮 CLI 与全局配置不同” | `runCliEvidence()`、maintenance.current_version、`actualModelText()` |
-| 技术记录 | run_id、task_id、Claude 会话、cwd、持久状态（`status · decision · resolution · claude_started`）、上一轮 / 后续轮 run_id；原文按钮：packet / result / receipt / decision / decision_history / reconciliation / environment | detail + artifact |
+| 本轮执行身份 | 本轮 CLI（+ 选择原因，仅有 `cli_selection_reason` 时）、全局配置 CLI（+“仅供参考”）、请求模型、请求 effort、实际模型、执行证据（`execution_evidence`：provider_event / bridge_lifecycle / unconfirmed）、协调内容（固定的内容来源、版本与 digest 前 12 位）、用量。本轮与全局都已知且不同 → 摘要加标签“本轮 CLI 与全局配置不同” | `runCliEvidence()`、maintenance.current_version、`actualModelText()`、`contentBindingText()`、`usageLines()` |
+| 技术记录 | run_id、task_id、Claude 会话、cwd、持久状态（`status · decision · resolution · claude_started`）、上一轮 / 后续轮 run_id；原文按钮：packet / result / receipt / decision / decision_history / reconciliation / environment / content_binding | detail + artifact |
 
 - 实际模型：只有 `actual_models` 或（`actual_model` 且 `actual_model_source`）时显示值，否则“待 provider 回报”，不用初始化模型或请求模型代替。
-- 用量沿用现有文案，末尾“不等同订阅剩余额度”。
+- 协调内容：`content_binding.mode=active` 显示“已审查的动态内容”，`bundled` 显示“插件内置内容”；无记录显示“未固定（本轮记录未提供）”。
+- 用量（`usageLines(result)`，逐行显示）：有 `usage_report` 时先列“CLI 会话累计估算（含子代理，按模型）”，每个模型一行“未缓存输入 / 输出 / 缓存读取 / 缓存写入 / 估算 $”，再给“合计”行（token 为各模型之和，费用取 CLI 的 `total_cost_usd`，不自算价格）；没有按模型统计时只显示 CLI 累计估算费用并注明整任务 token 合计未知。续跑会话追加“CLI 会话累计可能包含此前轮次的支出，不是本轮新增，也不能与其他轮相加”。最后一行前显示“主代理最终回报（不含子代理，不是整任务总量）”。缺项或畸形值显示“未知”，0 照常显示。末行“费用为 Claude CLI 客户端估算，不是实际扣费或订阅剩余额度。”
+- 旧记录（无 `usage_report`）：token 标为“主代理最终回报（旧记录，统计范围未确认，不是整任务总量）”，费用标为“CLI 会话累计估算（旧记录：可能含子代理，与上面的 token 不是同一统计范围；未记录按模型分项）”，不推算合计。
 
 ### 4.7 环境与维护抽屉
 

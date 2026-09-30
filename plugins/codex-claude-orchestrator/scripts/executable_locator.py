@@ -1,10 +1,12 @@
 """Deterministic Claude CLI discovery shared by diagnostics and the bridge.
 
-The MCP process intentionally does not source a login shell, inspect shell
-aliases, or search version-manager directories.  Those actions would make the
-executable selected for a supervised run implicit and hard to audit.  A user
-whose Claude Code was installed through nvm, fnm, or Volta can set an absolute
-``CLAUDE_BIN`` in the environment that starts Codex.
+Every dispatch uses the Claude CLI the user installed or explicitly configured:
+``CLAUDE_BIN``, the plugin ``claude_bin`` setting, or ``claude`` on this MCP
+process PATH.  A retained plugin-managed private copy is historical evidence
+only and is never selected.  The MCP process intentionally does not source a
+login shell, inspect shell aliases, or search version-manager directories.  A
+user whose Claude Code was installed through nvm, fnm, or Volta can set an
+absolute ``CLAUDE_BIN`` in the environment that starts Codex.
 """
 from __future__ import annotations
 
@@ -15,8 +17,6 @@ import shutil
 import tempfile
 from typing import Any
 
-import cli_store
-
 
 NVM_ACTION = (
     "Claude Code was not found in this MCP process PATH. If it was installed "
@@ -24,6 +24,27 @@ NVM_ACTION = (
     "path in the environment that starts Codex, then restart Codex. This "
     "plugin does not source shell initialization files or select an nvm version."
 )
+
+ZIP_PERSISTENCE_HINT = (
+    " Only a ZIP distribution, whose root contains FILE-SHA256.json, can "
+    "instead persist it with its Install.command --configure-claude-bin "
+    "/absolute/path/to/claude; a Git marketplace checkout uses CLAUDE_BIN."
+)
+
+RETIRED_SELECTION_SOURCES =frozenset({"managed_native", "qualification"})
+
+
+def stale_setting_action(path: Path) -> str:
+    """Recovery for a saved claude_bin that no longer names an executable."""
+    return (
+        "The plugin settings claude_bin path does not name an executable file visible to this MCP process. "
+        f"It is read from {path}; while it is set, claude on PATH is not used. To recover, set CLAUDE_BIN "
+        "to a working absolute path in the environment that starts Codex, then restart Codex (CLAUDE_BIN "
+        "takes precedence over this setting), or change only the claude_bin value in that file to a working "
+        "absolute path. Only a ZIP distribution, whose root contains FILE-SHA256.json, can instead rewrite "
+        "that settings file with its Install.command --configure-claude-bin /absolute/path/to/claude; a Git "
+        "marketplace checkout uses CLAUDE_BIN."
+    )
 
 
 def _expand_for_environment(value: str, environ: dict[str, str]) -> Path:
@@ -61,16 +82,6 @@ def _configured_cli(environ: dict[str, str]) -> tuple[str | None, str | None]:
     return candidate, None
 
 
-def external_mode_requested(environ: dict[str, str] | None = None) -> bool:
-    """Whether plugin settings contain the user's explicit external-mode choice."""
-    env = os.environ if environ is None else environ
-    try:
-        value = json.loads(settings_path(env).read_text())
-    except (FileNotFoundError, OSError, ValueError):
-        return False
-    return isinstance(value, dict) and value.get("execution_mode") == "external"
-
-
 def configure_claude_bin(candidate: str, environ: dict[str, str] | None = None) -> Path:
     """Persist a user-supplied absolute executable path after verifying it locally."""
     env = os.environ if environ is None else environ
@@ -90,10 +101,6 @@ def configure_claude_bin(candidate: str, environ: dict[str, str] | None = None) 
         temporary_path.replace(destination)
     finally:
         temporary_path.unlink(missing_ok=True)
-    # Selecting a configured external path is an explicit user action.  It may
-    # opt out of a retained managed snapshot, but a missing/broken path never
-    # flips this mode implicitly.
-    cli_store.set_external_mode(env)
     return destination
 
 
@@ -115,9 +122,9 @@ def cli_environment(decision: dict[str, Any], environ: dict[str, str] | None = N
 
     npm/nvm shims commonly have ``#!/usr/bin/env node``.  Supplying the parent
     directory of the already selected executable lets that exact Node install
-    resolve its sibling ``node``.  It does not source a shell profile or scan
-    version-manager directories, and it changes only the supervised child
-    environment.
+    resolve its sibling ``node``.  It does not source a shell profile, scan
+    version-manager directories, or change the user's CLI update settings, and
+    it changes only the supervised child environment.
     """
     result = dict(os.environ if environ is None else environ)
     executable = decision.get("path")
@@ -126,20 +133,14 @@ def cli_environment(decision: dict[str, Any], environ: dict[str, str] | None = N
         current = result.get("PATH", "")
         result["PATH"] = parent if not current else parent + os.pathsep + current
         result["CLAUDE_ORCHESTRATOR_CLAUDE_BIN_DIR"] = parent
-    # This is deliberately scoped to an immutable private native object.  It
-    # does not alter the user's global Claude configuration, launcher, or a
-    # normal external/npm invocation.
-    if decision.get("source") == "managed_native" or (decision.get("source") == "qualification" and isinstance(decision.get("identity"), dict)):
-        result["DISABLE_AUTOUPDATER"] = "1"
     return result
 
 
 def discover_external_claude(environ: dict[str, str] | None = None) -> dict[str, Any]:
-    """Discover an explicitly external CLI using the legacy F8 precedence.
+    """Discover the user's CLI: CLAUDE_BIN, then plugin settings, then PATH.
 
-    This deliberately retains lexical nvm/npm paths and does not consult the
-    private immutable store.  It is used only when no managed selection exists
-    or when the user has explicitly selected external execution.
+    This deliberately retains lexical nvm/npm paths and never consults the
+    private retained store.
     """
     env = os.environ if environ is None else environ
     configured = env.get("CLAUDE_BIN", "").strip()
@@ -156,13 +157,14 @@ def discover_external_claude(environ: dict[str, str] | None = None) -> dict[str,
     persisted, error = _configured_cli(env)
     if persisted or error:
         resolved = _executable_path(persisted or "", path=path, environ=env)
+        location = settings_path(env)
         return {
             "path": resolved,
             "source": "plugin_settings" if persisted else None,
             "configured": bool(persisted),
             "candidate": persisted,
-            "settings_path": str(settings_path(env)),
-            "action": error or (None if resolved else "The plugin settings claude_bin path does not name an executable file visible to this MCP process."),
+            "settings_path": str(location),
+            "action": error or (None if resolved else stale_setting_action(location)),
         }
     resolved = _executable_path("claude", path=path, environ=env)
     return {
@@ -171,61 +173,14 @@ def discover_external_claude(environ: dict[str, str] | None = None) -> dict[str,
         "configured": False,
         "candidate": "claude",
         "settings_path": str(settings_path(env)),
-        "action": None if resolved else NVM_ACTION + " Persist it with Install.command --configure-claude-bin /absolute/path/to/claude.",
+        "action": None if resolved else NVM_ACTION + ZIP_PERSISTENCE_HINT,
     }
 
 
-def discover_system_claude(environ: dict[str, str] | None = None) -> dict[str, Any]:
-    """Observe only the process override or actual PATH installation.
+def locate_claude(environ: dict[str, str] | None = None) -> dict[str, Any]:
+    """Return the user's local Claude CLI for a new dispatch or local check.
 
-    Status and candidate-validation callers use this to see an updated native
-    launcher even while a plugin settings pin or a managed active identity is
-    retained for dispatch.  It intentionally ignores both plugin choices and
-    never sources a shell profile.
+    A persisted managed selection from an earlier plugin version is ignored:
+    it can neither choose a private copy nor block the local CLI.
     """
-    env = os.environ if environ is None else environ
-    configured = env.get("CLAUDE_BIN", "").strip()
-    path = env.get("PATH", "")
-    if configured:
-        resolved = _executable_path(configured, path=path, environ=env)
-        return {"path": resolved, "source": "CLAUDE_BIN", "configured": True,
-                "candidate": configured if "/" not in configured else str(_expand_for_environment(configured, env)),
-                "action": None if resolved else "CLAUDE_BIN is set but does not name an executable file visible to this MCP process."}
-    resolved = _executable_path("claude", path=path, environ=env)
-    return {"path": resolved, "source": "PATH" if resolved else None, "configured": False,
-            "candidate": "claude", "action": None if resolved else NVM_ACTION}
-
-
-def _bridge_contract_id() -> str:
-    """Load compatibility lazily; locator remains usable by its standalone fixtures."""
-    try:
-        return cli_store._contract_id()
-    except (AttributeError, ImportError, RuntimeError) as error:
-        raise RuntimeError("managed Claude CLI cannot resolve the bridge compatibility contract") from error
-
-
-def locate_claude(environ: dict[str, str] | None = None,
-                  required_groups: list[str] | None = None,
-                  required_capabilities: list[str] | None = None) -> dict[str, Any]:
-    """Resolve a managed immutable object before considering mutable discovery.
-
-    An existing managed active pointer is authoritative.  A missing required
-    capability or an integrity failure remains a managed diagnostic instead of
-    silently choosing a newer binary from ``CLAUDE_BIN`` or ``PATH``.
-    """
-    env = os.environ if environ is None else environ
-    selection = cli_store.get_selection(env)
-    if selection.get("mode") == "managed" and selection.get("active"):
-        groups = required_groups or ["core", "read_only"]
-        contract_id = _bridge_contract_id()
-        managed = cli_store.select(groups, contract_id, env, required_capabilities=required_capabilities)
-        if managed is None:
-            return {"path": None, "source": "managed_native", "configured": True,
-                    "candidate": selection["active"], "identity": {"id": selection["active"]},
-                    "selection_generation": selection["generation"],
-                    "action": "The active managed Claude CLI has no retained qualification for the requested compatibility groups; validate a candidate or roll back deliberately."}
-        return {"path": managed["path"], "source": "managed_native", "configured": True,
-                "candidate": managed["id"], "identity": {key: managed[key] for key in ("id", "path", "version", "sha256", "platform", "machine", "source", "created_at")},
-                "selection_generation": managed["generation"], "selection_reason": managed["selection_reason"],
-                "qualification": managed["qualification"], "action": None}
-    return discover_external_claude(env)
+    return discover_external_claude(environ)

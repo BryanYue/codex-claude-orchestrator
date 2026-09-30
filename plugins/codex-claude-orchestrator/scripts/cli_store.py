@@ -1,10 +1,13 @@
-"""Private, native-only Claude CLI retention store.
+"""Private, native-only Claude CLI retention store (historical).
 
-This module deliberately owns only immutable executable objects, qualification
-receipts, and a small selection pointer.  It never invokes Claude's installer,
-replaces its launcher, copies authentication material, or imports the bridge at
-module import time.  The validator and bridge bind an invocation to a returned
-descriptor; ambient ``PATH`` is not a fallback for managed selections.
+Plugin-managed CLI versions are retired.  No production entry (MCP tools,
+Viewer, installer, locator, bridge, model catalog) calls the capture,
+download, qualification, activation or rollback functions below any more;
+dispatch always uses the user's local CLI.  The implementation is kept so
+retained identities, receipts and selection files from earlier releases stay
+readable (see ``legacy_records``) and are never deleted.  It never invokes
+Claude's installer, replaces its launcher, copies authentication material, or
+imports the bridge at module import time.
 """
 from __future__ import annotations
 
@@ -678,16 +681,27 @@ def _native_check(path: Path) -> None:
         raise ValueError("Claude native executable did not pass macOS code-signature verification")
 
 
+def _bounded_output(text: str | None) -> str:
+    value = " ".join((text or "").split())
+    value = re.sub(r"sk-ant-[A-Za-z0-9_-]+|[^\s@]+@[^\s@]+\.[A-Za-z]{2,}|[A-Za-z0-9+/_-]{40,}", "[redacted]", value)
+    return value[:300] + ("…" if len(value) > 300 else "")
+
+
 def _version(path: Path, environ: dict[str, str] | None) -> str:
     env = _environment(environ)
     try:
         result = subprocess.run([str(path), "--version"], text=True, capture_output=True,
                                 timeout=15, check=False, env=env)
-    except (OSError, subprocess.TimeoutExpired) as error:
-        raise RuntimeError("Claude native executable could not report its version") from error
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError("Claude native executable could not report its version: timed out after 15 seconds") from error
+    except OSError as error:
+        raise RuntimeError(f"Claude native executable could not report its version: {type(error).__name__}: {error}") from error
     match = _VERSION.search(result.stdout if result.returncode == 0 else "")
     if not match:
-        raise ValueError("Claude native executable did not return a recognizable version")
+        outcome = (f"signal {-result.returncode}" if result.returncode < 0
+                   else f"exit code {result.returncode}")
+        raise ValueError(f"Claude native executable did not return a recognizable version ({outcome}; "
+                         f"stdout: {_bounded_output(result.stdout)!r}; stderr: {_bounded_output(result.stderr)!r})")
     return match.group(1)
 
 
@@ -1362,6 +1376,22 @@ def rollback_explicit(expected_generation: int | None = None,
         return {**changed, "update_policy": policy}
 
 
+def _recorded_size(identity_id: str, environ: dict[str, str] | None) -> dict[str, Any]:
+    """Report the identity.json size only when it matches the retained file."""
+    base, metadata_path = _identity_path(identity_id, environ)
+    try:
+        metadata = _read_json(metadata_path) or {}
+        actual = (base / "claude").stat().st_size
+    except (OSError, RuntimeError):
+        return {"size": None, "size_status": "unreadable"}
+    recorded = metadata.get("size")
+    if type(recorded) is not int or recorded < 0:
+        return {"size": None, "size_status": "not_recorded"}
+    if recorded != actual:
+        return {"size": None, "size_status": "mismatch"}
+    return {"size": recorded, "size_status": "recorded_matches_file"}
+
+
 def inventory(environ: dict[str, str] | None = None) -> dict[str, Any]:
     """List retained private descriptors without external CLI discovery."""
     root_path = store_root(environ)
@@ -1371,10 +1401,52 @@ def inventory(environ: dict[str, str] | None = None) -> dict[str, Any]:
         for entry in sorted(versions_root.iterdir(), key=lambda item: item.name):
             if entry.is_dir() and not entry.is_symlink():
                 try:
-                    versions.append(identity(entry.name, environ))
+                    versions.append({**identity(entry.name, environ), **_recorded_size(entry.name, environ)})
                 except (ValueError, RuntimeError, OSError) as error:
                     versions.append({"id": entry.name, "integrity": "failed", "error": str(error)})
     return {"root": str(root_path), "selection": get_selection(environ), "versions": versions}
+
+
+def legacy_records(environ: dict[str, str] | None = None) -> dict[str, Any]:
+    """Summarize retained managed-CLI history without locks, writes or hashing.
+
+    Nothing here is executable authority: the dispatch path never reads it.
+    Files are left in place because they are the user's historical evidence.
+    """
+    root_path = store_root(environ)
+    result: dict[str, Any] = {"root": str(root_path), "present": root_path.is_dir(),
+                              "ignored_for_dispatch": True, "files_deleted": False,
+                              "selection": None, "versions": []}
+    if not result["present"]:
+        result["storage_summary"] = {"retained_bytes": 0, "unmeasured_versions": 0}
+        return result
+    try:
+        selection = _read_json(root_path / _SELECTION_NAME)
+    except RuntimeError as error:
+        result["selection_error"] = str(error)
+    else:
+        if selection is not None:
+            result["selection"] = {key: selection.get(key) for key in ("mode", "active", "previous", "generation")}
+    versions_root = root_path / "versions"
+    if versions_root.is_dir() and not versions_root.is_symlink():
+        for entry in sorted(versions_root.iterdir(), key=lambda item: item.name):
+            if not entry.is_dir() or entry.is_symlink() or not _IDENTITY_ID.fullmatch(entry.name):
+                continue
+            try:
+                metadata = identity_metadata(entry.name, environ)
+            except (ValueError, RuntimeError, OSError) as error:
+                result["versions"].append({"id": entry.name, "metadata": "unreadable", "error": str(error),
+                                           "size": None, "size_status": "unreadable"})
+                continue
+            result["versions"].append({"id": metadata["id"], "version": metadata["version"],
+                                       "source": metadata["source"], "created_at": metadata["created_at"],
+                                       **_recorded_size(entry.name, environ)})
+    sizes = [item["size"] for item in result["versions"] if type(item.get("size")) is int]
+    result["storage_summary"] = {"retained_bytes": sum(sizes),
+                                 "unmeasured_versions": len(result["versions"]) - len(sizes),
+                                 "excludes": ["download_partials", "run_evidence"],
+                                 "automatic_cleanup": False}
+    return result
 
 
 def version_key(version: str) -> tuple[int, int, int, int, str]:
@@ -1670,6 +1742,29 @@ def _download(url: str, destination: Path, *, expected_size: int | None = None,
         os.replace(restart_destination, destination)
 
 
+def _download_partial_path(target: dict[str, Any], environ: dict[str, str] | None) -> Path:
+    cache_key = f"{target['version']}-{target['platform']}-{target['sha256'][:16]}"
+    return store_root(environ) / "downloads" / cache_key / "claude.part"
+
+
+def _restore_verified_download(binary: Path, target: dict[str, Any], environ: dict[str, str] | None) -> None:
+    """Return digest- and signature-verified bytes to the resumable cache.
+
+    Capture can still fail afterwards (for example a version probe).  Keeping
+    the verified file lets the next attempt finish with a Range request instead
+    of discarding the complete download.
+    """
+    partial = _download_partial_path(target, environ)
+    try:
+        if binary.is_file() and not partial.exists():
+            partial.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            os.replace(binary, partial)
+    except OSError:
+        # The capture failure is the error to report; losing the cache only
+        # costs a later full download.
+        pass
+
+
 def _download_official_release(version: str | None = None,
                                environ: dict[str, str] | None = None, *,
                                target: dict[str, Any] | None = None,
@@ -1688,10 +1783,9 @@ def _download_official_release(version: str | None = None,
         raise ValueError("specify either an official release version or target metadata")
     target = (official_release_target(version, environ) if target is None
               else _validated_release_target(target))
-    cache_key = f"{target['version']}-{target['platform']}-{target['sha256'][:16]}"
-    download_root = root_path / "downloads" / cache_key
+    partial = _download_partial_path(target, environ)
+    download_root = partial.parent
     download_root.mkdir(mode=0o700, parents=True, exist_ok=True)
-    partial = download_root / "claude.part"
     lock_path = download_root / "download.lock"
     staging: Path | None = None
     with _download_lock(lock_path):
@@ -1785,7 +1879,11 @@ def acquire_official_release(version: str | None = None,
             target["version"], environ,
             idle_timeout_seconds=idle_timeout_seconds,
             attempt_timeout_seconds=attempt_timeout_seconds, progress=progress)
-        descriptor = _capture(str(binary), environ, source_label=source_url)
+        try:
+            descriptor = _capture(str(binary), environ, source_label=source_url)
+        except Exception:
+            _restore_verified_download(binary, target, environ)
+            raise
         if descriptor["sha256"] != target["sha256"] or descriptor["version"] != target["version"]:
             raise RuntimeError("captured official CLI did not match the audited target")
         return {**descriptor, "acquisition": "downloaded", "release": target}
@@ -1813,7 +1911,11 @@ def acquire_official_target(target: dict[str, Any],
             environ=environ, target=target,
             idle_timeout_seconds=idle_timeout_seconds,
             attempt_timeout_seconds=attempt_timeout_seconds, progress=progress)
-        descriptor = _capture(str(binary), environ, source_label=source_url)
+        try:
+            descriptor = _capture(str(binary), environ, source_label=source_url)
+        except Exception:
+            _restore_verified_download(binary, target, environ)
+            raise
         if descriptor["sha256"] != target["sha256"] or descriptor["version"] != target["version"]:
             raise RuntimeError("captured official CLI did not match the signed latest target")
         return {**descriptor, "acquisition": "downloaded", "release": target}

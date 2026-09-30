@@ -11,10 +11,12 @@
 | 需要什么 | 怎么确认 |
 | --- | --- |
 | Codex 桌面端 | 能登录、打开项目并创建任务，所在版本支持插件。[官方安装说明](https://developers.openai.com/codex/app) |
-| Claude Code | 已安装，并按[官方步骤](https://code.claude.com/docs/en/quickstart)完成自己的登录。Claude 桌面聊天应用不能代替 Claude Code。 |
+| Claude Code | 已安装，并按[官方步骤](https://code.claude.com/docs/en/quickstart)完成自己的登录。插件直接使用本机这份 Claude Code，不另外下载或切换版本。Claude 桌面聊天应用不能代替 Claude Code。 |
 | uv | 在终端运行 `uv --version` 能看到版本号；缺少时按[官方说明](https://docs.astral.sh/uv/getting-started/installation/)安装。已有 Homebrew 可运行 `brew install uv`。 |
 
 插件需要 Python 3.11 或更新版本；稍后的依赖准备会由 uv 查找或下载所需环境。首次下载可能需要一些时间。
+
+> **关于版本：** `v0.6.0` 包含本机 CLI 策略、经 Codex 审查的 Markdown 动态更新，以及运行证据和工作区隔离修复。旧 `v0.5.0` 标签保持不变；已安装且固定在旧标签的用户须按[版本切换步骤](git-marketplace.md#change-a-fixed-ref-or-migrate-from-zip)改到 `v0.6.0`，单独刷新 marketplace 不会自动跨标签升级。
 
 ## 安装：可以让 Codex 帮你完成
 
@@ -23,7 +25,7 @@
 ```text
 请帮我安装 Codex–Claude 协作插件：
 https://github.com/BryanYue/codex-claude-orchestrator
-使用固定版本 v0.5.0，通过 Git marketplace 安装。
+使用固定版本 v0.6.0，通过 Git marketplace 安装。
 
 先检查本机是否有支持 plugin 命令的 Codex 桌面客户端，以及 uv。
 如果 PATH 中找不到 codex，请检查桌面应用内置的 CLI。
@@ -51,7 +53,7 @@ codex plugin --help
 然后依次执行：
 
 ```bash
-codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v0.5.0
+codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v0.6.0
 codex plugin add codex-claude-orchestrator@codex-claude-team
 ```
 
@@ -77,7 +79,7 @@ bash scripts/launch.sh --prepare-dependencies
 
 发给 Codex：
 
-> 请用 Codex–Claude 协作插件检查本机是否已准备好：插件、Claude 执行版本和本地登录状态。先只检查，不发起在线模型请求。如果缺少执行版本，请准备可用版本；需要登录的步骤告诉我，由我完成。
+> 请用 Codex–Claude 协作插件检查本机是否已准备好：插件、本机 Claude Code 和本地登录状态。先只检查，不发起在线模型请求。如果找不到 Claude Code 或缺少所需功能，告诉我需要自己安装或升级什么；需要登录的步骤也告诉我，由我完成。
 
 如果提示需要登录，请按它指出的 Claude Code 执行程序完成登录。不要把密码、令牌或认证文件粘贴到对话中。**本地检查就绪后，第一次真实任务才能进一步确认远端模型可用。**
 
@@ -115,7 +117,7 @@ bash scripts/launch.sh --prepare-dependencies
 | --- | --- |
 | 找不到插件或工具 | 确认插件已启用，并在安装后打开一个新任务。 |
 | 第一次启动一直等或超时 | 让 Codex 检查具体启动错误，并确认依赖准备已成功。不要反复启动 Claude。 |
-| 已安装，但提示没有可用 Claude | 让 Codex 检查执行版本是否准备好，再确认相应 Claude Code 的登录。 |
+| 已安装，但提示没有可用 Claude | 让 Codex 检查本机 Claude Code 能否被找到、是否缺少所需功能，再确认它的登录。升级 Claude Code 后若续跑被拒绝，让 Codex 另起新一轮。 |
 | 页面没自动打开 | 说“打开这次协作的工作台”，或点击 Codex 给出的链接。打开页面不需要重跑任务。 |
 | 页面暂时没有新活动 | 让 Codex 查询执行状态；没有新活动不代表任务已停止。 |
 | 想更新或回退插件 | 查看[版本切换步骤](git-marketplace.md#change-a-fixed-ref-or-migrate-from-zip)。固定 `v0.5.0` 不会自动跳到新发布版本。 |

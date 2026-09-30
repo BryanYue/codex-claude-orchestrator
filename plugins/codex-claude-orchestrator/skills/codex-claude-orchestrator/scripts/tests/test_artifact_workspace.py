@@ -30,7 +30,7 @@ import json, os, pathlib, sys
 args=sys.argv[1:]
 if args == ['--version']: print('2.1.276 (Claude Code)'); raise SystemExit(0)
 if args == ['--help']:
- print('-p --model --effort --output-format --json-schema --session-id --resume --permission-mode --tools --allowedTools --disallowedTools --settings --strict-mcp-config --mcp-config --disable-slash-commands --max-turns --max-budget-usd'); raise SystemExit(0)
+ print('-p --model --effort --output-format --verbose --json-schema --session-id --resume --permission-mode --tools --allowedTools --disallowedTools --settings --strict-mcp-config --mcp-config --disable-slash-commands --no-session-persistence --max-turns --max-budget-usd'); raise SystemExit(0)
 if args == ['auth','status','--json']: print(json.dumps({'loggedIn':True})); raise SystemExit(0)
 session=args[args.index('--session-id')+1]
 print(json.dumps({'type':'system','subtype':'init','session_id':session,'model':'test-model'}))

@@ -29,10 +29,13 @@ from typing import Any, Mapping
 PLUGIN_SCRIPTS = Path(__file__).resolve().parents[3] / "scripts"
 if PLUGIN_SCRIPTS.is_dir():
     sys.path.insert(0, str(PLUGIN_SCRIPTS))
-from executable_locator import locate_claude, cli_environment
+from executable_locator import RETIRED_SELECTION_SOURCES, locate_claude, cli_environment
+import content_store
+import plugin_identity
 
 from events import append as append_activity
-from compatibility import REQUIRED_FLAGS, SUPPORTED_CLI_PROFILES, GROUPS, bridge_contract_id, required_groups, resolved_profile
+import usage as usage_scope
+from compatibility import BUDGET_FLAGS, REQUIRED_FLAGS, GROUPS, bridge_contract_id, flag_advertised, required_flags, required_groups
 from compatibility import DISPATCH_PROTOCOL_VERSION, LEGACY_DISPATCH_CONTRACTS
 from workspace import WorkspaceError, artifact_snapshot, artifact_snapshot_difference, canonical_read_path, snapshot_digest, validate_artifact_lists
 
@@ -44,6 +47,18 @@ except ImportError:  # pragma: no cover - supported target is POSIX
 WRITE_TOOLS = ("Edit", "Write")
 READ_TOOLS = ("Read", "Glob", "Grep")
 DISALLOWED = ("Bash", "Agent", "Task", "TeamCreate", "NotebookEdit", "Skill", "Workflow")
+PRINT_BG_WAIT_CEILING = "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"
+
+
+def print_background_wait_ceiling_ms(timeout: float) -> int:
+    """Bound `claude -p`'s wait for a pending background Workflow by this run's deadline.
+
+    The CLI's default ceiling (10 minutes of idle waiting after the first
+    result) stops a still-running Workflow and drops its report, which is
+    shorter than a typical workflow_review timeout.  The value is never 0
+    (unbounded); the bridge deadline still terminates the process group.
+    """
+    return max(1000, math.ceil(float(timeout) * 1000))
 FINAL = {"completed", "blocked", "failed", "cancelled", "timeout", "unknown"}
 class BridgeError(RuntimeError):
     pass
@@ -111,6 +126,8 @@ def aliases_protected(target: Path, protected: list[Path]) -> bool:
 def validate_packet(packet: Any) -> dict[str, Any]:
     if isinstance(packet, dict) and any(key in packet for key in ("cli_descriptor", "cli_selection", "cli_identity", "qualification")):
         raise BridgeError("CLI identity is selected by the supervisor, not by task packet fields")
+    if isinstance(packet, dict) and "content_binding" in packet:
+        raise BridgeError("coordination content is pinned by the supervisor, not by task packet fields")
     if not isinstance(packet, dict):
         raise BridgeError("packet must be an object")
     required = ("task_id", "revision", "role", "cwd", "objective", "requirement_sources",
@@ -184,6 +201,8 @@ def validate_packet(packet: Any) -> dict[str, Any]:
     if (not isinstance(packet["model"], str) or not packet["model"].strip()
             or not isinstance(packet["effort"], str) or not packet["effort"].strip()):
         raise BridgeError("model and effort must be non-empty strings")
+    if "\x00" in packet["model"] or "\x00" in packet["effort"]:
+        raise BridgeError("model and effort must not contain NUL characters")
     budget = packet.get("budget", {})
     if not isinstance(budget, dict) or any(key not in {"max_turns", "max_budget_usd"} for key in budget):
         raise BridgeError("budget may contain only max_turns and max_budget_usd")
@@ -318,20 +337,61 @@ def content_digest(path: Path) -> str:
     return f"non-file:{stat.st_mode}:{stat.st_size}"
 
 
-def git_snapshot(cwd: Path, packet: dict[str, Any]) -> dict[str, Any]:
-    head = git_head(cwd)
-    entries = git_status_entries(cwd)
-    tracked_diff = git(cwd, "diff", "--no-ext-diff") + git(cwd, "diff", "--cached", "--no-ext-diff")
+def cwd_relative_status_path(path: str, prefix: str) -> str:
+    """Convert a Git-root porcelain path into the cwd coordinates of owned_files.
+
+    Paths outside a subdirectory cwd become ``../`` paths, which can never
+    equal an owned file and are rejected by ``bad_owned_path``.
+    """
+    if not prefix:
+        return path
+    if path.startswith(prefix):
+        return path[len(prefix):]
+    return os.path.relpath("/" + path, "/" + prefix.rstrip("/"))
+
+
+def git_snapshot(cwd: Path, packet: dict[str, Any], *, worktree_root: Path | None = None) -> dict[str, Any]:
+    """Snapshot in cwd coordinates.
+
+    ``worktree_root`` observes a deleted cwd from its verified worktree root
+    (see ``recorded_cwd_observation_root``).  Porcelain status and the tracked
+    diff are worktree-wide and root-relative from any cwd, so the result keeps
+    the same shape and digest the recorded cwd itself would produce.
+    """
+    observer = cwd if worktree_root is None else worktree_root
+    head = git_head(observer)
+    if worktree_root is None:
+        # Directory names may legally begin or end with whitespace; drop only Git's line terminator.
+        prefix = git(cwd, "rev-parse", "--show-prefix").removesuffix("\n")
+    else:
+        relative = Path(os.path.relpath(cwd, worktree_root)).as_posix()
+        prefix = "" if relative == "." else relative + "/"
+
+    def located(cwd_relative: str, root_relative: str) -> Path:
+        # Only the root is traversable once cwd is gone; "cwd/../x" is not.
+        return cwd / cwd_relative if worktree_root is None else worktree_root / root_relative
+
+    entries: list[tuple[str, str, str | None]] = []
     hashes: dict[str, str] = {}
-    for _, path, original in entries:
-        hashes[path] = content_digest(cwd / path)
+    for xy, path, original in git_status_entries(observer):
+        relative = cwd_relative_status_path(path, prefix)
+        relative_original = None if original is None else cwd_relative_status_path(original, prefix)
+        entries.append((xy, relative, relative_original))
+        hashes[relative] = content_digest(located(relative, path))
         if original is not None:
-            hashes[original] = content_digest(cwd / original)
-    guarded = {path: content_digest(cwd / path) for path in packet.get("owned_files", []) + packet.get("protected_files", [])}
+            hashes[relative_original] = content_digest(located(relative_original, original))
+    tracked_diff = git(observer, "diff", "--no-ext-diff") + git(observer, "diff", "--cached", "--no-ext-diff")
+    guarded = {path: content_digest(located(path, prefix + path))
+               for path in packet.get("owned_files", []) + packet.get("protected_files", [])}
     normalized = [{"xy": xy, "path": path, "original": original} for xy, path, original in entries]
     material = tracked_diff.encode() + json.dumps(normalized, ensure_ascii=False, sort_keys=True).encode() + json.dumps(hashes, ensure_ascii=False, sort_keys=True).encode()
-    return {"head": head, "status_entries": normalized, "diff_hash": hashlib.sha256(material).hexdigest(), "dirty_content_hashes": hashes,
-            "guarded_content_hashes": guarded, "ignored_files_not_enumerated": True}
+    snapshot = {"head": head, "status_entries": normalized, "diff_hash": hashlib.sha256(material).hexdigest(), "dirty_content_hashes": hashes,
+                "guarded_content_hashes": guarded, "ignored_files_not_enumerated": True}
+    if prefix:
+        # Root-cwd snapshots keep their earlier shape so protocol-compatible
+        # resumes still compare equal after a plugin upgrade.
+        snapshot["git_prefix"] = prefix
+    return snapshot
 
 
 def changed_paths(snapshot: dict[str, Any]) -> set[str]:
@@ -343,28 +403,209 @@ def changed_paths(snapshot: dict[str, Any]) -> set[str]:
     return paths
 
 
-def lane_lock_path(cwd: Path) -> Path:
+def scope_violations(packet: dict[str, Any], before: dict[str, Any], after: dict[str, Any]) -> list[str]:
+    changed = changed_paths(after)
+    changed.update(p for p in packet["protected_files"]
+                   if before["guarded_content_hashes"].get(p) != after["guarded_content_hashes"].get(p))
+    return sorted(p for p in changed if p not in set(packet["owned_files"]) or p in set(packet["protected_files"]) or bad_owned_path(p))
+
+
+def lane_identity(cwd: Path, workspace_kind: str = "git") -> str:
+    """Return the one execution-lane identity shared by every cwd of a worktree.
+
+    Git lanes are the canonical ``--show-toplevel`` so a root and its
+    subdirectories exclude each other, while linked worktrees (which share a
+    common git-dir) stay independent.  Artifact roots are verified non-Git and
+    keep their exact canonical directory.  A root cwd keeps the pre-identity
+    lock and marker key, which is what older releases hashed.
+    """
+    try:
+        resolved = cwd.resolve(strict=True)
+    except OSError as exc:
+        raise BridgeError(f"cwd lane identity cannot be established: {exc}") from exc
+    if workspace_kind == "artifacts":
+        return str(resolved)
+    if git(resolved, "rev-parse", "--is-inside-work-tree").strip() != "true":
+        raise BridgeError("cwd is not inside a Git working tree; lane identity cannot be established")
+    # Directory names may legally end with whitespace; drop only Git's line terminator.
+    toplevel = git(resolved, "rev-parse", "--show-toplevel").removesuffix("\n")
+    try:
+        return str(Path(toplevel).resolve(strict=True))
+    except OSError as exc:
+        raise BridgeError(f"Git worktree toplevel cannot be resolved: {exc}") from exc
+
+
+def recorded_lane(cwd: Any) -> tuple[str, bool]:
+    """Return ``(lock key, established)`` for a cwd recorded without a lane identity.
+
+    When no Git worktree can be resolved (artifact roots, deleted or moved
+    directories) the key falls back to the exact cwd an older writer locked.
+    That fallback is only a lock/marker key, never a proven worktree lane.
+    """
+    if not isinstance(cwd, str) or not os.path.isabs(cwd):
+        raise BridgeError("recorded cwd is missing; lane identity cannot be established")
+    try:
+        return lane_identity(Path(cwd), "git"), True
+    except BridgeError:
+        return str(Path(cwd).resolve()), False
+
+
+def recorded_lane_identity(cwd: Any) -> str:
+    return recorded_lane(cwd)[0]
+
+
+def recorded_cwd_in_lane(cwd: Any, identity: str) -> bool:
+    """Attribute a recorded cwd without an established lane, without guessing across worktrees."""
+    if not isinstance(cwd, str) or not os.path.isabs(cwd):
+        return False
+    # Non-strict resolve still canonicalizes existing ancestors such as /var.
+    try:
+        recorded = Path(cwd).resolve()
+    except (OSError, RuntimeError):
+        recorded = Path(os.path.normpath(cwd))
+    root = Path(identity)
+    if recorded.is_dir():
+        return recorded_lane_identity(str(recorded)) == identity
+    # A deleted cwd cannot be re-resolved; its lexical ancestry is the only
+    # remaining evidence and stays blocking.
+    return recorded == root or root in recorded.parents
+
+
+def recorded_cwd_observation_root(cwd: Any, identity: Any) -> Path | None:
+    """Verify a recorded Git cwd still belongs to its established lane.
+
+    An established lane is the canonical toplevel recorded at dispatch.  The
+    cwd must be that root or a normalized descendant, and the root must still
+    resolve to itself.  A cwd that still exists must be a real directory that
+    resolves to itself and whose current toplevel is that lane; ``None`` then
+    means "observe at the cwd".  A deleted cwd returns the root to observe
+    from, but only when its nearest surviving ancestor is a real directory of
+    the same lane.  Any symlinked, replaced, nested or rebound location is
+    ambiguous and raises instead of observing a different workspace.
+    """
+    if not isinstance(identity, str) or not identity or not os.path.isabs(identity):
+        raise BridgeError("the run has no established worktree lane")
+    if not isinstance(cwd, str) or not os.path.isabs(cwd):
+        raise BridgeError("recorded cwd is missing or not absolute")
+    if os.path.normpath(cwd) != cwd or os.path.normpath(identity) != identity:
+        raise BridgeError("recorded cwd or worktree lane is not in canonical form")
+    root, recorded = Path(identity), Path(cwd)
+    if recorded != root and root not in recorded.parents:
+        raise BridgeError("recorded cwd is outside its established worktree lane")
+    try:
+        if root.is_symlink() or root.resolve(strict=True) != root:
+            raise BridgeError("established worktree root no longer resolves to itself")
+    except OSError as exc:
+        raise BridgeError(f"established worktree root is unavailable: {exc}") from exc
+    if os.path.lexists(recorded):
+        if recorded.is_symlink() or not recorded.is_dir() or os.path.realpath(recorded) != str(recorded):
+            raise BridgeError("recorded cwd was replaced by a symlink, a non-directory or a path that resolves elsewhere")
+        if lane_identity(recorded, "git") != identity:
+            raise BridgeError("recorded cwd now belongs to a different worktree")
+        return None
+    nearest = next(parent for parent in recorded.parents if os.path.lexists(parent))
+    if nearest.is_symlink() or not nearest.is_dir() or os.path.realpath(nearest) != str(nearest):
+        raise BridgeError("the surviving ancestor of the recorded cwd is a symlink or not a directory")
+    if lane_identity(nearest, "git") != identity:
+        raise BridgeError("the surviving ancestor of the recorded cwd now belongs to a different worktree")
+    return root
+
+
+def _lane_key(identity: str) -> str:
+    return hashlib.sha256(identity.encode()).hexdigest()
+
+
+def lane_lock_path(identity: str) -> Path:
     root = Path(tempfile.gettempdir()) / "codex-claude-cwd-locks"
     root.mkdir(mode=0o700, exist_ok=True)
-    return root / (hashlib.sha256(str(cwd.resolve()).encode()).hexdigest() + ".lock")
+    return root / (_lane_key(identity) + ".lock")
 
 
-def unknown_lane_marker(cwd: Path) -> Path:
+def unknown_marker_root() -> Path:
     root = Path(tempfile.gettempdir()) / "codex-claude-cwd-unknown"
     root.mkdir(mode=0o700, exist_ok=True)
-    return root / (hashlib.sha256(str(cwd.resolve()).encode()).hexdigest() + ".json")
+    return root
 
 
-def lock_file(cwd: Path, task_id: str):
+def unknown_marker_path(identity: str) -> Path:
+    return unknown_marker_root() / (_lane_key(identity) + ".json")
+
+
+def unknown_lane_marker(cwd: Path, workspace_kind: str = "git") -> Path:
+    return unknown_marker_path(lane_identity(cwd, workspace_kind))
+
+
+def unknown_markers(identity: str) -> list[tuple[Path, Any]]:
+    """Return every unknown marker attributable to this lane.
+
+    Markers carry their lane.  Older markers were keyed by the exact resolved
+    cwd, so a legacy subdirectory marker is found by its recorded cwd.  An
+    unreadable file at this lane's key still blocks; one elsewhere without a
+    readable cwd cannot be attributed to any lane.
+    """
+    key = _lane_key(identity)
+    found: list[tuple[Path, Any]] = []
+    for path in sorted(unknown_marker_root().glob("*.json")):
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            continue
+        except (OSError, ValueError):
+            value = None
+        stem = path.name[:-len(".json")]
+        if stem == key or stem.startswith(key + "."):
+            found.append((path, value))
+        elif isinstance(value, dict):
+            recorded = value.get("lane_identity")
+            if recorded == identity or (recorded is None and recorded_cwd_in_lane(value.get("cwd"), identity)):
+                found.append((path, value))
+    return found
+
+
+def publish_unknown_marker(identity: str, value: dict[str, Any], *, established: bool = True) -> Path:
+    """Publish a run's unknown marker without replacing another run's marker.
+
+    An unestablished key is stored under that key but without a lane
+    identity, so every lane still attributes the marker by its recorded cwd.
+    """
+    run_id = value["run_id"]
+    primary = unknown_marker_path(identity)
+    temporary = primary.with_name(f".{primary.name}.{uuid.uuid4().hex}.tmp")
+    content = {**value, "lane_identity": identity if established else None}
+    if not established:
+        content["lane_key_source"] = "unresolved_recorded_cwd"
+    temporary.write_text(json.dumps(content, ensure_ascii=False) + "\n", encoding="utf-8")
+    try:
+        try:
+            # The primary key is what older releases check for a root cwd.
+            os.link(temporary, primary)
+            return primary
+        except FileExistsError:
+            pass
+        try:
+            existing = json.loads(primary.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            existing = None
+        target = primary
+        if not isinstance(existing, dict) or existing.get("run_id") != run_id:
+            suffix = hashlib.sha256(str(run_id).encode()).hexdigest()[:16]
+            target = primary.with_name(f"{_lane_key(identity)}.{suffix}.json")
+        os.replace(temporary, target)
+        return target
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def lock_file(identity: str, task_id: str):
     inherited = os.environ.get("CODEX_CLAUDE_LANE_FD")
     if inherited and inherited.isdigit():
         try:
-            # Runtime already owns this cwd lock and intentionally passes a duplicate
+            # Runtime already owns this lane lock and intentionally passes a duplicate
             # into bridge so a Runtime crash cannot release it while bridge survives.
-            expected = lane_lock_path(cwd).stat()
+            expected = lane_lock_path(identity).stat()
             received = os.fstat(int(inherited))
             if (received.st_dev, received.st_ino) != (expected.st_dev, expected.st_ino):
-                raise BridgeError("inherited cwd lane lock does not match this cwd")
+                raise BridgeError("inherited cwd lane lock does not match this cwd's worktree lane")
             handle = os.fdopen(os.dup(int(inherited)), "a+")
             if fcntl is not None:
                 # A dup of Runtime's fd shares its lock; this also safely obtains
@@ -373,7 +614,7 @@ def lock_file(cwd: Path, task_id: str):
             return handle
         except OSError as exc:
             raise BridgeError(f"inherited cwd lane lock is unavailable: {exc}")
-    f = lane_lock_path(cwd).open("a+")
+    f = lane_lock_path(identity).open("a+")
     if fcntl is None:
         return f
     try:
@@ -396,18 +637,20 @@ def state(run_dir: Path, status: str, **extra: Any) -> None:
 def pre_dispatch_cancelled(run_dir: Path, packet: dict[str, Any], note: str) -> int:
     state(run_dir, "cancelled", reason=note)
     dump(run_dir / "receipt.json", {"status": "cancelled", "task_id": packet["task_id"], "revision": packet["revision"],
-                                     "note": "cancelled before Claude dispatch"})
+                                     "note": "cancelled before Claude dispatch", **plugin_identity.receipt_fields(run_dir)})
     activity(run_dir, "cancelled", "cancelled before Claude dispatch", status="cancelled")
     return 1
 
 
-def workspace_snapshot(packet: dict[str, Any]) -> dict[str, Any]:
+def workspace_snapshot(packet: dict[str, Any], *, worktree_root: Path | None = None) -> dict[str, Any]:
     if packet["workspace_kind"] == "artifacts":
+        if worktree_root is not None:
+            raise BridgeError("an artifact root can only be observed at its own location")
         try:
             return artifact_snapshot(packet)
         except WorkspaceError as exc:
             raise BridgeError(str(exc)) from exc
-    snapshot = git_snapshot(Path(packet["cwd"]), packet)
+    snapshot = git_snapshot(Path(packet["cwd"]), packet, worktree_root=worktree_root)
     snapshot["workspace_digest"] = snapshot_digest(snapshot)
     return snapshot
 
@@ -585,20 +828,31 @@ def hook_policy_preflight(cwd: Path, environment: Mapping[str, str],
             "managed_policy_visibility": "local_files_only; server/MDM-only policy is not proven by this check"}
 
 
-def hook_coverage(run_dir: Path, tool_uses: Mapping[str, str], *, guard_all_tools: bool = False) -> dict[str, Any]:
-    audited: dict[str, str] = {}
+def _activity_events(run_dir: Path) -> list[dict[str, Any]]:
     try:
         lines = (run_dir / "activity.jsonl").read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         lines = []
+    events: list[dict[str, Any]] = []
     for line in lines:
         try:
             event = json.loads(line)
         except ValueError:
             continue
-        if (isinstance(event, dict) and event.get("kind") == "tool" and event.get("status") == "allowed"
+        if isinstance(event, dict):
+            events.append(event)
+    return events
+
+
+def hook_coverage(run_dir: Path, tool_uses: Mapping[str, str], *, guard_all_tools: bool = False) -> dict[str, Any]:
+    # A hook decision is audit evidence whether it allowed or denied the call;
+    # a denial still fails the run through hook_denials.  Any other status, or
+    # an event whose tool differs from the provider's tool_use, proves nothing.
+    decisions: dict[str, dict[str, str]] = {"allowed": {}, "denied": {}}
+    for event in _activity_events(run_dir):
+        if (event.get("kind") == "tool" and event.get("status") in decisions
                 and isinstance(event.get("tool_use_id"), str) and isinstance(event.get("tool"), str)):
-            audited[event["tool_use_id"]] = event["tool"]
+            decisions[event["status"]][event["tool_use_id"]] = event["tool"]
     # Ordinary runs install a path guard only for the file tools in their
     # matcher. StructuredOutput is the CLI's schema formatter and has no file
     # capability. Workflow uses matcher="*", so every observed tool (including
@@ -606,10 +860,53 @@ def hook_coverage(run_dir: Path, tool_uses: Mapping[str, str], *, guard_all_tool
     guarded_names = set(READ_TOOLS + WRITE_TOOLS)
     expected = {tool_id: tool for tool_id, tool in tool_uses.items()
                 if tool != "EndConversation" and (guard_all_tools or tool in guarded_names)}
-    missing = sorted(tool_id for tool_id, tool in expected.items() if audited.get(tool_id) != tool)
+    denied = sorted(tool_id for tool_id, tool in expected.items() if decisions["denied"].get(tool_id) == tool)
+    allowed = sorted(tool_id for tool_id, tool in expected.items()
+                     if decisions["allowed"].get(tool_id) == tool and tool_id not in denied)
+    missing = sorted(set(expected) - set(allowed) - set(denied))
     return {"status": "complete" if not missing else "incomplete", "expected_count": len(expected),
-            "audited_count": sum(1 for tool_id, tool in expected.items() if audited.get(tool_id) == tool),
-            "missing_tool_use_ids": missing}
+            "audited_count": len(allowed) + len(denied), "allowed_count": len(allowed), "denied_count": len(denied),
+            "allowed_tool_use_ids": allowed, "denied_tool_use_ids": denied, "missing_tool_use_ids": missing}
+
+
+def hook_denials(run_dir: Path, tool_uses: Mapping[str, str], provider_denials: list[Any]) -> list[dict[str, Any]]:
+    """Return this run's durably recorded PreToolUse denials.
+
+    Workflow child tool calls run under this hook but need not appear in the
+    parent stream or its permission_denials, so the CLI report alone cannot
+    prove that nothing was denied.
+    """
+    reported: set[str] = set()
+    def visit(value: Any) -> None:
+        if isinstance(value, dict):
+            if isinstance(value.get("tool_use_id"), str):
+                reported.add(value["tool_use_id"])
+            for nested in value.values():
+                visit(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                visit(nested)
+    visit(provider_denials)
+    denials: list[dict[str, Any]] = []
+    for event in _activity_events(run_dir):
+        if event.get("kind") != "tool" or event.get("status") != "denied":
+            continue
+        tool_use_id = event.get("tool_use_id")
+        denials.append({"source": "bridge_pretooluse_hook", "activity_seq": event.get("seq"),
+                        "tool_name": event.get("tool"), "tool_use_id": tool_use_id, "reason": event.get("text"),
+                        "in_provider_stream": isinstance(tool_use_id, str) and tool_use_id in tool_uses,
+                        "in_provider_denials": isinstance(tool_use_id, str) and tool_use_id in reported})
+    return denials
+
+
+def unexpected_tool_uses(tool_uses: Mapping[str, str], task_tools: tuple[str, ...]) -> list[str]:
+    """Name observed tools outside the task's --tools set.
+
+    The hook matcher covers only file tools, so this is the evidence that an
+    unlisted local CLI version really honored --tools/--disallowedTools.
+    """
+    permitted = set(task_tools) | {"StructuredOutput", "EndConversation"}
+    return sorted({tool for tool in tool_uses.values() if tool not in permitted})
 
 
 def hook(packet_path: Path, cwd_arg: str) -> int:
@@ -711,7 +1008,11 @@ def prompt(packet: dict[str, Any]) -> str:
     if packet["role"] == "workflow_review":
         instruction = (
             f"Run only the saved Workflow named /{packet['workflow']['name']} through the Workflow tool, "
-            "then wait for its report before returning the structured result. Do not use an inline script, "
+            "then wait for its report before returning the structured result. The Workflow tool result is only "
+            "a launch acknowledgement: the Workflow keeps running in the background and its completion "
+            "arrives automatically as a task notification. Do not poll it, inspect private workflow journals "
+            "or transcripts, or try other tools to obtain it; simply wait. A structured result returned before "
+            "that completion is interim and is never accepted as the report. Do not use an inline script, "
             "a scriptPath, any other Workflow, or a normal review as a substitute. Do not claim that the "
             "Workflow ran unless the tool call completed successfully. Do not claim acceptance."
         )
@@ -749,6 +1050,47 @@ def _stream_texts(obj: dict[str, Any]) -> list[str]:
     return texts
 
 
+DENIAL_TEXT_LIMIT = 500
+DENIAL_TEXT_KEYS = ("tool_name", "toolName", "tool", "tool_use_id", "toolUseId", "reason", "message",
+                    "permissionDecisionReason", "decision_reason")
+DENIAL_INPUT_KEYS = ("file_path", "path", "query_path", "pattern", "name", "command")
+
+
+def denial_entries(event: dict[str, Any], depth: int = 0) -> list[Any]:
+    """Return only the denial entries a stream event carries.
+
+    The event itself (a result with its report and usage, or a wrapper that
+    nests another event's list) is never stored; each entry keeps its tool,
+    id, reason and the path-like parts of its input, bounded in length.
+    """
+    raw = event.get("permission_denials")
+    if isinstance(raw, list) and (raw or event.get("subtype") != "permission_denials"):
+        items = raw
+    elif raw:
+        items = [raw]
+    elif event.get("subtype") == "permission_denials":
+        items = [{**event, "permission_denials": None}]
+    else:
+        return []
+    entries: list[Any] = []
+    for item in items:
+        if isinstance(item, dict) and item.get("permission_denials") and depth < 3:
+            entries.extend(denial_entries(item, depth + 1))
+        elif isinstance(item, dict):
+            entry: dict[str, Any] = {key: item[key][:DENIAL_TEXT_LIMIT] for key in DENIAL_TEXT_KEYS
+                                     if isinstance(item.get(key), str)}
+            tool_input = item.get("tool_input") if isinstance(item.get("tool_input"), dict) else {}
+            kept = {key: tool_input[key][:DENIAL_TEXT_LIMIT] for key in DENIAL_INPUT_KEYS if isinstance(tool_input.get(key), str)}
+            if kept:
+                entry["tool_input"] = kept
+            if item.get("subtype") == "permission_denials":
+                entry["subtype"] = "permission_denials"
+            entries.append(entry or {"unrecognized_shape": sorted(str(key) for key in item)[:10]})
+        else:
+            entries.append(str(item)[:DENIAL_TEXT_LIMIT])
+    return entries
+
+
 def parse_stream(path: Path, expected_session: str, expected_workflow: dict[str, Any] | str | None = None) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     final = None
     metadata: dict[str, Any] = {"permission_denials": [], "actual_models": [], "actual_model_sources": [],
@@ -757,6 +1099,16 @@ def parse_stream(path: Path, expected_session: str, expected_workflow: dict[str,
     workflow_uses: set[str] = set()
     workflow_results: set[str] = set()
     workflow_completed: set[str] = set()
+    workflow_tasks: dict[str, str] = {}
+    interim_results = 0
+
+    def task_matches(tool_id: Any, task_id: Any) -> bool:
+        # task_id is optional in a notification.  The Workflow task itself is
+        # the first task started for its tool call; once bound, a completion
+        # for any other task (such as a nested agent) is not the Workflow's.
+        started = workflow_tasks.get(tool_id)
+        return started is None or task_id == started
+
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         try:
             obj = json.loads(line)
@@ -786,6 +1138,7 @@ def parse_stream(path: Path, expected_session: str, expected_workflow: dict[str,
                     metadata["actual_model_sources"].append("assistant_message")
             if event_type == "result":
                 metadata["provider_response_observed"] = True
+                metadata["result_event_count"] = metadata.get("result_event_count", 0) + 1
                 model_usage = obj.get("modelUsage")
                 if isinstance(model_usage, dict):
                     usage_model_observed = False
@@ -798,8 +1151,7 @@ def parse_stream(path: Path, expected_session: str, expected_workflow: dict[str,
                         metadata["actual_model_sources"].append("result_model_usage")
             if "usage" in obj:
                 metadata["usage"] = obj["usage"]
-            if obj.get("subtype") == "permission_denials" or obj.get("permission_denials"):
-                metadata["permission_denials"].append(obj)
+            metadata["permission_denials"].extend(denial_entries(obj))
             for block in _stream_content_blocks(obj):
                 if block.get("type") == "tool_use" and isinstance(block.get("id"), str) and isinstance(block.get("name"), str):
                     metadata["guarded_tool_uses"][block["id"]] = block["name"]
@@ -814,21 +1166,41 @@ def parse_stream(path: Path, expected_session: str, expected_workflow: dict[str,
                         tool_id = block.get("tool_use_id")
                         if isinstance(tool_id, str) and tool_id in workflow_uses and block.get("is_error") is False:
                             workflow_results.add(tool_id)
+                if (obj.get("type") == "system" and obj.get("subtype") == "task_started"
+                        and event_session == expected_session and obj.get("tool_use_id") in workflow_uses
+                        and isinstance(obj.get("task_id"), str)):
+                    workflow_tasks.setdefault(obj["tool_use_id"], obj["task_id"])
                 if (obj.get("type") == "system" and obj.get("subtype") == "task_notification"
                         and event_session == expected_session and obj.get("status") == "completed"
-                        and obj.get("tool_use_id") in workflow_results):
+                        and obj.get("tool_use_id") in workflow_results
+                        and task_matches(obj.get("tool_use_id"), obj.get("task_id"))):
                     workflow_completed.add(obj["tool_use_id"])
-                for text in (_stream_texts(obj) if obj.get("type") == "user" else []):
+                # Only the parent session's injected notification turn counts;
+                # a Workflow agent's own messages carry a parent_tool_use_id.
+                parent_user = (obj.get("type") == "user" and event_session == expected_session
+                               and obj.get("parent_tool_use_id") is None)
+                for text in (_stream_texts(obj) if parent_user else []):
                     if "<task-notification>" not in text:
                         continue
                     tool_match = re.search(r"<tool-use-id>([^<]+)</tool-use-id>", text)
                     status_match = re.search(r"<status>([^<]+)</status>", text)
-                    if (tool_match and status_match and tool_match.group(1) in workflow_uses
-                            and status_match.group(1) == "completed"):
+                    task_match = re.search(r"<task-id>([^<]+)</task-id>", text)
+                    if (tool_match and status_match and tool_match.group(1) in workflow_results
+                            and status_match.group(1) == "completed"
+                            and (task_match is None or task_matches(tool_match.group(1), task_match.group(1)))):
                         workflow_completed.add(tool_match.group(1))
             if obj.get("type") == "result" or "subtype" in obj and ("structured_output" in obj or obj.get("is_error")):
                 final = obj
                 metadata["final_session_id"] = event_session
+                if expected_workflow is not None:
+                    # A result emitted while the launched Workflow is still
+                    # pending (the launch acknowledgement turn) is interim; only
+                    # a later parent result can be the Workflow report.
+                    after_completion = (bool(workflow_uses) and workflow_completed == workflow_uses
+                                        and obj.get("parent_tool_use_id") is None)
+                    metadata["workflow_final_after_completion"] = after_completion
+                    if not after_completion:
+                        interim_results += 1
     init_session = metadata.get("system_init_session_id")
     final_session = metadata.get("final_session_id")
     if init_session == expected_session:
@@ -843,6 +1215,9 @@ def parse_stream(path: Path, expected_session: str, expected_workflow: dict[str,
         metadata["workflow_tool_result_success_count"] = len(workflow_results)
         metadata["workflow_completion_observed"] = bool(workflow_uses) and workflow_completed == workflow_uses
         metadata["workflow_completion_count"] = len(workflow_completed)
+        metadata["workflow_final_after_completion"] = (metadata["workflow_completion_observed"]
+                                                       and metadata.get("workflow_final_after_completion") is True)
+        metadata["workflow_interim_result_count"] = interim_results
     metadata["actual_model_source"] = "+".join(metadata["actual_model_sources"]) or None
     return final, metadata
 
@@ -1034,23 +1409,79 @@ def terminate_group(proc: subprocess.Popen[str]) -> str | None:
 
 
 def record_unconfirmed_cleanup(run_dir: Path, packet: dict[str, Any], reason: str, cleanup_error: str,
-                               original_error: BaseException | None = None) -> int:
+                               original_error: BaseException | None = None, lane: str | None = None) -> int:
     """Persist a fail-closed terminal state when process cleanup cannot be proved."""
     diagnostic = {"reason": reason, "cleanup_status": "unconfirmed", "cleanup_error": cleanup_error}
     if original_error is not None:
         diagnostic["original_error"] = f"{type(original_error).__name__}: {original_error}"
     dump(run_dir / "error.json", diagnostic)
-    marker = unknown_lane_marker(Path(packet["cwd"]))
-    dump(marker, {"cwd": packet["cwd"], "run_id": run_dir.name, "reason": reason,
-                  "cleanup_status": "unconfirmed", "recorded_at": time.time()})
+    established = True
+    if lane is None:
+        try:
+            lane = lane_identity(Path(packet["cwd"]), packet.get("workspace_kind", "git"))
+        except BridgeError:
+            lane, established = str(Path(packet["cwd"]).resolve()), False
+    publish_unknown_marker(lane, {"cwd": packet["cwd"], "run_id": run_dir.name, "run_dir": str(run_dir), "reason": reason,
+                                  "cleanup_status": "unconfirmed", "recorded_at": time.time()},
+                           established=established)
     state(run_dir, "unknown", **diagnostic)
     dump(run_dir / "receipt.json", {"status": "unknown", "task_id": packet["task_id"], "revision": packet["revision"],
                                      "cleanup_status": "unconfirmed",
-                                     "note": "process cleanup could not be confirmed; reconcile process state before reusing this cwd."})
+                                     "note": "process cleanup could not be confirmed; reconcile process state before reusing this cwd.",
+                                     **plugin_identity.receipt_fields(run_dir)})
     activity(run_dir, "unknown", "process cleanup unconfirmed; reconciliation required", status="unknown",
              text=cleanup_error)
     print(f"bridge cleanup unconfirmed: {cleanup_error}", file=sys.stderr, flush=True)
     return 1
+
+
+RELEASABLE_RECEIPTS = {"reported", "blocked", "failed", "cancelled", "timeout"}
+
+
+def publish_launch_intent(args: argparse.Namespace, run_dir: Path, packet: dict[str, Any], lane: str) -> None:
+    """Durably claim the lane before a Claude child can exist.
+
+    The child runs in its own session and does not inherit the lane lock, so
+    once both Runtime and this bridge are gone this marker is the only
+    cross-state evidence that it may still be writing in the worktree.
+    """
+    lifecycle_path = getattr(args, "_lifecycle_path", None)
+    nonce = uuid.uuid4().hex
+    path = publish_unknown_marker(lane, {
+        "cwd": packet["cwd"], "run_id": run_dir.name, "task_id": packet["task_id"], "revision": packet["revision"],
+        "reason": "Claude launch intent; the child may outlive its bridge and Runtime",
+        "recorded_at": time.time(),
+        "launch_intent": {"nonce": nonce, "run_dir": str(run_dir), "bridge_pid": os.getpid(),
+                          "lifecycle_file": str(lifecycle_path) if lifecycle_path else None}})
+    args._launch_intent = {"path": path, "nonce": nonce, "child": "not_launched"}
+
+
+def launch_intent_update(args: argparse.Namespace, child: str) -> None:
+    intent = getattr(args, "_launch_intent", None)
+    if intent is not None:
+        intent["child"] = child
+
+
+def release_launch_intent(args: argparse.Namespace) -> None:
+    """Remove this run's launch-intent marker once no child can remain.
+
+    A marker rewritten by record_unconfirmed_cleanup or Runtime no longer
+    carries this nonce; it stays for trusted-terminal adoption or reconcile.
+    """
+    intent = getattr(args, "_launch_intent", None)
+    if intent is None or intent["child"] not in {"not_launched", "stopped"}:
+        return
+    try:
+        receipt = load(Path(args.run_dir) / "receipt.json")
+        value = load(intent["path"])
+    except (OSError, ValueError):
+        return
+    if not isinstance(receipt, dict) or receipt.get("status") not in RELEASABLE_RECEIPTS:
+        return
+    owned = (isinstance(value, dict) and value.get("run_id") == Path(args.run_dir).name
+             and isinstance(value.get("launch_intent"), dict) and value["launch_intent"].get("nonce") == intent["nonce"])
+    if owned:
+        intent["path"].unlink(missing_ok=True)
 
 
 def check_command(command: list[str], cwd: Path, timeout: float, input_text: str | None = None, env: dict[str, str] | None = None) -> tuple[int | None, str, str, str | None]:
@@ -1110,8 +1541,19 @@ def auth_metadata(data: dict[str, Any]) -> dict[str, Any]:
     return safe
 
 
+def _retired_selection(descriptor: Mapping[str, Any]) -> bool:
+    selection = descriptor.get("selection") if isinstance(descriptor.get("selection"), dict) else {}
+    return bool(descriptor.get("identity_id") or isinstance(selection.get("identity"), dict)
+                or selection.get("source") in RETIRED_SELECTION_SOURCES)
+
+
+def _local_descriptor_identity(selection: dict[str, Any]) -> dict[str, str]:
+    target = Path(selection["path"])
+    return {"sha256": sha256_file(target), "resolved_path": str(target.resolve())}
+
+
 def create_cli_descriptor(packet: dict, resume: Path | None = None) -> dict:
-    """Pin selection once. Resume never follows a newly activated executable."""
+    """Pin the user's local CLI once; a resume must find the same executable."""
     if resume is not None:
         previous = resume / "cli-selection.json"
         if not previous.is_file():
@@ -1124,42 +1566,64 @@ def create_cli_descriptor(packet: dict, resume: Path | None = None) -> dict:
             protocol = 1
         if type(protocol) is not int or protocol != DISPATCH_PROTOCOL_VERSION:
             raise BridgeError("resume_protocol_incompatible: prior dispatch protocol is not supported; inspect the old result and start fresh")
-        # Rebind implementation evidence, never the executable or session. The
-        # ordinary preflight must still verify current qualification + resume.
-        descriptor = {**descriptor, "dispatch_protocol_version": protocol,
+        if _retired_selection(descriptor):
+            raise BridgeError("resume_cli_identity_retired: the prior run used a plugin-managed private Claude CLI, "
+                              "which is no longer executed; start a fresh revision with the local Claude CLI")
+        current = locate_claude()
+        if not current.get("path"):
+            raise BridgeError("resume_cli_identity_changed: the local Claude CLI used by the prior run is no longer "
+                              "discoverable; start a fresh revision instead of resuming")
+        observed = _local_descriptor_identity(current)
+        if (observed["sha256"] != descriptor.get("sha256")
+                or observed["resolved_path"] != descriptor.get("resolved_path")):
+            raise BridgeError("resume_cli_identity_changed: the local Claude CLI changed since the prior run "
+                              "(for example after an upgrade); start a fresh revision instead of resuming")
+        # Rebind implementation evidence, never a different executable or
+        # session. The ordinary preflight still rechecks the resume flag.
+        descriptor = {**descriptor, "dispatch_protocol_version": protocol, "selection": current,
                       "contract_id_at_start": descriptor.get("contract_id_at_start", descriptor.get("contract_id")),
                       "contract_id": bridge_contract_id(), "contract_id_now": bridge_contract_id()}
-        verify_cli_descriptor(descriptor, packet)
+        verify_cli_descriptor(descriptor)
         return descriptor
-    budget = packet.get("budget") if isinstance(packet.get("budget"), dict) else {}
-    capabilities = [name for name in ("max_turns", "max_budget_usd") if budget.get(name) is not None]
-    selection = locate_claude(required_groups=required_groups(packet), required_capabilities=capabilities)
-    path = selection.get("path")
+    selection = locate_claude()
     descriptor = {"schema_version": 1, "purpose": "dispatch", "contract_id": bridge_contract_id(),
                   "dispatch_protocol_version": DISPATCH_PROTOCOL_VERSION,
                   "contract_id_at_start": bridge_contract_id(), "contract_id_now": bridge_contract_id(),
                   "selection": selection, "created_at": time.time()}
-    if path:
-        target = Path(path)
-        descriptor.update(sha256=sha256_file(target), resolved_path=str(target.resolve()))
-        if isinstance(selection.get("identity"), dict):
-            descriptor["identity_id"] = selection["identity"]["id"]
-            descriptor["version"] = selection["identity"]["version"]
+    if selection.get("path"):
+        descriptor.update(_local_descriptor_identity(selection))
     return descriptor
 
 
-def verify_cli_descriptor(descriptor: dict, packet: dict | None = None) -> tuple[dict, Mapping | None]:
-    """Validate an internal descriptor; no user packet field can enable a probe."""
+def load_content_binding(args: argparse.Namespace, resume: Path | None) -> dict | None:
+    """Return the supervisor-pinned content identity; a resume keeps the prior run's binding."""
+    prior_path = resume / "content-binding.json" if resume is not None else None
+    prior = load(prior_path) if prior_path is not None and prior_path.is_file() else None
+    supplied = getattr(args, "content_binding", None)
+    if supplied:
+        binding_file = require_absolute(supplied, "content-binding")
+        expected = getattr(args, "content_binding_sha256", None)
+        if expected and sha256_file(binding_file) != expected:
+            raise BridgeError("content binding bytes changed before bridge start")
+        binding = load(binding_file)
+    else:
+        binding = prior
+    if resume is not None and binding != prior:
+        raise BridgeError("resume must keep the prior run's pinned coordination content")
+    if binding is not None:
+        try:
+            content_store.verify_binding(binding)
+        except (content_store.ContentError, OSError) as exc:
+            raise BridgeError(f"pinned coordination content failed verification: {exc}") from exc
+    return binding
+
+
+def verify_cli_descriptor(descriptor: dict) -> dict:
+    """Validate an internal descriptor; no user packet field can select a CLI."""
     if not isinstance(descriptor, dict):
         raise BridgeError("invalid CLI identity descriptor")
     if descriptor.get("purpose") == "qualification":
-        if packet is None:
-            raise BridgeError("qualification descriptor requires a registered fixture packet")
-        from cli_validation import validate_probe_descriptor
-        profile = validate_probe_descriptor(descriptor, packet)
-        from cli_store import identity
-        selected = identity(descriptor["identity_id"])
-        return {"path": selected["path"], "source": "qualification", "identity": selected}, {selected["version"]: profile}
+        raise BridgeError("qualification descriptors are retired; private candidate CLIs are never executed")
     if descriptor.get("purpose") != "dispatch" or descriptor.get("contract_id") != bridge_contract_id():
         raise BridgeError("CLI descriptor contract changed; prepare a fresh dispatch with current compatibility evidence")
     if (type(descriptor.get("schema_version")) is not int or descriptor["schema_version"] != 1
@@ -1169,6 +1633,8 @@ def verify_cli_descriptor(descriptor: dict, packet: dict | None = None) -> tuple
     selection = descriptor.get("selection")
     if not isinstance(selection, dict):
         raise BridgeError("invalid pinned CLI selection")
+    if _retired_selection(descriptor):
+        raise BridgeError("cli_selection_retired: plugin-managed private Claude CLI identities are no longer executed")
     path = selection.get("path")
     if path:
         actual = Path(path)
@@ -1176,28 +1642,54 @@ def verify_cli_descriptor(descriptor: dict, packet: dict | None = None) -> tuple
                 or str(actual.resolve()) != descriptor.get("resolved_path")
                 or sha256_file(actual) != descriptor.get("sha256")):
             raise BridgeError("cli_identity_changed: selected executable is missing or changed; no fallback was used")
-        if isinstance(selection.get("identity"), dict):
-            from cli_store import identity
-            managed = identity(selection["identity"]["id"])
-            if managed["path"] != path or managed["sha256"] != descriptor.get("sha256"):
-                raise BridgeError("managed CLI identity changed")
-    return selection, None
+    return selection
+
+
+_SECRET_PATTERNS = (
+    re.compile(r"sk-ant-[A-Za-z0-9_-]+"),
+    re.compile(r"(?i)(bearer|token|key|secret|password)([\"'=: ]+)[^\s\"',]+"),
+    re.compile(r"[^\s@\"']+@[^\s@\"']+\.[A-Za-z]{2,}"),
+    re.compile(r"[A-Za-z0-9+/_-]{40,}"),
+)
+
+
+def redacted_excerpt(text: str, limit: int = 400) -> str:
+    value = " ".join((text or "").split())
+    for pattern in _SECRET_PATTERNS:
+        value = pattern.sub(lambda match: (match.group(1) + match.group(2) + "[redacted]") if match.lastindex else "[redacted]", value)
+    return value[:limit] + ("…" if len(value) > limit else "")
+
+
+def probe_diagnostic(code: int | None, out: str, err: str, error: str | None) -> dict[str, Any]:
+    """Keep the failure class of a local CLI probe without raw secrets."""
+    result: dict[str, Any] = {"exit_code": code}
+    if error:
+        result["error_kind"] = error
+    elif isinstance(code, int) and code < 0:
+        result["error_kind"] = "signal"
+        result["signal"] = -code
+    elif code:
+        result["error_kind"] = "nonzero_exit"
+    if out:
+        result["stdout_excerpt"] = redacted_excerpt(out)
+    if err:
+        result["stderr_excerpt"] = redacted_excerpt(err)
+    return result
 
 
 def check_environment(cwd: Path, verify: bool = False, model: str = "sonnet", timeout: float = 60,
-                      profiles: Mapping[str, Mapping[str, Any]] | None = None,
                       required_groups: list[str] | None = None, selection: dict | None = None) -> dict[str, Any]:
     needed_groups = set(required_groups or ["core", "read_only"])
     if not needed_groups.issubset(GROUPS):
         raise BridgeError("unknown compatibility capability group")
     if selection is None:
-        selection = locate_claude(required_groups=sorted(needed_groups))
+        selection = locate_claude()
     binary = selection.get("candidate") or "claude"
     resolved = selection["path"]
     child_env = cli_environment(selection)
     report: dict[str, Any] = {"checked_at": time.time(), "cwd": str(cwd), "ready": False,
                               "cli": {"path": resolved, "installed": bool(resolved), "source": selection["source"],
-                                      "identity": selection.get("identity"), "selection_reason": selection.get("selection_reason")},
+                                      "version_policy": "diagnostic_only"},
                               "auth": {"status": "not_checked", "credential_validity": "not_verified"},
                               "probe": {"status": "not_requested", "requested_model": model}}
     def fail(status_: str, action: str) -> dict[str, Any]:
@@ -1207,43 +1699,39 @@ def check_environment(cwd: Path, verify: bool = False, model: str = "sonnet", ti
                                "invocation": report["probe"], "compatibility": report.get("compatibility", {"status": "not_checked"})}
         return report
     if not resolved:
-        if selection.get("source") == "managed_native" and selection.get("identity"):
-            report["cli"]["installed"] = True
-            report["compatibility"] = {"status": "unverified", "required_groups": sorted(needed_groups),
-                                       "selection_available": False}
-            return fail("cli_capability_unverified", selection.get("action") or "所需能力尚未验证；请选择合格的保留版本或验证候选。")
         status_ = "cli_not_executable" if "/" in binary and Path(binary).exists() else "cli_not_found"
         return fail(status_, selection.get("action") or "Install/repair Claude Code: https://code.claude.com/docs/en/setup")
-    code, out, _, error = check_command([resolved, "--version"], cwd, min(timeout, 10), env=child_env)
+    code, out, err, error = check_command([resolved, "--version"], cwd, min(timeout, 10), env=child_env)
     if error or code != 0:
-        return fail("cli_unavailable", "Claude CLI could not run; check installation and host execution permissions.")
+        report["cli"]["version_probe"] = probe_diagnostic(code, out, err, error)
+        return fail("cli_unavailable", "Claude CLI could not report its version; see cli.version_probe for the exit code "
+                    "or timeout and check the installation and host execution permissions.")
     version = re.search(r"\b\d+\.\d+\.\d+(?:[-+][\w.]+)?\b", out)
     report["cli"]["version"] = version.group() if version else "unrecognized"
-    code, out, _, error = check_command([resolved, "--help"], cwd, min(timeout, 10), env=child_env)
+    if not version:
+        report["cli"]["version_probe"] = probe_diagnostic(code, out, err, error)
+    code, out, err, error = check_command([resolved, "--help"], cwd, min(timeout, 10), env=child_env)
     if error or code != 0:
+        report["cli"]["help_probe"] = probe_diagnostic(code, "", err, error)
         return fail("cli_unavailable", "Claude CLI help failed; check installation and host permissions.")
-    required_flags = set(REQUIRED_FLAGS)
-    if "resume" in needed_groups:
-        required_flags.add("--resume")
-    missing = sorted(flag for flag in required_flags if flag not in out)
+    missing = sorted(flag for flag in required_flags(needed_groups, verify) if not flag_advertised(out, flag))
     report["cli"]["missing_flags"] = missing
-    profile = resolved_profile(report["cli"]["version"], selection, profiles)
-    available_groups = set(profile.get("groups", GROUPS)) if profile else set()
-    if "--resume" not in out:
+    available_groups = set(GROUPS) if all(flag_advertised(out, flag) for flag in REQUIRED_FLAGS) else set()
+    if not flag_advertised(out, "--resume"):
         available_groups.discard("resume")
     missing_groups = sorted(needed_groups - available_groups)
-    report["cli"]["profile"] = {"status": "tested" if profile else "unverified",
-                                "source": (profile or {}).get("source", "test_fixture" if profiles is not None else None),
-                                "tested_versions": sorted((SUPPORTED_CLI_PROFILES if profiles is None else profiles).keys())}
-    report["compatibility"] = {"status": "unverified" if not profile else "unavailable" if missing or missing_groups else "verified",
+    report["compatibility"] = {"status": "unavailable" if missing else "advertised",
+                               "evidence": "cli_help_syntax", "behavior_verified": False,
                                "required_groups": sorted(needed_groups), "available_groups": sorted(available_groups),
                                "missing_groups": missing_groups, "missing_flags": missing,
-                               "source": report["cli"]["profile"]["source"], "contract_id": bridge_contract_id()}
-    advertised = (profile or {}).get("capabilities", {})
-    capabilities = {name: flag for name, flag in advertised.items() if isinstance(flag, str) and flag in out}
-    report["cli"]["capabilities"] = {name: {"flag": flag, "enforcement": "provider_option", "limit_exhaustion_verified": False} for name, flag in capabilities.items()}
-    report["cli"]["unavailable_capabilities"] = sorted(name for name in advertised if name not in capabilities)
-    # Local login is orthogonal to compatibility: an unqualified candidate can
+                               "version_policy": "diagnostic_only", "contract_id": bridge_contract_id(),
+                               "note": ("--help proves only advertised syntax; each run is still gated by the hook "
+                                        "self-test and post-run tool, session, result and workspace checks.")}
+    capabilities = {name: flag for name, flag in BUDGET_FLAGS.items() if flag_advertised(out, flag)}
+    report["cli"]["capabilities"] = {name: {"flag": flag, "evidence": "cli_help_syntax", "enforcement": "provider_option",
+                                            "limit_exhaustion_verified": False} for name, flag in capabilities.items()}
+    report["cli"]["unavailable_capabilities"] = sorted(name for name in BUDGET_FLAGS if name not in capabilities)
+    # Local login is orthogonal to option syntax: a CLI missing one flag can
     # still have a perfectly valid configured account. Never report it as logout.
     code, out, err, error = check_command([resolved, "auth", "status", "--json"], cwd, min(timeout, 15), env=child_env)
     if error:
@@ -1270,11 +1758,8 @@ def check_environment(cwd: Path, verify: bool = False, model: str = "sonnet", ti
     report["readiness"] = {"installation": report["installation"], "login": report["auth"],
                            "invocation": report["probe"], "compatibility": report["compatibility"]}
     if missing:
-        return fail("cli_incompatible", "Required CLI options are unavailable for this task; the login result is independent. Select a retained compatible execution version.")
-    if not profile:
-        return fail("cli_profile_unverified", "This executable has not passed the bridge compatibility suite. Keep the managed working version; use claude_cli_update to prepare and validate this candidate. This does not mean the login is invalid.")
-    if missing_groups:
-        return fail("cli_capability_unverified", "This task needs unverified compatibility groups: " + ", ".join(missing_groups) + ". Use a retained eligible version or validate the candidate for these groups.")
+        return fail("cli_incompatible", "The local Claude CLI --help does not advertise options this task needs: "
+                    + ", ".join(missing) + ". The login result is independent; update or reconfigure your own Claude CLI, then rerun the check.")
 
     if verify:
         # A single normal CLI request exercises its effective auth, with no agent tools.
@@ -1365,6 +1850,15 @@ def run(args: argparse.Namespace) -> int:
         raise
     descriptor = getattr(args, "_cli_descriptor", None)
     receipt_path = Path(args.run_dir) / "receipt.json"
+    if receipt_path.is_file() and plugin_identity.load_frozen(Path(args.run_dir)) is not None:
+        # Backstop for a receipt written by a path that did not attach the identity itself.
+        try:
+            receipt_value = load(receipt_path)
+            if isinstance(receipt_value, dict) and "plugin_identity" not in receipt_value:
+                receipt_value.update(plugin_identity.receipt_fields(Path(args.run_dir)))
+                dump(receipt_path, receipt_value)
+        except (OSError, ValueError):
+            pass
     if descriptor and receipt_path.is_file():
         receipt_value = load(receipt_path)
         receipt_value["cli_identity"] = {"id": descriptor.get("identity_id"), "sha256": descriptor.get("sha256") or descriptor.get("identity_sha256"),
@@ -1372,6 +1866,11 @@ def run(args: argparse.Namespace) -> int:
                                          "contract_id_at_start": descriptor.get("contract_id_at_start", descriptor.get("contract_id")),
                                          "contract_id_now": descriptor.get("contract_id"),
                                          "dispatch_protocol_version": descriptor.get("dispatch_protocol_version")}
+        dump(receipt_path, receipt_value)
+    content_binding = getattr(args, "_content_binding", None)
+    if content_binding and receipt_path.is_file():
+        receipt_value = load(receipt_path)
+        receipt_value["content_binding"] = content_store.binding_summary(content_binding)
         dump(receipt_path, receipt_value)
     record = getattr(args, "_lifecycle", {})
     if record:
@@ -1381,6 +1880,9 @@ def run(args: argparse.Namespace) -> int:
         lifecycle_update(args, terminal=True, status=status_,
                          phase="pre_dispatch" if record.get("child_started") is False else "terminal",
                          blocked_by=receipt.get("blocked_by"), reason=receipt.get("reason") or receipt.get("note"))
+    # Last step: the receipt and terminal lifecycle are durable before the
+    # lane claim goes away.  Any exception above keeps the marker.
+    release_launch_intent(args)
     return code
 
 
@@ -1406,12 +1908,17 @@ def _run(args: argparse.Namespace) -> int:
     if descriptor is None:
         descriptor = create_cli_descriptor(packet, resume)
         args._cli_descriptor = descriptor
-    selection, probe_profiles = verify_cli_descriptor(descriptor, raw_packet)
+    selection = verify_cli_descriptor(descriptor)
+    content_binding = load_content_binding(args, resume)
     run_dir.mkdir(mode=0o700)  # atomic creation is the duplicate-run guard
+    plugin_identity.freeze(run_dir, bridge_contract_id())
     dump(run_dir / "cli-selection.json", descriptor)
+    if content_binding is not None:
+        dump(run_dir / "content-binding.json", content_binding)
+        args._content_binding = content_binding
     activity(run_dir, "preflight", "run directory created", status="preflight")
-    if unknown_lane_marker(Path(packet["cwd"])).exists():
-        raise BridgeError("cwd has an unknown prior supervised run; reconcile it manually before dispatch")
+    lane = lane_identity(Path(packet["cwd"]), packet["workspace_kind"])
+    unknown_message = "cwd worktree has an unknown prior supervised run; reconcile it manually before dispatch"
     early_cancel = os.environ.get("CODEX_BRIDGE_CANCEL_FILE")
     if early_cancel and Path(early_cancel).is_file():
         dump(run_dir / "cancel.json", {"reason": "runtime cancelled before bridge dispatch", "requested_at": time.time()})
@@ -1420,16 +1927,23 @@ def _run(args: argparse.Namespace) -> int:
     proc: subprocess.Popen[str] | None = None
     stream = err = selector = None
     try:
-        lock = lock_file(Path(packet["cwd"]), packet["task_id"])
+        lock = lock_file(lane, packet["task_id"])
+        # Markers are checked only under the lock: a live lane holder's own
+        # launch intent must surface as "active run", not as unknown.  A
+        # previous holder can also publish just before releasing the lock.
+        if unknown_markers(lane):
+            raise BridgeError(unknown_message)
         dump(run_dir / "packet.json", packet)
         before, requirements = preflight(packet, resume)
         dump(run_dir / "workspace_before.json", before)
         if packet["workspace_kind"] == "git":
             dump(run_dir / "git_before.json", before)
         dump(run_dir / "requirements.json", requirements)
-        environment = check_environment(Path(packet["cwd"]), model=packet["model"], profiles=probe_profiles,
+        environment = check_environment(Path(packet["cwd"]), model=packet["model"],
                                         required_groups=required_groups(packet, resume is not None), selection=selection)
         environment["cli_descriptor"] = {"identity_id": descriptor.get("identity_id"), "sha256": descriptor.get("sha256") or descriptor.get("identity_sha256"),
+                                           "source": selection.get("source"), "resolved_path": descriptor.get("resolved_path"),
+                                           "version": (environment.get("cli") or {}).get("version"),
                                            "contract_id": descriptor.get("contract_id"), "purpose": descriptor.get("purpose"),
                                            "contract_id_at_start": descriptor.get("contract_id_at_start", descriptor.get("contract_id")),
                                            "contract_id_now": descriptor.get("contract_id"),
@@ -1439,7 +1953,8 @@ def _run(args: argparse.Namespace) -> int:
             state(run_dir, "blocked", reason=environment["status"])
             dump(run_dir / "receipt.json", {"status": "blocked", "blocked_by": "preflight", "reason": environment["status"],
                                              "task_id": packet["task_id"], "revision": packet["revision"],
-                                             "note": "Claude task was not launched. Resolve the preflight issue, then use a new run-dir."})
+                                             "note": "Claude task was not launched. Resolve the preflight issue, then use a new run-dir.",
+                                             **plugin_identity.receipt_fields(run_dir)})
             print(f"bridge blocked before dispatch: {environment['status']}", flush=True)
             activity(run_dir, "blocked", "environment preflight blocked dispatch", status="blocked")
             return 1
@@ -1449,7 +1964,8 @@ def _run(args: argparse.Namespace) -> int:
             state(run_dir, "blocked", reason="budget_capability_unavailable")
             dump(run_dir / "receipt.json", {"status": "blocked", "blocked_by": "preflight", "reason": "budget_capability_unavailable",
                                              "task_id": packet["task_id"], "revision": packet["revision"],
-                                             "note": f"CLI profile does not advertise executable budget controls: {unsupported_budget}. Wall timeout remains enforced by bridge."})
+                                             "note": f"Local Claude CLI --help does not advertise the requested budget controls: {unsupported_budget}. The task was not launched without them; wall timeout remains enforced by bridge.",
+                                             **plugin_identity.receipt_fields(run_dir)})
             activity(run_dir, "blocked", "requested budget control unavailable", status="blocked")
             return 1
         # Runtime cancellation can arrive while an authentication/CLI preflight
@@ -1515,18 +2031,29 @@ def _run(args: argparse.Namespace) -> int:
         print(f"bridge started task={packet['task_id']} run_dir={run_dir}", flush=True)
         stream = (run_dir / "stream.jsonl").open("w", encoding="utf-8")
         err = (run_dir / "stderr").open("w", encoding="utf-8")
-        verify_cli_descriptor(descriptor, raw_packet)
+        verify_cli_descriptor(descriptor)
+        workflow_wait_ceiling_ms = None
         if packet["role"] == "workflow_review":
             prior_cap = child_env.get("CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS", "2")
             child_env["CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS"] = "1" if prior_cap == "1" else "2"
+            workflow_wait_ceiling_ms = print_background_wait_ceiling_ms(args.timeout)
+            child_env[PRINT_BG_WAIT_CEILING] = str(workflow_wait_ceiling_ms)
+        # Publishing over a marker that appeared since the locked check (for
+        # example Runtime's post-spawn escalation of this run) would erase it.
+        if unknown_markers(lane):
+            raise BridgeError(unknown_message)
+        publish_launch_intent(args, run_dir, packet, lane)
         lifecycle_update(args, phase="launch_intent", child_started=None)
+        launch_intent_update(args, "unconfirmed")
         try:
             proc = subprocess.Popen(command, cwd=packet["cwd"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=err,
                                     text=True, start_new_session=True, env=child_env)
         except OSError as exc:
             # Popen reports exec failure only after reaping its failed child.
+            launch_intent_update(args, "not_launched")
             lifecycle_update(args, phase="pre_dispatch", child_started=False, reason=f"Claude launch failed: {exc}")
             raise
+        launch_intent_update(args, "running")
         # Popen succeeded.  Stage this fact in memory before touching stdin so
         # a synchronous BrokenPipe is still recorded as a launched child by the
         # terminal lifecycle update.  Keep the persisted sidecar at
@@ -1597,18 +2124,19 @@ def _run(args: argparse.Namespace) -> int:
             cleanup_error = terminate_group(proc)
         if cleanup_error:
             reason = "KeyboardInterrupt" if interrupted else ("cancelled run" if cancelled else "timed out run")
-            return record_unconfirmed_cleanup(run_dir, packet, reason, cleanup_error)
+            return record_unconfirmed_cleanup(run_dir, packet, reason, cleanup_error, lane=lane)
         try:
             proc.wait(timeout=3)
         except subprocess.TimeoutExpired as exc:
             cleanup_error = terminate_group(proc)
             return record_unconfirmed_cleanup(run_dir, packet, "post-stop wait", cleanup_error or
-                                              "direct child remained running after stop request", exc)
+                                              "direct child remained running after stop request", exc, lane=lane)
         residual_process_group = not wait_process_group_absent(proc.pid, .75)
         if residual_process_group:
             cleanup_error = terminate_group(proc)
             if cleanup_error:
-                return record_unconfirmed_cleanup(run_dir, packet, "normal child exit left a live process group", cleanup_error)
+                return record_unconfirmed_cleanup(run_dir, packet, "normal child exit left a live process group", cleanup_error,
+                                                  lane=lane)
         activity(run_dir, "collecting", "collecting final provider output", status="collecting")
         eof_deadline = time.monotonic() + 3
         while not stream_eof and time.monotonic() < eof_deadline:
@@ -1620,13 +2148,24 @@ def _run(args: argparse.Namespace) -> int:
         if not stream_eof:
             cleanup_error = terminate_group(proc)
             if cleanup_error:
-                return record_unconfirmed_cleanup(run_dir, packet, "stdout collection cleanup", cleanup_error)
+                return record_unconfirmed_cleanup(run_dir, packet, "stdout collection cleanup", cleanup_error, lane=lane)
+        # The direct child is reaped and its process group was proven absent.
+        launch_intent_update(args, "stopped")
         stream.close(); err.close()
         expected_session = resume_session or session
         provider, meta = parse_stream(run_dir / "stream.jsonl", expected_session,
                                       packet["workflow"] if packet["role"] == "workflow_review" else None)
         coverage = hook_coverage(run_dir, meta.get("guarded_tool_uses", {}),
                                  guard_all_tools=packet["role"] == "workflow_review")
+        denied_hooks = hook_denials(run_dir, meta.get("guarded_tool_uses", {}), meta["permission_denials"])
+        if denied_hooks:
+            meta["permission_denials"].extend(denied_hooks)
+            meta["hook_denial_error"] = f"PreToolUse guard denied {len(denied_hooks)} tool use(s) during this run"
+            for item in denied_hooks:
+                print(f"hook denial tool={item['tool_name']} tool_use_id={item['tool_use_id']} "
+                      f"in_provider_stream={item['in_provider_stream']} reason={item['reason']}", flush=True)
+        unexpected_tools = ([] if packet["role"] == "workflow_review"
+                            else unexpected_tool_uses(meta.get("guarded_tool_uses", {}), tools))
         after = workspace_snapshot(packet); dump(run_dir / "workspace_after.json", after)
         if packet["workspace_kind"] == "git":
             dump(run_dir / "git_after.json", after)
@@ -1640,6 +2179,16 @@ def _run(args: argparse.Namespace) -> int:
         requirements_after = {source: sha256_file(Path(source)) for source in packet["requirement_sources"]}
         final_status = "failed"; structured: dict[str, Any] | None = None
         subtype = provider.get("subtype") if provider else None
+        # The report is kept as evidence whatever the run outcome; parsing it
+        # never decides success, which stays with the checks below.
+        report_state = "absent"
+        if provider is not None and provider.get("structured_output") is not None:
+            try:
+                structured = result_payload(provider)
+                report_state = "structured"
+            except Exception as exc:
+                report_state = "validation_error"
+                meta["result_validation_error"] = str(exc)
         if cancelled or (run_dir / "cancel.json").exists():
             final_status = "cancelled"
         elif timed_out:
@@ -1652,21 +2201,25 @@ def _run(args: argparse.Namespace) -> int:
         elif coverage["status"] != "complete":
             meta["hook_guard_error"] = "one or more provider tool uses lack matching PreToolUse guard evidence"
             final_status = "failed"
+        elif unexpected_tools:
+            meta["tool_policy_error"] = f"provider used tools outside this task's tool set: {unexpected_tools}"
+            final_status = "failed"
         elif meta.get("session_error") or meta["permission_denials"] or subtype == "permission_denials" or provider.get("is_error") or subtype != "success" or proc.returncode != 0:
             final_status = "failed"
+        elif structured is not None:
+            final_status = structured["status"]
         else:
-            try:
-                structured = result_payload(provider)
-                final_status = structured["status"]
-            except Exception as exc:
-                meta["result_validation_error"] = str(exc)
-                final_status = "failed"
-        if packet["role"] == "workflow_review" and not (meta.get("workflow_tool_result_success") and meta.get("workflow_completion_observed")):
+            meta.setdefault("result_validation_error", "provider result lacks structured_output object")
+        if packet["role"] == "workflow_review":
             # The first tool result only confirms that a background workflow was
             # launched.  A completed task-notification tied to that same tool ID
-            # is required before Claude's later text can count as a report.
-            meta["workflow_error"] = "expected named Workflow launch and completed task-notification were not observed"
-            if final_status == "completed":
+            # is required, and the accepted parent result must follow it.
+            if not (meta.get("workflow_tool_result_success") and meta.get("workflow_completion_observed")):
+                meta["workflow_error"] = "expected named Workflow launch and completed task-notification were not observed"
+            elif not meta.get("workflow_final_after_completion"):
+                meta["workflow_error"] = ("the final parent result preceded the Workflow completion notification; "
+                                          "an interim launch result is not the Workflow report")
+            if meta.get("workflow_error") and final_status == "completed":
                 final_status = "blocked"
         scope_error = None
         invariant_error = None
@@ -1686,10 +2239,7 @@ def _run(args: argparse.Namespace) -> int:
                 invariant_error = "review run changed workspace state"
                 final_status = "failed"
         if packet["role"] == "implement":
-            changed = changed_paths(after)
-            changed.update(p for p in packet["protected_files"]
-                           if before["guarded_content_hashes"].get(p) != after["guarded_content_hashes"].get(p))
-            forbidden = sorted(p for p in changed if p not in set(packet["owned_files"]) or p in set(packet["protected_files"]) or bad_owned_path(p))
+            forbidden = scope_violations(packet, before, after)
             if forbidden:
                 scope_error = f"out-of-scope or protected changes: {forbidden}"
                 final_status = "failed"
@@ -1698,9 +2248,14 @@ def _run(args: argparse.Namespace) -> int:
                          if isinstance(usage, dict) and isinstance(usage.get(key), int)}
         cost = provider.get("total_cost_usd") if provider else None
         cost = cost if isinstance(cost, (float, int)) and not isinstance(cost, bool) and math.isfinite(cost) and cost >= 0 else None
+        model_usage = provider.get("modelUsage") if provider else None
         result = {"workspace_kind": packet["workspace_kind"], "workspace_manifest": {"before": "workspace_before.json", "after": "workspace_after.json"},
                   "cli_identity": environment["cli_descriptor"],
-                  "total_cost_usd": cost, "blocked_by": "executor" if final_status == "blocked" else None,
+                  "content_binding": content_store.binding_summary(content_binding),
+                  "total_cost_usd": cost, "model_usage": model_usage if isinstance(model_usage, dict) else None,
+                  "usage_report": usage_scope.usage_report(provider, result_events=meta.get("result_event_count", 0),
+                                                           resumed=resume_session is not None),
+                  "blocked_by": "executor" if final_status == "blocked" else None,
                   "budget": packet["budget"], "budget_enforcement": "provider_enforced" if packet["budget"] else "not_requested",
                   "provider_subtype": subtype, "provider_exit_code": proc.returncode, "requested_model": packet["model"],
                   "initialized_model": meta.get("initialized_model"), "cli_resolved_model": meta.get("initialized_model"),
@@ -1714,7 +2269,8 @@ def _run(args: argparse.Namespace) -> int:
                   "scope_error": scope_error, "invariant_error": invariant_error, "stream_warning": meta_stream_warning,
                   "result_validation_error": meta.get("result_validation_error"), "session_error": meta.get("session_error"),
                   "hook_guard_preflight": policy_evidence, "hook_guard_coverage": coverage,
-                  "hook_guard_error": meta.get("hook_guard_error"),
+                  "hook_guard_error": meta.get("hook_guard_error"), "hook_denial_error": meta.get("hook_denial_error"),
+                  "tool_policy_error": meta.get("tool_policy_error"),
                   "process_group_error": meta.get("process_group_error"),
                   "system_init_session_id": meta.get("system_init_session_id"), "final_session_id": meta.get("final_session_id"),
                   "workflow_name": meta.get("workflow_name"), "workflow_tool_use_observed": meta.get("workflow_tool_use_observed"),
@@ -1723,15 +2279,25 @@ def _run(args: argparse.Namespace) -> int:
                   "workflow_tool_result_success_count": meta.get("workflow_tool_result_success_count"),
                   "workflow_completion_observed": meta.get("workflow_completion_observed"),
                   "workflow_completion_count": meta.get("workflow_completion_count"),
+                  "workflow_final_after_completion": meta.get("workflow_final_after_completion"),
+                  "workflow_interim_result_count": meta.get("workflow_interim_result_count"),
+                  "workflow_background_wait_ceiling_ms": workflow_wait_ceiling_ms,
                   "workflow_error": meta.get("workflow_error")}
         # A marker arriving after process exit but before final persistence wins.
         if (run_dir / "cancel.json").exists() and final_status in {"completed", "blocked"}:
             final_status = "cancelled"
+        result["report_evidence"] = {
+            "state": report_state, "claimed_status": structured["status"] if structured else None,
+            "run_status": final_status, "accepted": False,
+            "note": ("The provider's own report, kept as unaccepted evidence. Its claimed_status is the model's claim, "
+                     "not this run's outcome; run_status and the receipt decide that.")}
+        result.update(plugin_identity.receipt_fields(run_dir))
         dump(run_dir / "result.json", result)
         receipt_status = "reported" if final_status == "completed" else ("blocked" if final_status == "blocked" else final_status)
         dump(run_dir / "receipt.json", {"status": receipt_status, "task_id": packet["task_id"], "revision": packet["revision"],
                                           "blocked_by": "executor" if receipt_status == "blocked" else None,
-                                          "note": "reported is not accepted; Codex must verify evidence and workspace state."})
+                                          "note": "reported is not accepted; Codex must verify evidence and workspace state.",
+                                          **plugin_identity.receipt_fields(run_dir)})
         state(run_dir, final_status, provider_exit_code=proc.returncode)
         phase = "reported" if final_status == "completed" else final_status
         activity(run_dir, phase, "provider result recorded", status=phase)
@@ -1741,19 +2307,23 @@ def _run(args: argparse.Namespace) -> int:
         if proc is not None:
             cleanup_error = terminate_group(proc)
             if cleanup_error:
-                return record_unconfirmed_cleanup(run_dir, packet, "KeyboardInterrupt", cleanup_error)
+                return record_unconfirmed_cleanup(run_dir, packet, "KeyboardInterrupt", cleanup_error, lane=lane)
+            launch_intent_update(args, "stopped")
         state(run_dir, "cancelled", reason="KeyboardInterrupt")
-        dump(run_dir / "receipt.json", {"status": "cancelled", "note": "interrupted; inspect process state manually."})
+        dump(run_dir / "receipt.json", {"status": "cancelled", "note": "interrupted; inspect process state manually.",
+                                        **plugin_identity.receipt_fields(run_dir)})
         activity(run_dir, "cancelled", "bridge interrupted", status="cancelled")
         return 130
     except Exception as exc:
         if proc is not None:
             cleanup_error = terminate_group(proc)
             if cleanup_error:
-                return record_unconfirmed_cleanup(run_dir, packet, "bridge exception cleanup", cleanup_error, exc)
+                return record_unconfirmed_cleanup(run_dir, packet, "bridge exception cleanup", cleanup_error, exc, lane=lane)
+            launch_intent_update(args, "stopped")
         dump(run_dir / "error.json", {"error": str(exc)})
         state(run_dir, "failed", error=str(exc))
-        dump(run_dir / "receipt.json", {"status": "failed", "note": "bridge failure; inspect stderr/error.json."})
+        dump(run_dir / "receipt.json", {"status": "failed", "note": "bridge failure; inspect stderr/error.json.",
+                                        **plugin_identity.receipt_fields(run_dir)})
         activity(run_dir, "failed", "bridge failure recorded", status="failed")
         print(f"bridge failed: {exc}", file=sys.stderr, flush=True)
         return 1
@@ -1807,6 +2377,8 @@ def main() -> int:
     r.add_argument("--timeout", type=float, required=True)
     r.add_argument("--cli-descriptor", help=argparse.SUPPRESS)
     r.add_argument("--cli-descriptor-sha256", help=argparse.SUPPRESS)
+    r.add_argument("--content-binding", help=argparse.SUPPRESS)
+    r.add_argument("--content-binding-sha256", help=argparse.SUPPRESS)
     s = sub.add_parser("status"); s.add_argument("--run-dir", required=True)
     c = sub.add_parser("cancel"); c.add_argument("--run-dir", required=True); c.add_argument("--reason", required=True)
     h = sub.add_parser("hook"); h.add_argument("--packet", required=True); h.add_argument("--cwd", required=True)

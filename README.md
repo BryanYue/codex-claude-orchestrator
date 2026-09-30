@@ -1,4 +1,4 @@
-# Codex–Claude 协作 · 0.5.0
+# Codex–Claude 协作 · 0.6.0
 
 **简体中文** · [English](README.en.md)
 
@@ -39,7 +39,7 @@
 ### 1. 准备好这三样
 
 - **Codex 桌面端**：已登录，所在版本支持插件。[安装说明](https://developers.openai.com/codex/app)
-- **Claude Code**：已在本机安装，并有可用的登录与额度。[安装和登录说明](https://code.claude.com/docs/en/quickstart)
+- **Claude Code**：已在本机安装，并有可用的登录与额度。插件直接使用你本机的 Claude Code，不另外下载、更新或切换版本；升级由你按官方方式进行。[安装和登录说明](https://code.claude.com/docs/en/quickstart)
 - **uv**：插件用它准备运行环境。[安装说明](https://docs.astral.sh/uv/getting-started/installation/)
 
 目前已在 **Apple Silicon Mac** 上验证；Intel Mac 尚未单独验证，Windows/Linux 暂不在本版支持范围。
@@ -49,11 +49,13 @@
 在终端中依次执行：
 
 ```bash
-codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v0.5.0
+codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v0.6.0
 codex plugin add codex-claude-orchestrator@codex-claude-team
 ```
 
 第一条添加插件来源，第二条安装插件。仓库公开，无需 GitHub 邀请或登录。
+
+> **关于版本：** `v0.6.0` 包含本机 CLI 策略、经 Codex 审查的 Markdown 动态更新，以及运行证据和工作区隔离修复。旧 `v0.5.0` 标签保持不变；已安装且固定在旧标签的用户须按[版本切换步骤](docs/git-marketplace.md#change-a-fixed-ref-or-migrate-from-zip)改到 `v0.6.0`，单独刷新 marketplace 不会自动跨标签升级。
 
 **首次安装还需要准备依赖，再打开新 Codex 任务。** 不熟悉终端、遇到 `codex: command not found`，或以前装过本地版本，都可以按[一步一步的安装指南](docs/getting-started.zh-CN.md)操作；里面也有可以直接交给 Codex 的安装请求。
 
@@ -105,7 +107,7 @@ codex plugin add codex-claude-orchestrator@codex-claude-team
 
 **需要两边都登录吗？会使用谁的额度？**
 
-需要你自己的 Codex 和 Claude Code 使用权限。插件不会提供或共享账号；Claude 实际执行、首次在线检查，以及你启用的版本兼容验证，都可能使用 Claude 额度。只查看本地状态不会发起模型请求。
+需要你自己的 Codex 和 Claude Code 使用权限。插件不会提供或共享账号；Claude 实际执行和首次在线检查会使用 Claude 额度。只查看本地状态不会发起模型请求。
 
 **代码会发到哪里？**
 
@@ -114,6 +116,14 @@ codex plugin add codex-claude-orchestrator@codex-claude-team
 **会自动改整个项目吗？**
 
 只读审查不修改文件；实施任务限定允许编辑的文件，由 Codex 检查结果。插件不自动合并或发布代码。单次试用不必开启项目长期协作设置。
+
+**协作说明会在线更新吗？**
+
+从 0.6.0 起，Codex 的协作说明（Markdown）可以从本插件仓库的固定目录下载到本机。每个 Codex 会话首次实际使用时检查一次；新内容先由 Codex 作为不可信资料做安全审查，通过后才用于之后新建的任务，正在执行或续跑的任务继续使用原来的版本。可以随时让 Codex 停用在线内容或回退到上一已通过版本；离线或检查失败时继续用上一已通过版本，首次没有下载内容时使用插件自带说明。这不会更新插件代码、工具权限或你本机的 Claude Code。
+
+**工作台里的 token 和费用是什么？**
+
+“CLI 会话累计估算”按模型列出 Claude CLI 报告的累计用量与估算费用，包含子代理；续跑会话的累计可能包含之前轮次。“主代理最终回报”只是主代理最后一次回报，不是整个任务的总量，两者不能相加。“未缓存输入”不含缓存读取与写入。费用是 Claude CLI 的客户端估算，不是实际扣费或订阅剩余额度。
 
 **装好了却没有开始执行？**
 

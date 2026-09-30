@@ -48,7 +48,8 @@ if os.environ.get('FAKE_CALLS_PATH'):
     with open(os.environ['FAKE_CALLS_PATH'],'a') as log: log.write(json.dumps(args)+'\\n')
 if args == ['--version']: print(os.environ.get('FAKE_VERSION', '2.1.276') + ' (Claude Code)'); sys.exit(0)
 if args == ['--help']:
-    print('-p --model --effort --output-format --json-schema --session-id --resume --permission-mode --tools --allowedTools --disallowedTools --settings --strict-mcp-config --mcp-config --disable-slash-commands --max-turns --max-budget-usd'); sys.exit(0)
+    flags='-p --model --effort --output-format --verbose --json-schema --session-id --resume --permission-mode --tools --allowedTools --disallowedTools --settings --strict-mcp-config --mcp-config --disable-slash-commands --no-session-persistence --max-turns --max-budget-usd'.split()
+    print(' '.join(flag for flag in flags if flag != os.environ.get('FAKE_OMIT_FLAG'))); sys.exit(0)
 if args == ['auth','status','--json']:
     if mode == 'auth_malformed': print('SECRET_SENTINEL invalid json'); sys.exit(1)
     if mode == 'auth_timeout': time.sleep(4)
@@ -89,6 +90,7 @@ else: print(json.dumps({'type':'result','subtype':'success','session_id':session
     def tearDown(self):
         os.environ.pop('FAKE_CALLS_PATH', None)
         os.environ.pop('FAKE_VERSION', None)
+        os.environ.pop('FAKE_OMIT_FLAG', None)
         if self.old_bin is None: os.environ.pop("CLAUDE_BIN", None)
         else: os.environ["CLAUDE_BIN"] = self.old_bin
         if self.old_mode is None: os.environ.pop("FAKE_MODE", None)
@@ -155,13 +157,18 @@ else: print(json.dumps({'type':'result','subtype':'success','session_id':session
         self.assertEqual(got.returncode, 0)
         self.assertEqual(report['auth']['auth_method'], 'api_key')
 
-    def test_unknown_cli_profile_is_not_accepted_from_help_flags_alone(self):
-        os.environ['FAKE_VERSION'] = '9.9.999'
+    def test_unlisted_local_cli_version_runs_when_flags_and_login_pass(self):
+        os.environ['FAKE_VERSION'] = '2.1.284'
         got, report = self.doctor()
-        self.assertNotEqual(got.returncode, 0)
-        self.assertEqual(report['status'], 'cli_profile_unverified')
-        self.assertEqual(report['cli']['profile']['status'], 'unverified')
+        self.assertEqual(got.returncode, 0, got.stdout + got.stderr)
+        self.assertEqual(report['status'], 'local_checks_passed')
+        self.assertEqual(report['cli']['version'], '2.1.284')
         self.assertEqual(report['cli']['missing_flags'], [])
+        self.assertFalse(report['compatibility']['behavior_verified'])
+        got, run = self.invoke(self.packet(), 'unlisted-version')
+        self.assertEqual(got.returncode, 0, got.stderr)
+        self.assertEqual(json.loads((run / 'receipt.json').read_text())['status'], 'reported')
+        self.assertEqual(json.loads((run / 'environment.json').read_text())['cli_descriptor']['version'], '2.1.284')
 
     def test_logged_out_stops_before_any_task_request(self):
         os.environ['FAKE_MODE'] = 'logged_out'
@@ -193,6 +200,46 @@ else: print(json.dumps({'type':'result','subtype':'success','session_id':session
         self.assertEqual(invocation[invocation.index('--tools') + 1], '')
         self.assertIn('--no-session-persistence', invocation)
 
+    def test_every_option_in_the_task_command_is_checked_by_preflight(self):
+        module = load_bridge_module()
+        got, run = self.invoke(self.packet(), 'command-audit')
+        self.assertEqual(got.returncode, 0, got.stderr)
+        argv = json.loads((run / 'command.json').read_text())['argv'][1:]
+        options = {token for token in argv if token.startswith('-')}
+        self.assertIn('--verbose', options)
+        self.assertEqual(options - module.required_flags({'core', 'read_only'}), set())
+
+    def test_absent_verbose_flag_blocks_task_before_any_provider_request(self):
+        os.environ['FAKE_OMIT_FLAG'] = '--verbose'
+        calls = self.root / 'calls.jsonl'
+        os.environ['FAKE_CALLS_PATH'] = str(calls)
+        got, report = self.doctor()
+        self.assertNotEqual(got.returncode, 0)
+        self.assertEqual(report['status'], 'cli_incompatible')
+        self.assertEqual(report['cli']['missing_flags'], ['--verbose'])
+        got, run = self.invoke(self.packet(), 'no-verbose')
+        self.assertNotEqual(got.returncode, 0)
+        receipt = json.loads((run / 'receipt.json').read_text())
+        self.assertEqual((receipt['status'], receipt['blocked_by'], receipt['reason']), ('blocked', 'preflight', 'cli_incompatible'))
+        self.assertFalse((run / 'command.json').exists())
+        self.assertFalse(any('-p' in json.loads(line) for line in calls.read_text().splitlines()))
+
+    def test_session_persistence_flag_gates_only_doctor_verify(self):
+        os.environ['FAKE_OMIT_FLAG'] = '--no-session-persistence'
+        calls = self.root / 'calls.jsonl'
+        os.environ['FAKE_CALLS_PATH'] = str(calls)
+        got, report = self.doctor('--verify', '--model', 'test-model')
+        self.assertNotEqual(got.returncode, 0)
+        self.assertEqual(report['status'], 'cli_incompatible')
+        self.assertEqual(report['cli']['missing_flags'], ['--no-session-persistence'])
+        self.assertFalse(any('-p' in json.loads(line) for line in calls.read_text().splitlines()))
+        got, report = self.doctor()
+        self.assertEqual(got.returncode, 0, got.stdout + got.stderr)
+        self.assertEqual(report['status'], 'local_checks_passed')
+        got, run = self.invoke(self.packet(), 'no-session-persistence-flag')
+        self.assertEqual(got.returncode, 0, got.stderr)
+        self.assertEqual(json.loads((run / 'receipt.json').read_text())['status'], 'reported')
+
     def test_online_auth_rejection_is_distinct_from_quota_network_and_access(self):
         expected = {'probe_auth':'authentication_failed', 'probe_quota':'quota_or_rate_limited',
                     'probe_network':'network_error', 'probe_access':'access_denied', 'probe_timeout':'verification_timeout'}
@@ -216,7 +263,7 @@ else: print(json.dumps({'type':'result','subtype':'success','session_id':session
         command = json.loads((run / "command.json").read_text())["argv"]
         self.assertIn("Workflow", command[command.index("--disallowedTools") + 1])
 
-    def test_budget_is_passed_only_from_tested_profile_and_is_reported_as_provider_enforced(self):
+    def test_budget_is_passed_only_when_help_advertises_it_and_is_reported_as_provider_enforced(self):
         packet = self.packet(); packet['budget'] = {'max_turns': 3, 'max_budget_usd': 1.25}
         got, run = self.invoke(packet, 'budget')
         self.assertEqual(got.returncode, 0, got.stderr)
@@ -364,6 +411,20 @@ else: print(json.dumps({'type':'result','subtype':'success','session_id':session
         self.assertEqual(workflow["status"], "incomplete")
         self.assertEqual(workflow["missing_tool_use_ids"], ["format-1"])
 
+    def test_hook_denials_come_from_activity_and_are_correlated_with_the_provider(self):
+        bridge = load_bridge_module()
+        run = self.root / "denials"; run.mkdir()
+        bridge.append_activity(run, "tool", "read permitted", tool="Read", status="allowed", tool_use_id="read-1")
+        self.assertEqual(bridge.hook_denials(run, {"read-1":"Read"}, []), [])
+        bridge.append_activity(run, "tool", "tool path denied", tool="Read", status="denied", text="outside", tool_use_id="read-2")
+        bridge.append_activity(run, "tool", "tool path denied", tool="Glob", status="denied", text="outside", tool_use_id="child-1")
+        provider = [{"type":"result", "permission_denials":[{"tool_name":"Read", "tool_use_id":"read-2"}]}]
+        denials = bridge.hook_denials(run, {"read-1":"Read", "read-2":"Read"}, provider)
+        self.assertEqual([(d["tool_use_id"], d["tool_name"], d["reason"], d["in_provider_stream"], d["in_provider_denials"])
+                          for d in denials],
+                         [("read-2", "Read", "outside", True, True), ("child-1", "Glob", "outside", False, False)])
+        self.assertTrue(all(d["source"] == "bridge_pretooluse_hook" and isinstance(d["activity_seq"], int) for d in denials))
+
     def test_permission_denied_cleanup_records_unknown_receipt_and_cwd_marker(self):
         bridge = load_bridge_module()
         class Proc:
@@ -408,7 +469,10 @@ else: print(json.dumps({'type':'result','subtype':'success','session_id':session
             KeyboardInterrupt(),
         ), 1)
         marker = bridge.unknown_lane_marker(self.repo)
-        self.addCleanup(marker.unlink, missing_ok=True)
+        lane = bridge.lane_identity(self.repo)
+        self.addCleanup(lambda: [path.unlink(missing_ok=True) for path, _ in bridge.unknown_markers(lane)])
+        # The second unknown run must not replace the first run's evidence.
+        self.assertEqual({value["run_id"] for _, value in bridge.unknown_markers(lane)}, {original_run.name, run.name})
         state = json.loads((run / "state.json").read_text())
         receipt = json.loads((run / "receipt.json").read_text())
         error = json.loads((run / "error.json").read_text())

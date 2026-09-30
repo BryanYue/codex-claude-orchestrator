@@ -11,8 +11,12 @@ No open-source license has been selected.
 - Publisher: BryanYue.
 - Marketplace: `codex-claude-team`.
 - Plugin: `codex-claude-orchestrator` (display name: Codex–Claude 协作).
-- Release ref: `v0.5.0`. Use a published fixed tag or full commit SHA; do not
+- Release ref: `v0.6.0`. Use a published fixed tag or full commit SHA; do not
   move a release tag after publishing it.
+- Release boundary: `v0.6.0` includes the user-local CLI policy, reviewed
+  Markdown content updates and execution-evidence fixes. `v0.5.0` remains
+  immutable and retains its historical behavior. Refreshing that fixed ref
+  does not install 0.6.0; use the explicit version-switching steps below.
 - The marketplace entry resolves `./plugins/codex-claude-orchestrator` relative
   to the fetched repository root. The Git market and ZIP catalog share the
   same plugin identity; do not install renamed duplicates to switch sources.
@@ -38,7 +42,7 @@ need no token. An SSH URL still requires working SSH authentication;
 For a machine without an existing `codex-claude-team` marketplace:
 
 ```bash
-codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v0.5.0
+codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v0.6.0
 codex plugin add codex-claude-orchestrator@codex-claude-team
 codex plugin marketplace list --json
 codex plugin list --json
@@ -50,7 +54,7 @@ ref from these list outputs: compare `git -C /market/root rev-parse HEAD` with
 the selected published commit (or inspect the persisted marketplace ref
 read-only). A plugin entry may still say `source=local` because it points into
 the fetched Git snapshot; the marketplace source establishes its Git origin.
-The base MCP version remains 0.5.0; full plugin versions also contain a
+The base MCP version is 0.6.0; full plugin versions also contain a
 cache-refresh suffix.
 
 Before opening a new Codex task, prepare the locked Python dependencies from
@@ -62,9 +66,10 @@ bash /path/from-market-inventory/plugins/codex-claude-orchestrator/scripts/launc
 
 A checkout of the same fixed ref/full plugin version can also warm the same
 version-specific environment. Then open a new Codex task. Follow
-[install-and-recovery.md](install-and-recovery.md) for managed Claude CLI
-preparation and authentication. Registration alone does not prove delegation
-is ready. Do not run `Install.command` after a Git installation: it belongs to
+[install-and-recovery.md](install-and-recovery.md) for local Claude CLI
+discovery and authentication; the plugin uses your own installed Claude CLI
+and never downloads or switches one. Registration alone does not prove
+delegation is ready. Do not run `Install.command` after a Git installation: it belongs to
 the ZIP path and would select the local catalog again.
 
 ## Change a fixed ref or migrate from ZIP
@@ -100,6 +105,16 @@ configured snapshot. It does not advance a fixed ref to a different release.
 Check both inventories after refresh; do not assume it changed the installed
 plugin. Changing the pinned ref explicitly uses the sequence above.
 
+## Run identity in installed caches
+
+Each new run freezes the full plugin version and actual plugin-file digest.
+A Git marketplace cache may contain copied plugin files without Git metadata;
+its source revision is then null/unknown, not an inferred repository commit.
+ZIP provenance is available only while the distribution manifest remains in
+its verified package layout. Compare the run's code digest with the release
+verification record; a missing revision is not evidence of a failed run.
+Version, provenance and byte identity are separate fields.
+
 ## Verification and support
 
 [RELEASE-VERIFICATION.md](../RELEASE-VERIFICATION.md) distinguishes actual
@@ -107,7 +122,9 @@ remote installation, upgrade/rollback and MCP protocol checks from source
 checks, synthetic UI tests and real Claude execution. The remote experiment
 was completed on 2026-09-29 for the two fixed commits recorded there, including
 an invalid-ref recovery and pinned refresh. This is a single-host result,
-not a second-machine, new-user or Claude model execution test.
+not a second-machine, new-user or Claude model execution test. It is a
+historical record for the published release, not verification of the
+0.6.0 installation. The new source/test/provider evidence is listed separately in the same verification document.
 
 Verified rollback reference for this preview:
 `a40de37f583e51f333e61b93b0b2636d7620c1da` (full plugin version

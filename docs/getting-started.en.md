@@ -11,10 +11,12 @@ Use a Mac and prepare the following. This release has been checked on Apple Sili
 | What you need | How to check |
 | --- | --- |
 | Codex desktop | You can sign in, open a project and start a task; your version supports plugins. [Official setup guide](https://developers.openai.com/codex/app) |
-| Claude Code | Install it and sign in with your own account using the [official guide](https://code.claude.com/docs/en/quickstart). The Claude desktop chat app does not replace Claude Code. |
+| Claude Code | Install it and sign in with your own account using the [official guide](https://code.claude.com/docs/en/quickstart). The plugin uses this local Claude Code directly and never downloads or switches its version. The Claude desktop chat app does not replace Claude Code. |
 | uv | Run `uv --version` in a terminal. If it is missing, follow the [installation guide](https://docs.astral.sh/uv/getting-started/installation/). If you already use Homebrew, `brew install uv` is an option. |
 
 The plugin needs Python 3.11 or later. During dependency preparation, uv locates or downloads the required environment. The first download can take some time.
+
+> **About versions:** `v0.6.0` includes the local CLI policy, Codex-reviewed Markdown updates, and execution-evidence and workspace-isolation fixes. The old `v0.5.0` tag is unchanged. Existing installations pinned to it need the [version-switching steps](git-marketplace.md#change-a-fixed-ref-or-migrate-from-zip) to select `v0.6.0`; refreshing a fixed marketplace ref does not advance it to another tag.
 
 ## Install with help from Codex
 
@@ -23,7 +25,7 @@ Paste this request into an existing Codex conversation:
 ```text
 Help me install the Codex–Claude collaboration plugin:
 https://github.com/BryanYue/codex-claude-orchestrator
-Use the fixed v0.5.0 release through a Git marketplace.
+Use the fixed v0.6.0 release through a Git marketplace.
 
 First check that I have a Codex desktop app with plugin commands and uv.
 If codex is not on PATH, check for the CLI bundled with the desktop app.
@@ -53,7 +55,7 @@ codex plugin --help
 Then run these commands one at a time:
 
 ```bash
-codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v0.5.0
+codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v0.6.0
 codex plugin add codex-claude-orchestrator@codex-claude-team
 ```
 
@@ -79,7 +81,7 @@ After installation and dependency preparation, **open your project in Codex and 
 
 Ask Codex:
 
-> Use the Codex–Claude collaboration plugin to check local readiness: the plugin, the Claude execution version and local authentication. Do not send an online model request yet. Prepare a usable Claude version if one is missing, and tell me which sign-in steps I need to complete myself.
+> Use the Codex–Claude collaboration plugin to check local readiness: the plugin, my local Claude Code and local authentication. Do not send an online model request yet. If Claude Code is missing or lacks a feature the plugin needs, tell me what to install or upgrade myself, and which sign-in steps I need to complete.
 
 If sign-in is needed, use the Claude Code executable identified by that check. Do not paste passwords, tokens or authentication files into the conversation. **Local readiness is followed by your first real task, which also checks whether the remote model is usable.**
 
@@ -117,7 +119,7 @@ To switch back to occasional use, say “Only use Claude when I explicitly ask f
 | --- | --- |
 | The plugin or its tools are missing | Confirm it is enabled, then start a new Codex task after installation. |
 | The first startup hangs or times out | Ask Codex to inspect the startup error and confirm dependencies are ready. Avoid repeatedly starting Claude tasks. |
-| The plugin is installed, but Claude is unavailable | Check whether a usable execution version is prepared and whether that Claude Code installation is authenticated. |
+| The plugin is installed, but Claude is unavailable | Check whether your local Claude Code is found, whether it lacks a required option, and whether it is authenticated. If a correction cannot resume after you upgraded Claude Code, ask Codex to start a fresh round. |
 | The workbench did not open | Ask “Open the workbench for this task,” or use the link Codex provides. Opening the page does not require rerunning the task. |
 | No recent activity appears | Ask Codex to check execution status. No new activity does not mean the task has stopped. |
 | You want to update or roll back | Follow the [version-switching steps](git-marketplace.md#change-a-fixed-ref-or-migrate-from-zip). A fixed `v0.5.0` ref does not automatically advance to another release. |

@@ -39,7 +39,7 @@ class UnknownRecoveryTests(unittest.TestCase):
 import json, sys
 a=sys.argv[1:]
 if a == ['--version']: print('2.1.276'); raise SystemExit
-if a == ['--help']: print('-p --model --effort --output-format --json-schema --session-id --resume --permission-mode --tools --allowedTools --disallowedTools --settings --strict-mcp-config --mcp-config --disable-slash-commands'); raise SystemExit
+if a == ['--help']: print('-p --model --effort --output-format --verbose --json-schema --session-id --resume --permission-mode --tools --allowedTools --disallowedTools --settings --strict-mcp-config --mcp-config --disable-slash-commands --no-session-persistence'); raise SystemExit
 if a == ['auth','status','--json']: print(json.dumps({'loggedIn':True})); raise SystemExit
 s=a[a.index('--session-id')+1] if '--session-id' in a else a[a.index('--resume')+1]
 print(json.dumps({'type':'system','subtype':'init','session_id':s,'model':'fixture'}), flush=True)
@@ -74,6 +74,8 @@ print(json.dumps({'type':'result','subtype':'success','session_id':s,'structured
         else:
             os.environ["CLAUDE_BIN"] = self.old_bin
         self.marker.unlink(missing_ok=True)
+        for path, _ in bridge.unknown_markers(bridge.lane_identity(self.repo)):
+            path.unlink(missing_ok=True)
         self.temp.cleanup()
 
     def test_reconcile_requires_fresh_workspace_evidence_and_preserves_unknown_receipt(self):
@@ -225,6 +227,9 @@ print(json.dumps({'type':'result','subtype':'success','session_id':s,'structured
                      "bridge_pid": 99999991, "phase": "pre_dispatch", "status": "failed",
                      "child_started": False, "terminal": True, "reason": "fixture validation failure"}
         path = self.runtime._lifecycle_path(run_id); path.parent.mkdir(parents=True); path.write_text(json.dumps(lifecycle))
+        # _write_bound_record replaced the registry, so setUp's run no longer
+        # exists; drop its marker rather than letting this one overwrite it.
+        self.marker.unlink()
         self.runtime._mark_unknown_lane(str(self.repo), run_id, "fixture stale marker")
 
         restarted = Runtime(self.root / "state")
@@ -233,6 +238,7 @@ print(json.dumps({'type':'result','subtype':'success','session_id':s,'structured
         self.assertEqual(recovered["status"], "failed")
         self.assertEqual(recovered["terminal_evidence"], "bridge_lifecycle")
         self.assertFalse(restarted._unknown_marker(str(self.repo)).exists())
+        self.assertEqual(bridge.unknown_markers(bridge.lane_identity(self.repo)), [])
         fresh = restarted.start({**self.packet, "revision": 2})
         page = restarted.wait(fresh["run_id"], timeout=5)
         while page["snapshot"]["status"] not in {"reported", "blocked", "failed", "cancelled", "timeout", "unknown"}:

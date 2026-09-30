@@ -1,7 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+# Common install directories are fallbacks only; the caller's PATH selects claude and uv.
+export PATH="${PATH:+$PATH:}$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin"
 if [[ "${CLAUDE_BIN:-}" == /* && -x "${CLAUDE_BIN}" ]]; then
   # A concrete nvm npm shim often uses `#!/usr/bin/env node`; make its sibling
   # Node visible only to this MCP child.  We do not initialize nvm or select a

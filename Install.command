@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+export PATH="${PATH:+$PATH:}$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin"
 PLUGIN_ROOT="$ROOT/plugins/codex-claude-orchestrator"
 PLUGIN_VERSION="$(sed -nE 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"([^"[:space:]]+)"[[:space:]]*,?[[:space:]]*$/\1/p' "$PLUGIN_ROOT/.codex-plugin/plugin.json" | head -n 1)"
 if [[ -z "$PLUGIN_VERSION" || "$PLUGIN_VERSION" == *"/"* || "$PLUGIN_VERSION" == *".."* ]]; then

@@ -36,8 +36,11 @@ CONTRACT_RELATIVE_PATHS = (
     "skills/codex-claude-orchestrator/scripts/events.py",
     "skills/codex-claude-orchestrator/scripts/named_workflow.py",
     "skills/codex-claude-orchestrator/scripts/compatibility.py",
+    "skills/codex-claude-orchestrator/scripts/usage.py",
     "scripts/cli_validation.py",
     "scripts/cli_store.py",
+    "scripts/content_store.py",
+    "scripts/plugin_identity.py",
 )
 
 OMIT_DIR_NAMES = {".venv", "__pycache__", ".uv-cache", ".git", "dist",
@@ -176,6 +179,13 @@ def contract_digest(blobs: dict[Path, bytes]) -> str:
     return hashlib.sha256(json.dumps(entries, sort_keys=True).encode()).hexdigest()
 
 
+def plugin_code_digest(blobs: dict[Path, bytes]) -> str:
+    """Digest of the plugin files (path + byte SHA-256), as scripts/plugin_identity.code_digest computes it at run time."""
+    entries = sorted([path.relative_to(PLUGIN_RELATIVE).as_posix(), hashlib.sha256(content).hexdigest()]
+                     for path, content in blobs.items() if path.is_relative_to(PLUGIN_RELATIVE))
+    return hashlib.sha256(json.dumps(entries, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+
+
 def exists_or_symlink(path: Path) -> bool:
     return os.path.lexists(path)
 
@@ -227,6 +237,7 @@ def build(*, source_root: Path, output: Path | None = None) -> dict:
     require_matching_base_version(blobs, base)
     require_marketplace_identity(blobs)
     digest = contract_digest(blobs)
+    code_digest = plugin_code_digest(blobs)
 
     if output is None:
         output = source_root / "dist" / f"codex-claude-orchestrator-macos-{base}"
@@ -255,6 +266,7 @@ def build(*, source_root: Path, output: Path | None = None) -> dict:
             "base_version": base,
             "source_commit": commit,
             "contract_digest": digest,
+            "plugin_code_digest": code_digest,
             "file_count": len(manifest),
         }
         release_bytes = (json.dumps(release_manifest, indent=2, sort_keys=True) + "\n").encode()
@@ -287,7 +299,7 @@ def build(*, source_root: Path, output: Path | None = None) -> dict:
         "bytes": archive_path.stat().st_size, "files": len(manifest),
         "sha256": archive_digest, "version": base,
         "plugin_version": full_version, "source_commit": commit,
-        "contract_digest": digest,
+        "contract_digest": digest, "plugin_code_digest": code_digest,
     }
 
 

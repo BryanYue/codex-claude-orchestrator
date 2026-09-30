@@ -1,4 +1,4 @@
-# Codex–Claude Collaboration · 0.5.0
+# Codex–Claude Collaboration · 0.6.0
 
 [简体中文](README.md) · **English**
 
@@ -39,7 +39,7 @@ Small tasks can stay with Codex. You can also choose who handles a particular ta
 ### 1. Have these ready
 
 - **Codex desktop**, signed in, with a version that supports plugins. [Setup guide](https://developers.openai.com/codex/app)
-- **Claude Code**, installed locally with working authentication and available usage. [Install and sign in](https://code.claude.com/docs/en/quickstart)
+- **Claude Code**, installed locally with working authentication and available usage. The plugin uses your local Claude Code directly and never downloads, updates or switches its version; you upgrade it the official way. [Install and sign in](https://code.claude.com/docs/en/quickstart)
 - **uv**, which prepares the plugin's runtime environment. [Installation guide](https://docs.astral.sh/uv/getting-started/installation/)
 
 This release has been checked on an **Apple Silicon Mac**. Intel Macs have not been separately verified; Windows and Linux are outside this release's support scope.
@@ -49,11 +49,13 @@ This release has been checked on an **Apple Silicon Mac**. Intel Macs have not b
 Run these commands in your terminal, one at a time:
 
 ```bash
-codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v0.5.0
+codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v0.6.0
 codex plugin add codex-claude-orchestrator@codex-claude-team
 ```
 
 The first adds the plugin source; the second installs the plugin. The repository is public, so no GitHub invitation or sign-in is needed.
+
+> **About versions:** `v0.6.0` includes the local CLI policy, Codex-reviewed Markdown updates, and execution-evidence and workspace-isolation fixes. The old `v0.5.0` tag is unchanged. Existing installations pinned to it need the [version-switching steps](docs/git-marketplace.md#change-a-fixed-ref-or-migrate-from-zip) to select `v0.6.0`; refreshing a fixed marketplace ref does not advance it to another tag.
 
 **On first installation, prepare the dependencies before opening a new Codex task.** If you prefer help with the terminal, see `codex: command not found`, or have an older local installation, follow the [step-by-step guide](docs/getting-started.en.md). It also includes an installation request you can paste into Codex.
 
@@ -105,7 +107,7 @@ Light and dark themes and narrow panels are supported. The page is for viewing; 
 
 **Do I need both accounts? Whose allowance is used?**
 
-You need your own Codex and Claude Code access. The plugin does not supply or share accounts. Claude execution, the first online readiness check and any version compatibility checks you enable can use your Claude allowance. Viewing local status does not send a model request.
+You need your own Codex and Claude Code access. The plugin does not supply or share accounts. Claude execution and the first online readiness check use your Claude allowance. Viewing local status does not send a model request.
 
 **Where does my code go?**
 
@@ -114,6 +116,14 @@ Task instructions and files Claude is allowed to read are sent to the model serv
 **Will it change my whole project automatically?**
 
 Read-only reviews do not edit files. Implementation tasks have an explicit file scope, and Codex checks the result. The plugin does not automatically merge or publish code. You can try a single task without enabling the ongoing project workflow.
+
+**Does the collaboration guide update online?**
+
+Starting in 0.6.0, Codex's collaboration guide (Markdown) can be downloaded from a fixed directory of this plugin's repository. It is checked once on first real use in each Codex session. New content is first safety-reviewed by Codex as untrusted material, and only then used for tasks started afterwards; running and resumed tasks keep their original version. You can ask Codex to disable the online content or roll back to the previously approved version at any time. When offline or when a check fails, the last approved version stays in use; before any content has been downloaded, the guide shipped with the plugin is used. This never updates the plugin code, tool permissions or your local Claude Code.
+
+**What do the tokens and cost in the workbench mean?**
+
+The workbench labels are in Chinese. “CLI 会话累计估算” (CLI session cumulative estimate) lists, per model, the cumulative usage and estimated cost reported by the Claude CLI, including subagents; for a resumed session it may include earlier rounds. “主代理最终回报” (main agent final report) is only the main agent's last report, not the task total, and the two are never added together. “未缓存输入” (uncached input) excludes cache reads and writes. The cost is the Claude CLI's client-side estimate, not an actual charge or remaining subscription quota.
 
 **Installed, but nothing starts?**
 

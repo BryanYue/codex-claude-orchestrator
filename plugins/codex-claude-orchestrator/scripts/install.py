@@ -12,10 +12,8 @@ import tempfile
 import hashlib
 import re
 import stat
-import time
 import diagnostics
-import cli_store
-from executable_locator import configure_claude_bin, external_mode_requested
+from executable_locator import configure_claude_bin
 
 
 def execute(args):
@@ -240,42 +238,14 @@ def register_plugin(cli, target, version, backup, *, add_marketplace, candidate_
             return registration
 
 
-def prepare_managed_cli() -> dict:
-    """Stage the managed CLI without making plugin registration depend on it.
-
-    A failed private bootstrap leaves the plugin install and its diagnostics
-    usable.  This helper never calls Anthropic's global installer; the store
-    reports a concrete recovery action instead of claiming managed readiness.
-    """
-    try:
-        selection = cli_store.get_selection()
-        if selection.get("mode") == "external" or external_mode_requested():
-            return {"status": "external_preserved", "selection": selection,
-                    "action": "User-selected external Claude CLI mode was preserved. Run the explicit claude_cli_update prepare action to switch to managed retention."}
-        print("正在检查并准备插件支持的 Claude CLI；如需下载，将显示可续传进度。", flush=True)
-        last_percent = -5
-        last_printed_at = 0.0
-
-        def progress(received: int, total: int | None) -> None:
-            nonlocal last_percent, last_printed_at
-            now = time.monotonic()
-            percent = int(received * 100 / total) if total else 0
-            if received != total and percent < last_percent + 5 and now - last_printed_at < 15:
-                return
-            last_percent = percent
-            last_printed_at = now
-            received_mib = received / (1024 * 1024)
-            if total:
-                print(f"Claude CLI 下载：{received_mib:.1f}/{total / (1024 * 1024):.1f} MiB ({percent}%)",
-                      flush=True)
-            else:
-                print(f"Claude CLI 下载：{received_mib:.1f} MiB", flush=True)
-
-        outcome = cli_store.prepare(progress=progress)
-        print(f"Claude CLI 准备结果：{outcome.get('status', 'unknown')}。", flush=True)
-        return outcome
-    except (RuntimeError, ValueError, OSError) as error:
-        return {"status": "bootstrap_error", "action": f"Managed Claude CLI preparation failed: {error}"}
+def local_cli_summary(readiness: dict) -> dict:
+    """Describe the local Claude CLI the plugin will use; installs nothing."""
+    claude = readiness.get("claude") if isinstance(readiness.get("claude"), dict) else {}
+    discovery = claude.get("discovery") if isinstance(claude.get("discovery"), dict) else {}
+    return {"policy": "user_local_cli", "version_management": "retired",
+            "path": discovery.get("path"), "source": discovery.get("source"),
+            "version": claude.get("version"), "ready": bool(claude.get("ready")),
+            "note": "安装程序不下载、安装、更新或切换 Claude CLI；插件只使用本机已安装或用 --configure-claude-bin 明确配置的 CLI。"}
 
 
 def main():
@@ -340,10 +310,7 @@ def main():
         if not readiness['ready']:
             raise RuntimeError("安装检查完成，Claude 委派尚未就绪。")
         return
-    managed_cli = prepare_managed_cli()
-    print(json.dumps({"claude_cli_management": managed_cli}, ensure_ascii=False, indent=2), flush=True)
-    if managed_cli.get("status") != "ready":
-        print("Claude 私有受管版本尚未就绪；插件继续安装用于诊断。完成输出中的 bootstrap action 后，再运行 claude_cli_update prepare/validate。", flush=True)
+    print(json.dumps({"claude_cli": local_cli_summary(readiness)}, ensure_ascii=False, indent=2), flush=True)
     # The catalog is the local marketplace source.  Hold one installer lock
     # across its swap and the host confirmation so failure recovery cannot
     # roll back another installer's catalog.

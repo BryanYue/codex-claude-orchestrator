@@ -30,6 +30,9 @@ CONTRACT_SOURCES = {
     "skills/codex-claude-orchestrator/scripts/compatibility.py": "# compatibility\n",
     "scripts/cli_validation.py": "# cli_validation\n",
     "scripts/cli_store.py": "# cli_store\n",
+    "scripts/content_store.py": "# content_store\n",
+    "scripts/plugin_identity.py": "# plugin_identity\n",
+    "skills/codex-claude-orchestrator/scripts/usage.py": "# usage\n",
 }
 
 

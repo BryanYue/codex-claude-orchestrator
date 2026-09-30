@@ -8,7 +8,6 @@ import os
 import secrets
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 from pathlib import Path
@@ -20,6 +19,7 @@ try:
 except ImportError:  # executed from the scripts directory by the MCP server
     import bridge  # type: ignore
     from events import append, latest, latest_meaningful, read, statistics  # type: ignore
+import content_store  # bridge placed the plugin scripts directory on sys.path
 
 
 ACTIVE = {"starting", "running", "executing", "collecting", "cancelling"}
@@ -78,6 +78,7 @@ class Runtime:
             directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.registry_path = self.state_root / "registry.json"
         self.registry_lock_path = self.state_root / "registry.lock"
+        self.content = content_store.ContentStore(self.state_root / "content")
         self.owner_id = secrets.token_urlsafe(12)
         self._guard = threading.RLock()
         self._workers: dict[str, tuple[subprocess.Popen[str], Any]] = {}
@@ -103,60 +104,126 @@ class Runtime:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
             return result
 
-    def _lane_lock(self, cwd: str):
-        cwd = str(Path(cwd).resolve())
+    def _lane_lock(self, lane: str):
+        lane = str(Path(lane).resolve())
         with _LOCAL_LANES_GUARD:
-            if cwd in _LOCAL_LANES:
-                raise RuntimeError("another supervised run already owns this cwd")
-            return self._open_lane_lock(cwd)
+            if lane in _LOCAL_LANES:
+                raise RuntimeError("another supervised run already owns this cwd's worktree lane")
+            return self._open_lane_lock(lane)
 
-    def _open_lane_lock(self, cwd: str):
-        root = Path(tempfile.gettempdir()) / "codex-claude-cwd-locks"
-        root.mkdir(mode=0o700, exist_ok=True)
-        key = hashlib.sha256(cwd.encode()).hexdigest()
-        handle = (root / f"{key}.lock").open("a+")
+    def _open_lane_lock(self, lane: str):
+        handle = bridge.lane_lock_path(lane).open("a+")
         try:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             handle.close()
-            raise RuntimeError("another supervised run already owns this cwd")
-        _LOCAL_LANES[cwd] = handle
+            raise RuntimeError("another supervised run already owns this cwd's worktree lane")
+        _LOCAL_LANES[lane] = handle
         return handle
 
-    def _release_lane(self, cwd: str, handle) -> None:
-        cwd = str(Path(cwd).resolve())
+    def _release_lane(self, lane: str, handle) -> None:
+        # Match by handle: a watcher knows the run's cwd, which for a Git
+        # subdirectory is not the lane key it holds.
         with _LOCAL_LANES_GUARD:
-            if _LOCAL_LANES.get(cwd) is handle:
-                _LOCAL_LANES.pop(cwd, None)
+            for key, value in list(_LOCAL_LANES.items()):
+                if value is handle:
+                    _LOCAL_LANES.pop(key, None)
             handle.close()
 
+    @staticmethod
+    def _record_lane(record: dict[str, Any]) -> str:
+        lane = record.get("lane_identity")
+        if isinstance(lane, str) and lane:
+            return lane
+        try:
+            return bridge.recorded_lane_identity(record.get("cwd"))
+        except bridge.BridgeError as exc:
+            raise RuntimeError(str(exc)) from exc
+
+    @staticmethod
+    def _legacy_lane_key(record: dict[str, Any]) -> str | None:
+        """Exact-cwd lock key an older release held for a record without a lane identity."""
+        if isinstance(record.get("lane_identity"), str) or not isinstance(record.get("cwd"), str):
+            return None
+        return str(Path(record["cwd"]).resolve())
+
+    @staticmethod
+    def _record_in_lane(record: dict[str, Any], lane: str) -> bool:
+        recorded = record.get("lane_identity")
+        if isinstance(recorded, str) and recorded:
+            return recorded == lane
+        cwd = record.get("cwd")
+        if not isinstance(cwd, str) or not Path(cwd).is_absolute():
+            return True  # unattributable evidence blocks rather than disappears
+        return bridge.recorded_cwd_in_lane(cwd, lane)
+
+    def _hold_record_lanes(self, record: dict[str, Any]) -> list[tuple[str, Any]]:
+        """Hold the record's lane and, for a pre-identity record, the old exact-cwd key too.
+
+        A free worktree lane alone cannot prove that an older release is not
+        still holding its subdirectory lock.
+        """
+        keys = [self._record_lane(record)]
+        legacy = self._legacy_lane_key(record)
+        if legacy is not None and legacy != str(Path(keys[0]).resolve()):
+            keys.append(legacy)
+        held: list[tuple[str, Any]] = []
+        try:
+            for key in keys:
+                held.append((key, self._lane_lock(key)))
+        except BaseException:
+            self._release_lanes(held)
+            raise
+        return held
+
+    def _release_lanes(self, held: list[tuple[str, Any]]) -> None:
+        for key, handle in reversed(held):
+            self._release_lane(key, handle)
+
+    def _run_lane(self, run_id: str, cwd: str) -> tuple[str, bool, str]:
+        """Return (lane key, whether it is an established worktree lane, recorded cwd)."""
+        record = self._registry().get("runs", {}).get(run_id)
+        if isinstance(record, dict):
+            lane = record.get("lane_identity")
+            if isinstance(lane, str) and lane:
+                return lane, True, record.get("cwd") if isinstance(record.get("cwd"), str) else cwd
+            if isinstance(record.get("cwd"), str):
+                cwd = record["cwd"]
+        try:
+            key, established = bridge.recorded_lane(cwd)
+        except bridge.BridgeError as exc:
+            raise RuntimeError(str(exc)) from exc
+        return key, established, cwd
+
     def _unknown_marker(self, cwd: str) -> Path:
-        root = Path(tempfile.gettempdir()) / "codex-claude-cwd-unknown"
-        root.mkdir(mode=0o700, exist_ok=True)
-        return root / (hashlib.sha256(str(Path(cwd).resolve()).encode()).hexdigest() + ".json")
+        return bridge.unknown_marker_path(bridge.recorded_lane_identity(str(Path(cwd).resolve())))
 
     def _mark_unknown_lane(self, cwd: str, run_id: str, reason: str) -> None:
-        marker = self._unknown_marker(cwd)
-        tmp = marker.with_name("." + marker.name + ".tmp")
-        tmp.write_text(json.dumps({"cwd": cwd, "run_id": run_id, "reason": reason, "recorded_at": time.time()}) + "\n")
-        os.replace(tmp, marker)
+        lane, established, recorded_cwd = self._run_lane(run_id, cwd)
+        # Replaces this run's own launch-intent marker; the state root keeps
+        # the evidence locatable from another Runtime's admission failure.
+        bridge.publish_unknown_marker(lane, {"cwd": recorded_cwd, "run_id": run_id, "reason": reason,
+                                             "state_root": str(self.state_root), "recorded_at": time.time()},
+                                      established=established)
 
-    def _require_matching_unknown_marker(self, cwd: str, run_id: str) -> Path:
-        """Return this run's marker, rejecting a malformed or foreign one."""
-        marker = self._unknown_marker(cwd)
-        if not marker.exists():
-            return marker
-        marker_value = self._read_json(marker)
-        if not isinstance(marker_value, dict) or marker_value.get("run_id") != run_id:
+    def _own_unknown_markers(self, cwd: str, run_id: str) -> tuple[list[Path], list[Path]]:
+        ours: list[Path] = []
+        others: list[Path] = []
+        for path, value in bridge.unknown_markers(self._run_lane(run_id, cwd)[0]):
+            (ours if isinstance(value, dict) and value.get("run_id") == run_id else others).append(path)
+        return ours, others
+
+    def _require_matching_unknown_marker(self, cwd: str, run_id: str) -> list[Path]:
+        """Return this run's markers, rejecting a lane whose only markers are foreign or malformed."""
+        ours, others = self._own_unknown_markers(cwd, run_id)
+        if others and not ours:
             raise RuntimeError("cwd unknown marker belongs to another or malformed recovery record; it was not cleared")
-        return marker
+        return ours
 
     def _clear_matching_unknown_marker(self, cwd: str, run_id: str) -> None:
-        """Clear only this run's admission marker while its CWD lane is held."""
-        marker = self._require_matching_unknown_marker(cwd, run_id)
-        if not marker.exists():
-            return
-        marker.unlink()
+        """Clear only this run's admission markers; other runs' markers keep blocking the lane."""
+        for marker in self._own_unknown_markers(cwd, run_id)[0]:
+            marker.unlink(missing_ok=True)
 
     @staticmethod
     def _has_reconciliation(record: dict[str, Any]) -> bool:
@@ -168,15 +235,15 @@ class Runtime:
         return record.get("status") == "unknown" and not cls._has_reconciliation(record)
 
     def _reconcile_incomplete(self) -> None:
-        # A free lane proves that no bridge still owns the CWD.  Before falling
-        # back to unknown, adopt a terminal receipt only when it is bound to the
-        # exact run/packet and all recorded process groups are gone.
+        # A free lane proves that no bridge still owns the worktree.  Before
+        # falling back to unknown, adopt a terminal receipt only when it is
+        # bound to the exact run/packet and all recorded process groups are gone.
         data = self._registry()
         for run_id, record in data.get("runs", {}).items():
             if record.get("status") not in ACTIVE and not self._unreconciled_unknown(record):
                 continue
             try:
-                lock = self._lane_lock(record["cwd"])
+                held = self._hold_record_lanes(record)
             except RuntimeError:
                 if record.get("status") in ACTIVE:
                     self._refresh(run_id, allow_unowned_active=True)
@@ -188,7 +255,7 @@ class Runtime:
                 elif record.get("status") in ACTIVE:
                     self._mark_run_unknown(run_id, "runtime restarted without a confirmed owner; manual reconciliation required")
             finally:
-                self._release_lane(record["cwd"], lock)
+                self._release_lanes(held)
 
     def _packet_path(self, run_id: str) -> Path:
         return self.packets_root / f"{run_id}.json"
@@ -326,11 +393,7 @@ class Runtime:
         if current.get("status") == "unknown":
             self._mark_unknown_lane(current.get("cwd", ""), run_id, "bridge returned a trustworthy unknown terminal receipt")
             return
-        marker = self._unknown_marker(current.get("cwd", ""))
-        if marker.exists():
-            marker_value = self._read_json(marker)
-            if isinstance(marker_value, dict) and marker_value.get("run_id") == run_id:
-                marker.unlink()
+        self._clear_matching_unknown_marker(current.get("cwd", ""), run_id)
 
     def _sync_unowned(self, run_id: str) -> None:
         with self._guard:
@@ -346,7 +409,7 @@ class Runtime:
                 if candidate is None or candidate.get("status") == "unknown":
                     return
             try:
-                lane = self._lane_lock(record["cwd"])
+                held = self._hold_record_lanes(record)
             except RuntimeError:
                 if record.get("status") in ACTIVE:
                     self._refresh(run_id, allow_unowned_active=True)
@@ -361,21 +424,22 @@ class Runtime:
                 elif current.get("status") in ACTIVE:
                     self._mark_run_unknown(run_id, "bridge ownership ended without a trustworthy terminal receipt; manual reconciliation required")
             finally:
-                self._release_lane(record["cwd"], lane)
+                self._release_lanes(held)
 
     def _run_dir(self, run_id: str) -> Path:
         if not isinstance(run_id, str) or not run_id.startswith("run-") or any(c not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-" for c in run_id[4:]):
             raise ValueError("invalid run_id")
         return self.runs_root / run_id
 
-    def start(self, packet: dict, timeout: float = 300, resume_run_id: str | None = None) -> dict:
+    def start(self, packet: dict, timeout: float = 300, resume_run_id: str | None = None, expected_content_digest: str | None = None) -> dict:
         if not isinstance(timeout, (int, float)) or timeout <= 0:
             raise ValueError("timeout must be positive")
         normalized = bridge.validate_packet(packet)
+        lane_identity = bridge.lane_identity(Path(normalized["cwd"]), normalized["workspace_kind"])
         with self._guard:
             if self._closing:
                 raise RuntimeError("runtime is closing; it will not dispatch a new Claude process")
-            lane = self._lane_lock(normalized["cwd"])
+            lane = self._lane_lock(lane_identity)
             proc = None
             thread = None
             stdout = None
@@ -383,21 +447,37 @@ class Runtime:
             cancel_request = None
             try:
                 # Holding the lane lets this Runtime safely settle an orphaned
-                # prior record before deciding whether a new dispatch is legal.
+                # prior record from any cwd of this worktree before deciding
+                # whether a new dispatch is legal.
                 for old in self._registry().get("runs", {}).values():
-                    if old.get("cwd") != normalized["cwd"] or (old.get("status") not in ACTIVE and not self._unreconciled_unknown(old)):
+                    if old.get("status") not in ACTIVE and not self._unreconciled_unknown(old):
                         continue
-                    evidence = self._trusted_terminal(old)
-                    if evidence:
-                        self._adopt_trusted_terminal(old["run_id"], evidence)
-                    elif old.get("status") in ACTIVE:
-                        self._mark_run_unknown(old["run_id"], "prior bridge no longer owns the cwd and has no trustworthy terminal receipt")
-                if self._unknown_marker(normalized["cwd"]).exists():
-                    raise RuntimeError("cwd has an unknown prior supervised run; reconcile it manually before dispatch")
+                    if not isinstance(old.get("cwd"), str) or not self._record_in_lane(old, lane_identity):
+                        continue
+                    legacy = self._legacy_lane_key(old)
+                    legacy_handle = None
+                    if legacy is not None and legacy != lane_identity:
+                        try:
+                            legacy_handle = self._lane_lock(legacy)
+                        except RuntimeError as exc:
+                            raise RuntimeError("a supervised run recorded before worktree lanes may still own "
+                                               f"{old['cwd']}; wait for it or reconcile it before dispatch") from exc
+                    try:
+                        evidence = self._trusted_terminal(old)
+                        if evidence:
+                            self._adopt_trusted_terminal(old["run_id"], evidence)
+                        elif old.get("status") in ACTIVE:
+                            self._mark_run_unknown(old["run_id"], "prior bridge no longer owns the cwd and has no trustworthy terminal receipt")
+                    finally:
+                        if legacy_handle is not None:
+                            self._release_lane(legacy, legacy_handle)
+                if bridge.unknown_markers(lane_identity):
+                    raise RuntimeError("cwd worktree has an unknown prior supervised run; reconcile it manually before dispatch")
                 registry = self._registry()
                 same_task = [r for r in registry.get("runs", {}).values() if r.get("task_id") == normalized["task_id"] and r.get("cwd") == normalized["cwd"]]
-                if any(self._unreconciled_unknown(r) for r in registry.get("runs", {}).values() if r.get("cwd") == normalized["cwd"]):
-                    raise RuntimeError("cwd has an unknown recorded run; reconcile it manually before dispatch")
+                if any((self._unreconciled_unknown(r) or r.get("status") in ACTIVE) and self._record_in_lane(r, lane_identity)
+                       for r in registry.get("runs", {}).values()):
+                    raise RuntimeError("cwd worktree has an unknown or unsettled recorded run; reconcile it manually before dispatch")
                 if any(r.get("revision") == normalized["revision"] for r in same_task):
                     raise ValueError("task revision already exists for this cwd")
                 if same_task and normalized["revision"] <= max(r["revision"] for r in same_task):
@@ -414,6 +494,7 @@ class Runtime:
                 else:
                     candidates = [r for r in same_task if r.get("revision", 0) < normalized["revision"]]
                     previous = max(candidates, key=lambda r: r["revision"]) if candidates else None
+                content_binding = self._content_binding(previous if resume_run_id else None, expected_content_digest)
                 cli_descriptor = bridge.create_cli_descriptor(normalized, Path(previous["run_dir"]) if resume_run_id else None)
                 run_id = "run-" + secrets.token_urlsafe(12).replace("-", "_")
                 run_dir = self._run_dir(run_id)
@@ -423,10 +504,15 @@ class Runtime:
                 cli_path = self.packets_root / f"{run_id}.cli.json"
                 bridge.dump(cli_path, cli_descriptor)
                 cli_sha256 = self._file_sha256(cli_path)
+                content_path = content_sha256 = None
+                if content_binding is not None:
+                    content_path = self.packets_root / f"{run_id}.content.json"
+                    bridge.dump(content_path, content_binding)
+                    content_sha256 = self._file_sha256(content_path)
                 lifecycle_path = self._lifecycle_path(run_id)
                 lifecycle_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
                 record = {"run_id": run_id, "task_id": normalized["task_id"], "revision": normalized["revision"], "cwd": normalized["cwd"],
-                          "status": "starting", "phase": "starting", "started_at": time.time(), "updated_at": time.time(),
+                          "lane_identity": lane_identity, "status": "starting", "phase": "starting", "started_at": time.time(), "updated_at": time.time(),
                           "last_activity_at": None, "model": normalized["model"], "session_id": None, "summary": "bridge starting",
                           "requested_model": normalized["model"], "effort": normalized["effort"],
                           "objective": normalized["objective"], "role": normalized["role"],
@@ -436,6 +522,9 @@ class Runtime:
                           "owner_id": self.owner_id, "packet_sha256": packet_sha256, "lifecycle_file": str(lifecycle_path),
                           "cli_descriptor_file": str(cli_path), "cli_descriptor_sha256": cli_sha256,
                           "cli_identity_id": cli_descriptor.get("identity_id"),
+                          "content_binding": content_store.binding_summary(content_binding),
+                          "content_binding_file": str(content_path) if content_path else None,
+                          "content_binding_sha256": content_sha256,
                           "changed_files": None, "workspace_changes": workspace_changes(None, None),
                           "environment": {"isolation": "bridge hook constraints only; no OS sandbox claim"}}
                 record["events_count"] = 0
@@ -450,7 +539,9 @@ class Runtime:
                            "--cli-descriptor", str(cli_path), "--cli-descriptor-sha256", cli_sha256]
                 if resume_run_id:
                     command += ["--resume-from", previous["run_dir"]]
-                stdout = (self.logs_root / f"{run_id}.stdout.log").open("w", encoding="utf-8")
+                if content_path is not None:
+                    command += ["--content-binding", str(content_path), "--content-binding-sha256", content_sha256]
+                stdout =(self.logs_root / f"{run_id}.stdout.log").open("w", encoding="utf-8")
                 stderr = (self.logs_root / f"{run_id}.stderr.log").open("w", encoding="utf-8")
                 environment = dict(os.environ)
                 environment["CODEX_CLAUDE_LANE_FD"] = str(lane.fileno())
@@ -521,7 +612,7 @@ class Runtime:
                         for handle in (stdout, stderr):
                             if handle is not None and not handle.closed:
                                 handle.close()
-                        self._release_lane(normalized["cwd"], lane)
+                        self._release_lane(lane_identity, lane)
                     raise
                 if "run_id" in locals():
                     try:
@@ -532,8 +623,33 @@ class Runtime:
                                                                               summary=f"bridge spawn failed before process start: {exc}"))
                     except Exception:
                         pass
-                self._release_lane(normalized["cwd"], lane)
+                self._release_lane(lane_identity, lane)
                 raise
+
+    def _content_binding(self, previous: dict[str, Any] | None, expected_digest: str | None = None) -> dict[str, Any] | None:
+        """Fresh tasks pin the effective reviewed content; a resume keeps the prior run's pin."""
+        try:
+            if previous is None:
+                return self.content.pin(expected_digest, require_read=True)
+            path = Path(previous["run_dir"]) / "content-binding.json"
+            expected = previous.get("content_binding_sha256")
+            if not path.is_file():
+                if expected:
+                    raise RuntimeError("the prior run's pinned coordination content record is missing; start a fresh revision")
+                if expected_digest is not None:
+                    raise RuntimeError("legacy resumed run has no pinned coordination content; do not substitute current content")
+                return None  # recorded before content pinning existed
+            binding = self._read_json(path)
+            if expected:
+                pinned = self.packets_root / f"{previous.get('run_id')}.content.json"
+                if self._file_sha256(pinned) != expected or self._read_json(pinned) != binding:
+                    raise RuntimeError("the prior run's pinned coordination content record changed; start a fresh revision")
+            content_store.verify_binding(binding)
+            if expected_digest is not None and expected_digest != binding["digest"]:
+                raise RuntimeError("resume must use the prior run's pinned coordination content")
+            return binding
+        except content_store.ContentError as exc:
+            raise RuntimeError(str(exc)) from exc
 
     def _watch(self, run_id, proc, lane, stdout, stderr) -> None:
         packet = self._read_json(self._packet_path(run_id)) or {}
@@ -645,6 +761,10 @@ class Runtime:
         receipt_reason = receipt.get("reason")
         has_summary = bool(structured_summary or state_error or receipt_reason)
         summary = structured_summary or state_error or receipt_reason or "run state recorded"
+        if structured_summary and status in {"failed", "cancelled", "timeout", "blocked", "unknown"}:
+            summary = f"执行状态 {status}；报告已保留，未验收。"
+            if state_error or receipt_reason:
+                summary += " " + str(state_error or receipt_reason)
         if local_terminal_pending:
             summary = current.get("summary") or "bridge finalizing terminal evidence"
         if unconfirmed_unowned_terminal:
@@ -822,6 +942,45 @@ class Runtime:
             return None
         return lifecycle
 
+    def _recorded_cwd_observation_root(self, record: dict[str, Any], packet: dict[str, Any]) -> Path | None:
+        """Return None to observe at the verified cwd, the verified root for a deleted cwd, or refuse.
+
+        The persisted packet is never rewritten.  It must still be the one this
+        record dispatched, because its cwd, owned and protected files define
+        the coordinates the snapshot reproduces.  Records without a lane
+        identity keep their earlier present-cwd behavior.
+        """
+        cwd = packet.get("cwd")
+        present = isinstance(cwd, str) and os.path.lexists(cwd)
+        lane = record.get("lane_identity")
+        established = isinstance(lane, str) and bool(lane)
+        if packet["workspace_kind"] != "git":
+            if present:
+                return None
+            raise RuntimeError("recorded artifact root is missing; it cannot be observed from another location")
+        if not established:
+            if present:
+                return None
+            raise RuntimeError("recorded cwd is missing and the run predates worktree lanes; "
+                               "recreate the directory to inspect it")
+        if cwd != record.get("cwd") or packet.get("task_id") != record.get("task_id") \
+                or packet.get("revision") != record.get("revision"):
+            raise RuntimeError("packet.json does not match this run record; its workspace cannot be observed")
+        expected_sha = record.get("packet_sha256")
+        if not present and expected_sha is not None:
+            dispatched_path = self._packet_path(record["run_id"])
+            dispatched = self._read_json(dispatched_path)
+            coordinates = ("task_id", "revision", "cwd", "owned_files", "protected_files")
+            if (not isinstance(expected_sha, str) or self._file_sha256(dispatched_path) != expected_sha
+                    or not isinstance(dispatched, dict)
+                    or any(dispatched.get(key) != packet.get(key) for key in coordinates)
+                    or dispatched.get("workspace_kind", "git") != packet["workspace_kind"]):
+                raise RuntimeError("dispatched packet binding cannot be verified; a deleted cwd cannot be observed elsewhere")
+        try:
+            return bridge.recorded_cwd_observation_root(cwd, lane)
+        except bridge.BridgeError as exc:
+            raise RuntimeError(f"recorded cwd identity cannot be verified for its worktree lane: {exc}") from exc
+
     def _recovery_details(self, run_id: str, *, lane_available: bool | None = None) -> dict[str, Any]:
         record = self._registry().get("runs", {}).get(run_id)
         if not record:
@@ -870,10 +1029,14 @@ class Runtime:
                 # meaning was Git, so preserve that recovery path explicitly.
                 packet = dict(packet)
                 packet.setdefault("workspace_kind", "git")
-                snapshot = bridge.workspace_snapshot(packet)
+                observed_root = self._recorded_cwd_observation_root(record, packet)
+                snapshot = bridge.workspace_snapshot(packet, worktree_root=observed_root)
                 digest = snapshot.get("workspace_digest")
                 workspace = {"state": "observed", "digest": digest if isinstance(digest, str) else self._digest(snapshot),
                              "kind": snapshot.get("kind", packet["workspace_kind"])}
+                if observed_root is not None:
+                    workspace.update(observed_at="established_worktree_root", observed_root=str(observed_root),
+                                     recorded_cwd=packet["cwd"], recorded_cwd_present=False)
                 recorded = self._read_json(run_dir / "workspace_after.json")
                 if not isinstance(recorded, dict):
                     recorded = self._read_json(run_dir / "git_after.json")
@@ -907,15 +1070,14 @@ class Runtime:
             record = self._registry().get("runs", {}).get(run_id)
             if not record:
                 raise ValueError("run_id was not found")
-            lane = None
             try:
-                lane = self._lane_lock(record["cwd"])
+                held = self._hold_record_lanes(record)
             except RuntimeError:
                 return self._recovery_details(run_id, lane_available=False)
             try:
                 return self._recovery_details(run_id, lane_available=True)
             finally:
-                self._release_lane(record["cwd"], lane)
+                self._release_lanes(held)
 
     def reconcile(self, run_id: str, reason: str, evidence: list[str], expected_workspace_digest: str | None = None) -> dict[str, Any]:
         """Record a manual unknown-run reconciliation; never revive the old run."""
@@ -929,7 +1091,7 @@ class Runtime:
             record = self._registry().get("runs", {}).get(run_id)
             if not record:
                 raise ValueError("run_id was not found")
-            lane = self._lane_lock(record["cwd"])
+            held = self._hold_record_lanes(record)
             try:
                 detail = self._recovery_details(run_id, lane_available=True)
                 actual_digest = detail["workspace"].get("digest")
@@ -953,6 +1115,7 @@ class Runtime:
                         raise RuntimeError("expected_workspace_digest does not match the recorded reconciliation")
                     if actual_digest != recorded_digest:
                         raise RuntimeError("workspace changed since recorded reconciliation; marker was not cleared")
+                    self._require_matching_unknown_marker(current["cwd"], run_id)
                     self._clear_matching_unknown_marker(current["cwd"], run_id)
                     return self.snapshot(run_id)
                 if not detail["eligible"]:
@@ -980,7 +1143,7 @@ class Runtime:
                 append(run_dir, "reconciliation", "unknown run manually confirmed stopped", status="unknown")
                 return self.snapshot(run_id)
             finally:
-                self._release_lane(record["cwd"], lane)
+                self._release_lanes(held)
 
     def snapshot(self, run_id: str) -> dict:
         self._run_dir(run_id)

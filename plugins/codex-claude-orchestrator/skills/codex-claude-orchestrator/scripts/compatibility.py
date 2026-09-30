@@ -1,8 +1,10 @@
-"""Explicitly tested Claude CLI invocation profiles.
+"""Claude CLI invocation requirements for the supervised bridge.
 
-Flags printed by ``claude --help`` establish syntax only.  A version is placed
-here only after the supervised fixture suite has exercised the bridge
-semantics; production callers receive no switch for injecting another profile.
+Any local Claude CLI version may run a task when ``--help`` advertises the exact
+flags that task needs and the local login check passes.  Help output proves only
+advertised syntax.  Behavior is established per run by the hook self-test and
+the post-run tool, session, result and workspace verification in ``bridge.py``.
+The version string is recorded for diagnosis and never used as an allowlist.
 """
 from __future__ import annotations
 
@@ -10,18 +12,24 @@ from typing import Any, Mapping
 from pathlib import Path
 import hashlib
 import json
+import re
 
 
 REQUIRED_FLAGS = frozenset({
-    "-p", "--model", "--effort", "--output-format", "--json-schema", "--session-id",
+    "-p", "--model", "--effort", "--output-format", "--verbose", "--json-schema", "--session-id",
     "--permission-mode", "--tools", "--allowedTools", "--disallowedTools", "--settings",
     "--strict-mcp-config", "--mcp-config", "--disable-slash-commands",
 })
+RESUME_FLAG = "--resume"
+# Only the doctor --verify probe passes this; ordinary tasks keep their session.
+VERIFY_FLAGS = frozenset({"--no-session-persistence"})
+BUDGET_FLAGS: Mapping[str, str] = {
+    "max_turns": "--max-turns",
+    "max_budget_usd": "--max-budget-usd",
+}
 
-# This profile has existing real supervised receipt evidence, with the current
-# isolated regression suite guarding the bridge contract.  A fake CLI alone is
-# never sufficient to add a released version. New native builds can instead
-# acquire identity-bound local evidence from the isolated qualification suite.
+# Historical record of versions exercised by earlier releases.  It is read only
+# by the retained-store history code and never admits or rejects a local CLI.
 SUPPORTED_CLI_PROFILES: Mapping[str, Mapping[str, Any]] = {
     "2.1.276": {
         "tested": True,
@@ -30,11 +38,6 @@ SUPPORTED_CLI_PROFILES: Mapping[str, Mapping[str, Any]] = {
             "max_budget_usd": "--max-budget-usd",
         },
     },
-    # Real MCP fixtures: review/resume/fresh, artifacts, named workflow,
-    # deny hook and cancellation after provider init.  This CLI removed
-    # --max-turns; never infer its availability from a neighboring version.
-    # 2.1.278: real MCP review/resume/fresh/artifacts and named Workflow;
-    # child Read hook denial, ordinary denial, and post-init cancellation.
     "2.1.278": {
         "tested": True,
         "capabilities": {"max_budget_usd": "--max-budget-usd"},
@@ -47,8 +50,6 @@ SUPPORTED_CLI_PROFILES: Mapping[str, Mapping[str, Any]] = {
     },
 }
 
-# Historical released profiles preserve their existing task support. New local
-# identities gain only the groups proved by the current qualification suite.
 GROUPS = frozenset({"core", "read_only", "write", "resume", "workflow"})
 for _profile in SUPPORTED_CLI_PROFILES.values():
     _profile.setdefault("groups", sorted(GROUPS))
@@ -56,7 +57,6 @@ for _profile in SUPPORTED_CLI_PROFILES.values():
 
 
 # Bump only when the persisted dispatch/session protocol becomes incompatible.
-# Source hashes still bind qualification evidence to the current implementation.
 DISPATCH_PROTOCOL_VERSION = 1
 LEGACY_DISPATCH_CONTRACTS = frozenset({
     "bb38e17696e5a05d000615b086191f20e9c5c34f8fea3600913e31f10a3e56b1",  # 0.4.2
@@ -67,8 +67,9 @@ LEGACY_DISPATCH_CONTRACTS = frozenset({
 def bridge_contract_id() -> str:
     scripts = Path(__file__).resolve().parent
     plugin = scripts.parents[2]
-    names = [scripts / name for name in ("bridge.py", "runtime.py", "workspace.py", "events.py", "named_workflow.py", "compatibility.py")]
-    names += [plugin / "scripts" / name for name in ("cli_validation.py", "cli_store.py")]
+    names = [scripts / name for name in ("bridge.py", "runtime.py", "workspace.py", "events.py", "named_workflow.py",
+                                         "compatibility.py", "usage.py")]
+    names += [plugin / "scripts" / name for name in ("cli_validation.py", "cli_store.py", "content_store.py", "plugin_identity.py")]
     contents = [(str(path.relative_to(plugin)), hashlib.sha256(path.read_bytes()).hexdigest()) for path in names if path.is_file()]
     return hashlib.sha256(json.dumps(contents, sort_keys=True).encode()).hexdigest()
 
@@ -82,28 +83,20 @@ def required_groups(packet: Mapping[str, Any], resume: bool = False) -> list[str
     return sorted(groups)
 
 
-def resolved_profile(version: str, selection: Mapping[str, Any],
-                     profiles: Mapping[str, Mapping[str, Any]] | None = None) -> Mapping[str, Any] | None:
-    if profiles is not None:
-        return profiles.get(version)
-    selected = selection.get("identity")
-    if not isinstance(selected, dict):
-        return profile_for(version)
-    from cli_store import identity, qualification
-    actual = identity(selected["id"])
-    if actual["sha256"] != selected.get("sha256") or actual["path"] != selection.get("path") or actual["version"] != version:
-        return None
-    proof = qualification(actual["id"], bridge_contract_id())
-    if not proof:
-        return None
-    passed = sorted(name for name, value in proof.get("matrix", {}).items()
-                    if name in GROUPS and isinstance(value, dict) and value.get("status") == "pass")
-    bundled = profile_for(version)
-    return {"tested": True, "source": proof.get("source", "local_qualification"), "groups": passed,
-            "capabilities": dict((bundled or {}).get("capabilities", {})),
-            "evidence_path": proof.get("evidence_path")}
+def flag_advertised(help_text: str, flag: str) -> bool:
+    """Match one exact option token; ``-p`` must not match inside ``--print``."""
+    return re.search(r"(?<![\w-])" + re.escape(flag) + r"(?![\w-])", help_text) is not None
+
+
+def required_flags(groups: set[str] | frozenset[str], verify: bool = False) -> set[str]:
+    flags = set(REQUIRED_FLAGS)
+    if "resume" in groups:
+        flags.add(RESUME_FLAG)
+    if verify:
+        flags |= VERIFY_FLAGS
+    return flags
 
 
 def profile_for(version: str, profiles: Mapping[str, Mapping[str, Any]] | None = None) -> Mapping[str, Any] | None:
-    """Find a profile, with injection reserved for isolated unit fixtures."""
+    """Historical lookup used only by the retained-store records."""
     return (SUPPORTED_CLI_PROFILES if profiles is None else profiles).get(version)

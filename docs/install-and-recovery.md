@@ -12,7 +12,7 @@ which of the steps below have actually been exercised for the current version.
 | Entry point | `bash Install.command` from an extracted package | `codex plugin marketplace add` + `codex plugin add` (see [git-marketplace.md](git-marketplace.md)) |
 | Verifies package hashes | Yes, against `FILE-SHA256.json` | No local step does this; the host CLI fetches the ref directly |
 | Registers with local catalog (`~/.codex/claude-orchestrator/catalog`) | Yes | No — the plugin source is the Git ref itself |
-| Prepares a managed Claude CLI | Yes, as part of the same run | No — a separate explicit step (see below) |
+| Downloads or switches a Claude CLI | No — it only reports your local Claude CLI | No |
 | Runs automatically after install | Nothing further | Nothing further |
 
 A Git install does **not** run `Install.command`. This is deliberate: running
@@ -67,23 +67,36 @@ order:
    (`./scripts/launch.sh` with no arguments, which runs `scripts/server.py`).
    This is the first point at which the MCP server itself starts; step 2 only
    prepares its dependencies.
-4. **Managed Claude CLI and authentication.** Independent of steps 1–3, and
-   does not require Claude to be logged in yet:
+4. **Your local Claude CLI and authentication.** Independent of steps 1–3, and
+   does not require Claude to be logged in yet. The plugin uses only the local
+   Claude CLI you installed or configured (`CLAUDE_BIN`, then the plugin
+   `claude_bin` setting, then `claude` on the MCP process PATH). It never
+   downloads, installs, updates, rolls back, copies or switches a Claude CLI,
+   and it does not change shell profiles, persistent PATH, Claude's auto-update
+   setting, login or account. The version is recorded for diagnosis only; a
+   task is admitted when `--help` advertises the exact flags it needs, the
+   local login check passes and any requested budget flag exists.
    - `bash Install.command --diagnose-json` (ZIP path) or the Skill's
      `claude_cli_status` tool (either path, once the MCP server is running)
      reports uv discovery, Codex host compatibility, and Claude discovery/auth
      status without starting a model call. It does not independently verify
      that a cold Python/dependency download can succeed. Successful dependency
      preparation and a fresh MCP initialization establish those separate facts.
-   - If no usable Claude executable is found, `claude_cli_update(action="prepare")`
-     stages a private, signature-verified baseline; this downloads Anthropic's
-     published release binary, not a model response, and does not log in.
-   - Authentication itself is always the user's own action. Use the login
-     flow for the executable selected by `claude_cli_status`, rather than
-     assuming a different `claude` on PATH shares its account. The optional
+   - If no Claude executable is found, install Claude Code yourself with the
+     official instructions, or point the plugin at an existing one (below).
+     Retained records from the retired managed-CLI feature of earlier releases
+     (`~/.codex/claude-orchestrator/cli`) are left in place as history and
+     never selected.
+   - Authentication itself is always the user's own action. Log in with the
+     executable reported by `claude_cli_status`, rather than assuming a
+     different `claude` on PATH shares its account. The optional
      `Install.command --configure-claude-bin` is a ZIP-install operation only;
-     do not use it for a Git-installed plugin. The plugin does not ask Codex
-     to read, copy or upload credential files.
+     for a Git-installed plugin set `CLAUDE_BIN` in the environment that
+     starts Codex. The plugin does not ask Codex to read, copy or upload
+     credential files.
+   - After you upgrade your Claude CLI, a correction that would resume an
+     earlier run is refused because the executable changed; start a fresh
+     round instead.
 
 ### Breakdown by what's missing
 
@@ -92,7 +105,8 @@ order:
 | `command -v uv` fails | uv is not installed | Install uv per the official instructions above; do not let anything auto-run Homebrew/curl for you |
 | `./scripts/launch.sh --prepare-dependencies` fails on `uv sync` | Locked dependency resolution/download failed (network, index, disk) | Read the printed `uv sync` error directly; rerun after fixing it |
 | MCP server does not come up within 120s | Dependency download or another startup error may be responsible | Preserve stderr, run step 2, then retry MCP initialization. If warmup succeeds but startup still fails, inspect the actual server error; do not assume every timeout is a download problem or raise the timeout without evidence |
-| `claude_cli_status` reports no discovered Claude CLI | No system/managed Claude executable found yet | Run `claude_cli_update(action="prepare")`; only a ZIP install may alternatively use its installer with `--configure-claude-bin` |
+| `claude_cli_status` reports no discovered Claude CLI | No local Claude executable is visible to the MCP process | Install Claude Code yourself, or set `CLAUDE_BIN` for Codex; a ZIP install may instead use its installer with `--configure-claude-bin` |
+| Environment check reports `cli_incompatible` | Your local CLI's `--help` does not list a flag this task needs (named in the report) | Upgrade or reconfigure your own Claude CLI; the plugin will not substitute another version |
 | `claude_cli_status` reports not authenticated | Claude CLI is present but the user has not logged in | Log in with the Claude CLI yourself; the plugin will not do this for you |
 | Delegation is blocked even though the plugin is installed | Claude readiness (steps 2–4) is separate from plugin registration (this doc's "Two install paths") | Re-check readiness with `claude_cli_status`/diagnostics, not just install success |
 

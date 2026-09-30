@@ -248,54 +248,20 @@ class InstallationTests(unittest.TestCase):
         self.assertFalse(report['ready'])
         self.assertIn('PATH 中的 codex 不作为桌面宿主能力证据。', report['next_steps'][0])
 
-    def test_normal_install_prepares_managed_cli_but_bootstrap_failure_stays_diagnostic(self):
-        with patch.object(install.cli_store, 'get_selection', return_value={'mode': 'managed'}), \
-                patch.object(install, 'external_mode_requested', return_value=False), \
-                patch.object(install.cli_store, 'prepare', return_value={'status': 'ready', 'identity': {'id': 'native'}}) as prepared:
-            self.assertEqual(install.prepare_managed_cli()['status'], 'ready')
-            prepared.assert_called_once()
-            self.assertTrue(callable(prepared.call_args.kwargs['progress']))
-        with patch.object(install.cli_store, 'get_selection', return_value={'mode': 'managed'}), \
-                patch.object(install, 'external_mode_requested', return_value=False), \
-                patch.object(install.cli_store, 'prepare', side_effect=RuntimeError('network unavailable')):
-            outcome = install.prepare_managed_cli()
-        self.assertEqual(outcome['status'], 'bootstrap_error')
-        self.assertIn('network unavailable', outcome['action'])
-
-    def test_managed_cli_prepare_prints_connected_throttled_download_progress(self):
-        def prepare(*, progress):
-            progress(25, 100)
-            progress(26, 100)
-            progress(100, 100)
-            return {'status': 'ready'}
-
-        output = io.StringIO()
-        with patch.object(install.cli_store, 'get_selection', return_value={'mode': 'managed'}), \
-                patch.object(install, 'external_mode_requested', return_value=False), \
-                patch.object(install.cli_store, 'prepare', side_effect=prepare), \
-                contextlib.redirect_stdout(output):
-            result = install.prepare_managed_cli()
-        self.assertEqual(result['status'], 'ready')
-        text = output.getvalue()
-        self.assertIn('如需下载，将显示可续传进度', text)
-        self.assertIn('(25%)', text)
-        self.assertNotIn('(26%)', text)
-        self.assertIn('(100%)', text)
-        self.assertIn('准备结果：ready', text)
-
-    def test_normal_install_preserves_explicit_external_mode_but_not_legacy_claude_bin(self):
-        with patch.object(install.cli_store, 'get_selection', return_value={'mode': 'external', 'active': 'retained'}), \
-                patch.object(install, 'external_mode_requested', return_value=True), \
-                patch.object(install.cli_store, 'prepare') as prepared:
-            result = install.prepare_managed_cli()
-        self.assertEqual(result['status'], 'external_preserved')
-        prepared.assert_not_called()
-        with patch.object(install.cli_store, 'get_selection', return_value={'mode': 'managed'}), \
-                patch.object(install, 'external_mode_requested', return_value=False), \
-                patch.object(install.cli_store, 'prepare', return_value={'status': 'ready'}) as prepared:
-            self.assertEqual(install.prepare_managed_cli()['status'], 'ready')
-        prepared.assert_called_once()
-        self.assertTrue(callable(prepared.call_args.kwargs['progress']))
+    def test_install_reports_the_local_cli_and_never_prepares_a_managed_copy(self):
+        readiness = {'claude': {'ready': True, 'version': '2.1.284',
+                                'discovery': {'path': '/fixture/claude', 'source': 'CLAUDE_BIN'}}}
+        summary = install.local_cli_summary(readiness)
+        self.assertEqual(summary['policy'], 'user_local_cli')
+        self.assertEqual(summary['version_management'], 'retired')
+        self.assertEqual((summary['path'], summary['source'], summary['version']), ('/fixture/claude', 'CLAUDE_BIN', '2.1.284'))
+        self.assertFalse(hasattr(install, 'prepare_managed_cli'))
+        source = (ROOT / 'scripts' / 'install.py').read_text()
+        for forbidden in ('cli_store', 'prepare(', 'claude_cli_update prepare'):
+            self.assertNotIn(forbidden, source)
+        missing = install.local_cli_summary({'claude': {'ready': False, 'discovery': {'path': None}}})
+        self.assertIsNone(missing['path'])
+        self.assertFalse(missing['ready'])
 
 
 if __name__ == '__main__':

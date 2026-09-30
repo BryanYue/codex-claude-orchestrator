@@ -62,14 +62,22 @@ const context=vm.createContext({URL,URLSearchParams,AbortSignal,AbortController,
 vm.runInContext(SOURCE,context);
 const run=s=>vm.runInContext(s,context);
 (async()=>{
-  // --- migrated: maintenanceNotice/maintenanceProgress pure text formatting ---
-  assert.match(run("maintenanceNotice({notice_pending:true,current_version:'2.1.278',target_version:'2.1.279',message:'保留当前已验证版本'})"),/当前 2\.1\.278；目标 2\.1\.279/);
-  assert.equal(run("maintenanceNotice({state:'up_to_date',notice_pending:false,current_version:'2.1.279'})"),'');
-  const activeNotice=run("maintenanceNotice({state:'acquiring',notice_pending:false,current_version:'2.1.278',target_version:'2.1.279',progress:{phase:'downloading',percent:42},reason:'machine_download_failure',next_action:'machine_retry'})");
-  assert.match(activeNotice,/正在下载支持版本（42%）/);
-  assert.ok(!activeNotice.includes('machine_download_failure')&&!activeNotice.includes('machine_retry'));
-  run("renderMaintenance({state:'acquiring',notice_pending:false,current_version:'2.1.278',target_version:'2.1.279',progress:{phase:'downloading',percent:42}})");
-  assert.match(run("$('drawerMaintenance').textContent"),/正在下载支持版本（42%）/);
+  // --- local CLI status replaces retired version maintenance ---
+  run("st.maintenance={policy:'user_local_cli',state:'local_cli',message:'使用本机 Claude CLI（来源 CLAUDE_BIN）：/fixture/claude。插件不再下载、安装、更新、回退、复制或切换 Claude CLI',local_cli:{path:'/fixture/claude',source:'CLAUDE_BIN'},legacy_managed_state:{present:true,retained_versions:1}};st.maintenanceAt=Date.now();st.maintenanceFailure=null;renderMaintenance();");
+  assert.match(run("$('drawerMaintenance').textContent"),/本机 Claude CLI/);
+  assert.ok(!run("$('drawerMaintenance').textContent").includes('下载支持版本'));
+  assert.match(run("$('drawerMaintenanceDetail').textContent"),/只作历史，不参与派单/);
+  assert.match(run("$('drawerCli').textContent"),/本机 CLI \/fixture\/claude（CLAUDE_BIN）/);
+  assert.equal(run("$('maintenanceDot').classList.contains('hidden')"),true);
+  run("st.maintenance={state:'cli_missing',message:'未找到本机 Claude CLI。',next_action:'设置 CLAUDE_BIN'};renderMaintenance();");
+  assert.equal(run("$('maintenanceDot').classList.contains('hidden')"),false,'a missing local CLI needs an explanation marker');
+  assert.match(run("$('drawerMaintenanceDetail').textContent"),/下一步：设置 CLAUDE_BIN/);
+  for(const [running,pattern,absent] of [[null,/不能确认其维护进程是否仍在运行/,/检测到旧版插件的维护进程仍在运行/],[true,/检测到旧版插件的维护进程仍在运行/,/无法确认/],[false,null,/维护进程/]]){
+    run(`st.maintenance={state:'local_cli',message:'使用本机 Claude CLI',legacy_managed_state:{present:true,retained_versions:1,maintenance_worker_running:${running}}};renderMaintenance();`);
+    const detail=run("$('drawerMaintenanceDetail').textContent");
+    if(pattern)assert.match(detail,pattern);
+    assert.doesNotMatch(detail,absent,`maintenance_worker_running=${running}`);
+  }
 
   // --- migrated: event backlog catch-up starts a large old log at its latest tail window ---
   run("st.run='run-events';st.epoch=0;conn.connGen=0;st.cache.set('run-events',emptyEntry());");

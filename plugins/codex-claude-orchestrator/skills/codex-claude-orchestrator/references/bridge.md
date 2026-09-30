@@ -31,7 +31,7 @@
 - 纠正续跑的工作区、要求源内容与文件范围必须仍匹配上一轮快照，避免沿旧依据继续工作。保持 task/cwd/role/model、baseline、constraints、acceptance 和 owned/protected 范围不变；把局部补充放 objective/correction。这些边界需要变更时重新派 fresh 任务；effort 可以按方法需要调整。
 - requirement_sources 是原始约束入口，也是保护对象。protected_files 按当前任务实际列出，不能把所有新测试自动称为正式 oracle。
 - 运行目录放项目任务记录目录中的独立运行区，或者授权的本地任务目录；不要放进当前被编辑的仓而产生未知脏文件。
-- `model` 和 `effort` 必须为非空字符串。模型目录用 `claude_models(cwd, identity_id?)` 从当前 CLI 的 initialize 响应发现，返回 `value`、`resolvedModel` 及 effort 信息；只保留模型字段，不输出账号信息，不发送模型提示词。按类别跟随最新时原样传官方 alias；完整模型 ID 按用户显式要求原样传递。类别默认值不是固定版本映射，实际解析由 Claude CLI/提供方/组织/环境配置决定。目录声明、请求值和 provider 实际回报分别记述。
+- `model` 和 `effort` 必须为非空字符串。模型目录用 `claude_models(cwd)` 从本机 CLI 的 initialize 响应发现（`identity_id` 已退役），返回 `value`、`resolvedModel` 及 effort 信息；只保留模型字段，不输出账号信息，不发送模型提示词。按类别跟随最新时原样传官方 alias；完整模型 ID 按用户显式要求原样传递。类别默认值不是固定版本映射，实际解析由 Claude CLI/提供方/组织/环境配置决定。目录声明、请求值和 provider 实际回报分别记述。
 
 ### 普通资料目录
 
@@ -45,7 +45,7 @@
 "budget": {"max_turns": 12, "max_budget_usd": 1.0}
 ```
 
-数值是本轮显式预算示例，不是默认阈值。正整数 max_turns 和有限正数 max_budget_usd 仅在 profile 与 CLI help 均确认相应能力时传入；无该能力则 blocked，不忽略预算。结果保留 provider 原始 usage、分项 usage_summary 和 provider_enforced 标记，不把 cache 项重复加进总数。CLI 的 API 计价预算不同于订阅账单或剩余额度。Runtime wall timeout 独立执行。
+数值是本轮显式预算示例，不是默认阈值。正整数 max_turns 和有限正数 max_budget_usd 仅在本机 CLI help 列出对应 flag 时传入；无该 flag 则 blocked（`budget_capability_unavailable`），不忽略预算。结果保留 provider 原始 usage、主代理分项 usage_summary、原始 model_usage 和 provider_enforced 标记。usage_report 将主代理最终回报与含子代理的 CLI 会话累计分开；累计 token 按 modelUsage 的模型分项汇总，费用取 CLI 的 total_cost_usd，不把主代理再加入累计，也不把多个 result 相加。缺少 modelUsage 时整任务 token 未知；续跑累计可能包含此前轮次。费用是客户端估算，不是实际账单。CLI 的 API 计价预算不同于订阅账单或剩余额度。Runtime wall timeout 独立执行。
 
 ### 保存 Workflow 的精确绑定
 
@@ -66,9 +66,9 @@
 
 inventory 从 `cwd` 向 Git 根枚举 `.claude/workflows`，并读取个人 Claude 配置目录的 `workflows`。项目条目按 Claude 的项目优先级覆盖同名个人条目；同一项目名歧义、符号链接、非普通文件或 hash 不匹配都会拒绝启动。历史 Claude session、历史 run 和详情页记录不是保存 Workflow，也不能用来绕过 inventory。
 
-bridge 仅允许 packet 精确绑定的 `Workflow(name[, args])`，不接受 inline script、`scriptPath`、其他 Workflow 或普通 review 作为替代。Workflow 脚本同样纳入 requirement source 身份核对。该模式仍需观察到匹配的 Workflow 工具调用、成功工具结果及完成事件，才可把 Claude 的结果交给主协调者核验；`reported` 仍不是 `accepted`。
+bridge 仅允许 packet 精确绑定的 `Workflow(name[, args])`，不接受 inline script、`scriptPath`、其他 Workflow 或普通 review 作为替代。Workflow 脚本同样纳入 requirement source 身份核对。该模式仍需观察到匹配的 Workflow 工具调用、成功工具结果及完成事件，才可把 Claude 的结果交给主协调者核验；`reported` 仍不是 `accepted`。完成事件须是同一会话、同一 tool_use_id 的父会话通知（`task_started` 已绑定 task_id 时还须同一 task）；被采用的结果必须出现在该完成事件之后，之前的结构化结果只算启动阶段的中间结果，即使随后出现完成事件也判为 blocked（见 `workflow_final_after_completion`、`workflow_interim_result_count`）。bridge 只在该子进程环境设置 `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS` 为 `--timeout` 的毫秒数（最小 1000，不为 0），避免 `claude -p` 默认 10 分钟空闲上限提前停止 Workflow；外层超时、取消与进程组清理不变。
 
-已通过 Claude CLI 2.1.276、2.1.277 和 2.1.278 的真实 MCP 只读夹具验证：放行结构校验后的输出工具，并以同一 session、同一 Workflow tool_use_id 的 system/task_notification completed 作为完成证据。启动回执不算完成。仅证明该受限模式，不覆盖任意脚本或完整审查策略。
+历史记录：早期版本曾在 Claude CLI 2.1.276、2.1.277 和 2.1.278 上用真实 MCP 只读夹具观察过该模式：放行结构校验后的输出工具，并以同一 session、同一 Workflow tool_use_id 的 system/task_notification completed 作为完成证据。这不是当前版本的准入名单；其他版本同样以每轮观察到的完成证据为准。启动回执不算完成。仅涉及该受限模式，不覆盖任意脚本或完整审查策略。
 
 ## 命令
 
@@ -82,25 +82,23 @@ python3 <skill>/scripts/bridge.py cancel --run-dir /absolute/runs/001 --reason "
 
 ### 安装与认证预检
 
-### CLI 生命周期管理
+### 本机 CLI 准入
 
-通过 MCP `claude_cli_status(cwd, job_id?)` 区分系统发现的 CLI、配置的 active CLI、基础只读任务的派单预览以及 candidate 验证阶段。编辑或 Workflow 的能力要求可能选择不同保留版本；本轮实际版本以 run 的固定证据为准。状态还分别报告安装、登录和最近真实 provider 调用；不能把通用预览当成任意 packet 已完成派单。候选失败不使仍有资格的执行版本变成不可用。
+桥接器只使用用户本机的 Claude CLI：`CLAUDE_BIN`，其次插件 settings 的 `claude_bin`，最后 MCP 进程 PATH 中的 `claude`（保留 nvm/npm shim 的原路径，让同目录的 `node` 可用）。旧版本插件留下的受管选择、私有副本和资格回执只作历史保留，不参与选择、不阻断派单，也不会被删除。插件不下载、安装、更新、回退、复制或切换 CLI，不修改 shell、PATH 持久配置、CLI 自动更新策略、登录或账号。
 
-已有配置默认保留 `channel=bundled`，来源是随包支持清单。用户授权自动跟进官方最新版后，`claude_cli_update(action="policy", policy="automatic", channel="latest", auto_qualify=true)` 开启后台官方发现、私有下载、隔离资格验证和按能力切换；付费验证每个候选身份/当前契约仅自动尝试一次，10场景/900秒上限，无USD硬上限。仅自动获取而暂不付费验证可设 `auto_qualify=false`。状态查询只读；`cli_maintenance.channel` 标明当前来源/范围/检查时间。部分能力通过不等于完整资格通过，查看 `requested_groups_outcome`/`missing_groups`；缺组继续使用已验证保留版本。普通 `up_to_date` 不反复提示。
+每轮按任务检查：`--help` 必须以完整选项形式列出所需 flag（`-p` 不能由 `--print` 代替；续跑另需 `--resume`），并且 `claude auth status --json` 通过。版本号只写入诊断，不作白名单。缺项时报告具体 flag，状态为 `cli_incompatible`。help 只是声明的语法（`compatibility.evidence=cli_help_syntax`、`behavior_verified=false`），行为由每轮的 hook 自检、hook 覆盖、实际工具集核对（普通角色出现 `--tools` 以外的工具即 `tool_policy_error` 失败）、会话身份和结构化结果校验确认。
 
-当 `cli_maintenance.notice_pending=true`，Codex 先说明当前/目标版本、保留或切换/失败原因和任务影响，再调用 `claude_cli_update(action='acknowledge', notice_id=<状态返回值>)` 确认已说明。已有 run 的固定 identity 不因全局维护而改变。用户询问版本维护时用 `claude_cli_update(action='refresh')`；`policy='automatic'` 或 `policy='manual'` 控制后续维护。手动 rollback 会暂停自动维护，直到显式恢复 automatic。
+`claude_cli_status(cwd, job_id?)` 分别报告本机 CLI、安装、登录、最近真实 provider 调用、历史受管记录和旧验证任务。`claude_cli_update` 已退役：除 `cancel`（请求停止旧版本留下的验证任务）外只返回说明，不改变任何文件或选择。
 
-用户明确请求升级时使用 `claude_cli_update`：`prepare` 自动复用健康的 native active；自动发现到 unknown 或 non-native candidate 时保留它，并从具备来源和完整性证明的官方分发 bootstrap 已测基线。它不发起模型请求，也不改全局 launcher、登录或 profile。`validate` 最多运行 10 个场景、总时限 900 秒并做有限 cleanup，没有 USD 硬上限；`activate` 原子切换已验证 candidate；`rollback` 还原先前 active CLI；`cancel` 请求停止仍在运行的验证。验证报告路径和 job 状态由 `claude_cli_status` 返回。不能通过 flags、help 输出或 fake CLI 让 candidate 获得已验证 profile；验证失败、取消或 capability 不足时仍使用之前 eligible active CLI。
+创建 run 时固定可执行文件的路径解析与 SHA-256，启动前再核对，变化即失败且不回退。续跑要求本机 CLI 与上一轮仍是同一文件；用户升级或更换后返回 `resume_cli_identity_changed`，旧版本插件的私有身份返回 `resume_cli_identity_retired`，都应改用 fresh 新一轮。
 
-可选 capability（例如 `max_budget_usd`）按 packet 实际请求判断。缺少它只会阻止请求该能力的派单，不能把整个 active CLI 或不使用该能力的普通任务显示为不可用。CLI executable 的 rollback 与安装器管理的插件 catalog rollback 相互独立。
-
-`doctor` 检查实际可执行路径、版本、所需参数与官方 `claude auth status --json`。`--cwd` 应与目标任务相同，使项目配置与认证来源一致；未指定时使用当前目录。API key/云平台认证不强制要求存在账号邮箱。
+`doctor` 检查实际可执行路径、版本、所需参数与官方 `claude auth status --json`。`--version` 或 `--help` 失败时，报告中的 `cli.version_probe` / `cli.help_probe` 记录退出码、信号或超时类型，以及限长、脱敏后的输出摘要。`--cwd` 应与目标任务相同，使项目配置与认证来源一致；未指定时使用当前目录。API key/云平台认证不强制要求存在账号邮箱。
 
 | 状态 | 含义与处理 |
 |---|---|
 | `cli_not_found` / `cli_not_executable` | CLI 未找到或不可执行。提示安装/修复或 PATH；不自动安装 |
-| `cli_unavailable` / `cli_incompatible` | 启动失败或必要参数无法确认。核对本机权限/版本 |
-| `cli_profile_unverified` | CLI 已安装但候选尚未取得当前契约的本地资格；用显式本地验证取得所需 groups。已有 eligible active CLI 可继续处理不需要候选能力的任务；不能凭 help flags 放行 |
+| `cli_unavailable` | 版本或 help 探测失败；查看 `version_probe`/`help_probe` 的退出码或超时，核对本机权限与安装 |
+| `cli_incompatible` | 本机 CLI 的 help 未列出本任务所需 flag；按报告的具体 flag 由用户升级或更换自己的 CLI |
 | `not_logged_in` | 官方 CLI 明确回报未登录。用户运行 `claude auth login`，或配置自己选择的 API/云平台认证 |
 | `auth_check_failed` | 状态命令异常、超时或无法解析。不能断言凭证过期，也不能当已登录 |
 | `local_checks_passed` | CLI 回报已配置认证，远端有效性尚未验证 |
@@ -142,8 +140,9 @@ python3 <skill>/scripts/bridge.py run --packet /absolute/packet-002.json --run-d
 - `environment.json`：派单前的安装/认证检查，账号脱敏，不含原始凭证。
 - `stream.jsonl`、`stderr`：实际 provider 输出和诊断；不把原始大日志全部塞回协调者上下文。
 - `workspace_before.json`、`workspace_after.json`：通用输入身份与 workspace_digest；Git 模式同时保留 `git_before.json`、`git_after.json`。`requirements.json` 保存要求内容身份。
-- `result.json`：provider 结束状态、实际 session/model、结构化内容、权限拒绝。
-- `receipt.json`、`state.json`：运行结果。`reported` 需要主协调者核验，不是 accepted。
+- `plugin-identity.json`：每轮 bridge 创建 run-dir 后立即冻结、之后不再改写的插件身份，由 `plugin_identity.py` 按自身文件位置（不是被审仓 cwd）解析。含插件 `plugin_version`、`bridge_contract_id`、来源 `source` 和 `code_digest`。`source.kind=git` 时给 HEAD revision，`state` 为 clean / dirty / unknown（范围是插件根目录，dirty 时附至多 20 个路径；git status 失败则 unknown，不推断）；`release_manifest`（ZIP 分发的 RELEASE-MANIFEST.json）只作来源说明：`provenance_only=true`、`verification=not_performed`、`state=unknown`，不说明当前文件等于当时构建的内容；既非 Git 也无 manifest 时为 `kind=unknown`、revision 为空。`code_digest` 是插件根下可分发后缀文件的路径 + 字节 SHA-256（`scope` 字段写明范围，含被 Git 忽略的同后缀文件），不能用 revision 代替。
+- `result.json`：provider 结束状态、实际 session/model、结构化内容、权限拒绝，以及同一份 `plugin_identity`。最终报告与 run 成败分开解析：失败、取消、超时的 run 只要有最终报告，仍保留 `structured`（或 `result_validation_error`），不会因此改变失败状态；`report_evidence` 给出 `state`（structured / validation_error / absent）、模型自述的 `claimed_status`、`run_status` 和 `accepted=false`。`permission_denials` 只保存实际被拒绝的条目（工具、tool_use_id、原因、路径类输入，长度有界），不嵌套整条 result、报告或 usage，原始事件仍在 `stream.jsonl`；还包含本 run `activity.jsonl` 中 PreToolUse hook 记录的拒绝（`source: bridge_pretooluse_hook`，含工具、tool_use_id、原因及是否出现在父级 stream）；Workflow 子代理的调用可能不进父级 stream，任何一条 hook 拒绝都会使 run 失败（`hook_denial_error`）。`hook_guard_coverage` 中，与 provider tool_use 的 id 和工具名都匹配的 allowed、denied 事件都算已审计，分别列出 `allowed_*`、`denied_*` 与 `missing_tool_use_ids`；未知 status 或工具名不符的事件不计。denied 不放宽 guard，仍使 run failed。
+- `receipt.json`、`state.json`：运行结果，receipt 同样直接带 `plugin_identity`（预检 blocked、取消、unknown、bridge 失败回执也带；旧 run 没有该字段，读取方按缺失处理，冻结文件不可读时写 `status=unavailable` 而不掩盖原运行错误）。`reported` 需要主协调者核验，不是 accepted；`claude_decide` 仅适用于未被 superseded 的 `reported` run，其他终态由 Codex 在既有 PROGRESS 独立记录处置。
 
 structured 内容中的 `checks` 是 Claude 自报；本工具集没有 shell，因此不能凭自报说真实构建/测试已运行。由 Codex 执行和登记实际检查。
 
@@ -155,12 +154,18 @@ structured 内容中的 `checks` 是 Claude 自报；本工具集没有 shell，
 
 成功只登记 `reconciliation.json` 和解除本轮占用，不把旧 unknown 改为 accepted/reported。后续必须 fresh 且新 revision，不自动重试。保留旧回执与恢复证据，不通过人工删锁或 marker 绕过判断。
 
+bridge 在启动 Claude 之前，会先在系统临时目录的 `codex-claude-cwd-unknown/` 下发布本 run 的 launch intent marker，记录原 cwd、lane、run_id、run_dir 和 lifecycle 文件位置。只有 Claude 进程组确认停止或确认从未启动、且回执已写入后，bridge 才删除这个 marker。如果 Runtime 与 bridge 都已崩溃，marker 会继续阻止其他状态目录和独立 bridge 在同一 worktree 派发。这时到 marker 记录的原状态目录执行 `claude_recovery`/`claude_reconcile`；独立 bridge 的 run 需人工核实进程和工作区。marker 检查在 lane 锁内进行：lane 仍被占用时报告 active run；lane 空闲而 marker 仍在时，新 run-dir 记录 failed 回执，Claude 不会启动。
+
 ## 已知边界
 
 工具名单与 PreToolUse hook 是工具入口约束，不能代替 OS 沙箱，也不保证任意 hook、外部进程或脱离进程组的后台任务都已隔离/停止。脚本不会为了执行而关闭原有 hook、绕过宿主沙箱或复制凭证。
 
-插件 Runtime 与随附 bridge 共用 cwd 排他锁，跨 task 也不能同时监督写入同一目录；未接入插件的外部工具写入仍由 Codex 协调。正式判据保护按原任务要求另外核对；本版不是 v2.9 四层保护的自动部署器。
+插件 Runtime 与随附 bridge 共用按 Git worktree（真实 toplevel）计算的排他锁与 unknown marker，同一 worktree 的根目录与各子目录跨 task 也不能同时监督执行，linked worktree 与 artifacts 目录各自独立；未接入插件的外部工具写入仍由 Codex 协调。正式判据保护按原任务要求另外核对；本版不是 v2.9 四层保护的自动部署器。
 
 Git 快照覆盖 tracked 与非忽略的 untracked 文件；显式 owned/protected 文件另作内容核对。未列出的 ignored 文件和工作区外的副作用不在 Git 差异证据覆盖内，不能据此声称整个文件系统无变化。工具约束的效果与实际 Git/显式文件证据分开报告。
 
 普通 `review` 与 `implement` 不调用 Claude Workflow；只有上述 hash 绑定、fresh-only 的 `workflow_review` 可调用一个已保存的只读 Workflow。bridge 不调用外部连接器，也不自动建 PR、发布或合并。完整 Dynamic Workflow Review 的接入边界见 runtime-design.md。
+
+### 协调内容快照
+
+Runtime 在 packet 外保存 `content-binding.json`，result/receipt 记录摘要；MCP 的 `claude_result(artifact="content_binding")` 可读取。fresh 使用 `claude_content_read` 所选 digest，派单传 `expected_content_digest` 防止并发切换。resume 保留原快照；内容参考不改 formal protocol_binding、project_workflow 或用户验收。

@@ -1,4 +1,8 @@
-"""Resolve Anthropic's signed official Claude Code latest release metadata.
+"""Resolve Anthropic's signed official Claude Code latest release metadata (historical).
+
+The latest-channel maintenance that used this module is retired; no production
+entry imports it, so the plugin never contacts the release server or needs
+GnuPG.  It stays only as the verifier referenced by retained history.
 
 Discovery is deliberately separate from status rendering.  Callers persist a
 successful result and may use that cache without network access.  A release is

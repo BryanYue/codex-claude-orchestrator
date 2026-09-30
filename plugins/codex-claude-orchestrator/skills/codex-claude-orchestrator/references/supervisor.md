@@ -14,7 +14,7 @@
 2. 本地/必要在线预检后只启动一次，立即用父代理通信工具回传 run_id、cwd、task/revision、执行者、（本监督席的）details_url 与 run_dir，仅供参考。主代理不直接复用该 details_url；改用自己的 MCP 连接调用 `claude_details(run_id)` 取得本方链接，再按打开请求记账决定是否打开一次（`queued` 只表示排队）。监督席不负责操作主窗口，也不自行调用 `open_in_codex`。
 3. 用 claude_wait(compact=true) 与游标等待真实活动；start/status/details 也使用 compact=true，需要完整报告时按需 claude_result。阶段变化、重要工具/文件活动、故障或终态时发简短消息；普通无变化等待不刷屏。无需伪造总进度百分比。记录 `reported` 与接受结论的区别。
 4. 收到主代理停止消息，先 claude_cancel 再等终态回执；回传停止证据与残留变更。不要先结束自己的会话，让取消无法送达。非 owner 的 MCP Runtime 可能拒绝 cancel，应发消息给原 owner；不能猜 PID 或盲目重启。
-5. Claude 结束后读取 receipt/result、权限拒绝、Git 前后证据，回传摘要、问题/不确定性、原始记录路径。主代理亲自看文件和执行所需检查，再 claude_decide，并更新任务记录。
+5. Claude 结束后读取 receipt/result、权限拒绝、Git 前后证据，回传摘要、问题/不确定性、原始记录路径。主代理亲自看文件和执行所需检查，仅对未被 superseded 的 reported 轮次调用 claude_decide，并更新任务记录。failed/cancelled/timeout/blocked/unknown 不调用该接口、不改原状态；主代理独立完成任务时，在既有 PROGRESS 记录 run_id、原状态、完成者 Codex、completion_summary、reason、evidence 和未完成事项。
 
 MCP 连接/监督任务结束会影响本地详情服务；主代理需要继续查看时用自己的 claude_details 重新获取入口。不要把一次 session 的 token URL 写成永久文档入口，持久记录使用 run_id/run_dir。
 

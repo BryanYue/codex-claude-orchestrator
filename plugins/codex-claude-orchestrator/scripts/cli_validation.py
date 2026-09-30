@@ -1,9 +1,12 @@
-"""Durable, isolated qualification jobs for managed Claude CLI identities.
+"""Durable, isolated qualification jobs for managed Claude CLI identities (historical).
 
-The public functions in this module never run a probe while reading status.
-``start`` is the only entry that spawns a worker.  The worker invokes the real
-bridge with a narrowly bound qualification descriptor; normal MCP dispatch has
-no way to manufacture that descriptor or register a packet in a live job.
+CLI qualification is retired with plugin-managed versions.  No production
+entry calls ``start``; ``status`` and ``cancel`` remain for jobs recorded by an
+earlier release, and diagnostics read them only through the write-free
+``read_status``.  The bridge now refuses every qualification descriptor, so a
+job started directly through this library ends before any private identity is
+executed.  The public functions in this module never run a probe while reading
+status.
 """
 from __future__ import annotations
 
@@ -487,6 +490,47 @@ def status(job_id: str, environ: Mapping[str, str] | None = None) -> dict[str, A
     if state.get("status") not in FINAL_JOB_STATUS and _lock_available(job_dir / "worker.lock"):
         state = _reconcile_lost_worker(job_dir, state)
     return _public(state, job_dir)
+
+
+def _worker_lock_observation(path: Path) -> str:
+    """Probe an existing lock through a read-only descriptor; never create it."""
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except FileNotFoundError:
+        return "absent"
+    except OSError:
+        return "unreadable"
+    try:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return "held"
+        except OSError:
+            return "unreadable"
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        return "free"
+    finally:
+        os.close(descriptor)
+
+
+def read_status(job_id: str, environ: Mapping[str, str] | None = None) -> dict[str, Any]:
+    """Report recorded history exactly as stored, for diagnostics and MCP status.
+
+    Unlike ``status``, this never creates a lock file, reconciles a lost
+    worker, recovers a committing job, writes a report/event or touches CLI
+    selection.  A nonterminal record stays nonterminal here; only an explicit
+    ``cancel`` (or legacy ``status``) may change retired validation history.
+    """
+    job_dir = _job_dir(job_id, environ)
+    state = _load_json(job_dir / "job.json")
+    answer = _public(state, job_dir)
+    answer["read_only"] = True
+    if state.get("status") not in FINAL_JOB_STATUS:
+        answer["worker_lock"] = _worker_lock_observation(job_dir / "worker.lock")
+        answer["reconciliation"] = "not_performed"
+        answer["note"] = ("recorded state is shown unchanged; a stopped worker is not reconciled by a "
+                          "read-only status query")
+    return answer
 
 
 def cancel(job_id: str, environ: Mapping[str, str] | None = None) -> dict[str, Any]:

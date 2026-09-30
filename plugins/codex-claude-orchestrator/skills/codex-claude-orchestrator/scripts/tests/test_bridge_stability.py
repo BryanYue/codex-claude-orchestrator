@@ -46,9 +46,10 @@ class BridgeStabilityTests(unittest.TestCase):
 import json, math, os, sys
 args=sys.argv[1:]
 if args == ['--version']:
-    print(os.environ.get('STABILITY_VERSION', '2.1.276') + ' (Claude Code)'); raise SystemExit(0)
+    print('2.1.276 (Claude Code)'); raise SystemExit(0)
 if args == ['--help']:
-    print('-p --model --effort --output-format --json-schema --session-id --resume --permission-mode --tools --allowedTools --disallowedTools --settings --strict-mcp-config --mcp-config --disable-slash-commands --max-turns --max-budget-usd'); raise SystemExit(0)
+    flags='-p --model --effort --output-format --verbose --json-schema --session-id --resume --permission-mode --tools --allowedTools --disallowedTools --settings --strict-mcp-config --mcp-config --disable-slash-commands --no-session-persistence --max-turns --max-budget-usd'.split()
+    print(' '.join(flag for flag in flags if flag != os.environ.get('STABILITY_OMIT_FLAG'))); raise SystemExit(0)
 if args == ['auth','status','--json']:
     print(json.dumps({'loggedIn':True})); raise SystemExit(0)
 session=args[args.index('--session-id')+1]
@@ -64,7 +65,7 @@ print(json.dumps(result))
         self.fake.chmod(0o755)
         self.old_bin = os.environ.get("CLAUDE_BIN")
         os.environ["CLAUDE_BIN"] = str(self.fake)
-        for name in ("STABILITY_VERSION", "STABILITY_COST", "STABILITY_STATUS", "CODEX_BRIDGE_LIFECYCLE_FILE"):
+        for name in ("STABILITY_OMIT_FLAG", "STABILITY_COST", "STABILITY_STATUS", "CODEX_BRIDGE_LIFECYCLE_FILE"):
             os.environ.pop(name, None)
 
     def tearDown(self):
@@ -72,7 +73,7 @@ print(json.dumps(result))
             os.environ.pop("CLAUDE_BIN", None)
         else:
             os.environ["CLAUDE_BIN"] = self.old_bin
-        for name in ("STABILITY_VERSION", "STABILITY_COST", "STABILITY_STATUS", "CODEX_BRIDGE_LIFECYCLE_FILE"):
+        for name in ("STABILITY_OMIT_FLAG", "STABILITY_COST", "STABILITY_STATUS", "CODEX_BRIDGE_LIFECYCLE_FILE"):
             os.environ.pop(name, None)
         self.tmp.cleanup()
 
@@ -154,14 +155,70 @@ print(json.dumps(result))
         self.assertIsNone(sidecar["child_started"])
         self.assertIn("KeyboardInterrupt", sidecar["reason"])
 
+    def test_launch_intent_marker_precedes_claude_and_is_released_only_when_no_child_can_remain(self):
+        module = load_bridge_module()
+        lane = module.lane_identity(self.repo)
+        self.addCleanup(lambda: [path.unlink(missing_ok=True) for path, _ in module.unknown_markers(lane)])
+        original_popen = subprocess.Popen
+        # (outcome at the Claude Popen, receipt status, whether the lane claim may be released)
+        cases = (("reported", "reported", True),
+                 ("exec_failure", "failed", True),
+                 ("interrupted_during_launch", "cancelled", False))
+        for outcome, receipt_status, released in cases:
+            with self.subTest(outcome=outcome):
+                run_dir = self.root / f"intent-{outcome}"
+                lifecycle = self.root / f"intent-{outcome}-lifecycle.json"
+                packet_path = self.root / f"intent-{outcome}.json"
+                packet_path.write_text(json.dumps({**self.packet(), "task_id": "intent-" + outcome}))
+                at_launch = {}
+
+                def popen(command, *args, **kwargs):
+                    if isinstance(command, list) and "--json-schema" in command:
+                        at_launch["markers"] = [value for _, value in module.unknown_markers(lane)]
+                        at_launch["lifecycle"] = json.loads(lifecycle.read_text())
+                        if outcome == "exec_failure":
+                            raise FileNotFoundError(2, "fixture exec failure")
+                        if outcome == "interrupted_during_launch":
+                            raise KeyboardInterrupt()
+                    return original_popen(command, *args, **kwargs)
+
+                args = argparse.Namespace(packet=str(packet_path), run_dir=str(run_dir), timeout=3, resume_from=None)
+                with mock.patch.dict(os.environ, {"CODEX_BRIDGE_LIFECYCLE_FILE": str(lifecycle)}), \
+                        mock.patch.object(module.subprocess, "Popen", new=popen):
+                    module.run(args)
+
+                # The claim is durable before any child can exist, and this
+                # run's own checks have already passed so it cannot self-reject.
+                self.assertEqual([value["run_id"] for value in at_launch["markers"]], [run_dir.name])
+                claim = at_launch["markers"][0]
+                self.assertEqual((claim["lane_identity"], claim["cwd"]), (lane, str(self.repo.resolve())))
+                self.assertEqual(claim["launch_intent"]["run_dir"], str(run_dir))
+                self.assertEqual(claim["launch_intent"]["lifecycle_file"], str(lifecycle))
+                self.assertEqual((at_launch["lifecycle"]["phase"], at_launch["lifecycle"]["child_started"]),
+                                 ("launch_intent", None))
+                self.assertEqual(json.loads((run_dir / "receipt.json").read_text())["status"], receipt_status)
+                self.assertTrue(json.loads(lifecycle.read_text())["terminal"])
+                remaining = [value for _, value in module.unknown_markers(lane)]
+                if released:
+                    self.assertEqual(remaining, [])
+                else:
+                    self.assertEqual([value["run_id"] for value in remaining], [run_dir.name])
+                    self.assertEqual(remaining[0]["launch_intent"], claim["launch_intent"])
+
+        got, _ = self.invoke(self.packet(), "after-uncertain-launch")
+        self.assertNotEqual(got.returncode, 0)
+        self.assertIn("unknown prior supervised run", got.stderr)
+
     def test_preflight_and_executor_blocked_by_are_distinct(self):
-        os.environ["STABILITY_VERSION"] = "9.9.9"
+        os.environ["STABILITY_OMIT_FLAG"] = "--verbose"
         got, run = self.invoke(self.packet(), "preflight-blocked")
         self.assertNotEqual(got.returncode, 0)
         preflight = json.loads((run / "receipt.json").read_text())
         self.assertEqual(preflight["status"], "blocked")
         self.assertEqual(preflight["blocked_by"], "preflight")
-        os.environ.pop("STABILITY_VERSION")
+        self.assertEqual(preflight["reason"], "cli_incompatible")
+        self.assertFalse((run / "command.json").exists())
+        os.environ.pop("STABILITY_OMIT_FLAG")
         os.environ["STABILITY_STATUS"] = "blocked"
         got, run = self.invoke(self.packet(), "executor-blocked")
         self.assertEqual(got.returncode, 0, got.stderr)

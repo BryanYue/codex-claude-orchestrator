@@ -2,7 +2,7 @@
 
 [返回中文首页](../README.md) · [English overview](../README.en.md)
 
-这里保留版本管理、运行记录、权限边界和开发验证等细节。首次使用请先看[快速开始](getting-started.zh-CN.md)。本页为中文技术参考；[安装与恢复](install-and-recovery.md)及[Git 分发](git-marketplace.md)另有英文说明。
+这里保留本机 CLI 准入、运行记录、权限边界和开发验证等细节。首次使用请先看[快速开始](getting-started.zh-CN.md)。本页为中文技术参考；[安装与恢复](install-and-recovery.md)及[Git 分发](git-marketplace.md)另有英文说明。
 
 文档重组不改变插件行为。下面的 ZIP 安装器命令只适用于完整构建包；Git marketplace 用户继续使用所选 Git 来源。
 
@@ -31,65 +31,50 @@ bash Install.command --rollback <上一步返回的备份ID>
 
 诊断摘要不含账号身份、凭据、任务原文和原始 run/session 标识；不会发送遥测。回退只接受哈希校验通过的本插件备份，并保留当前版本，随后通过官方插件命令重新安装。更新或回退后开一个新 Codex 任务加载相应版本；旧任务已加载的工具不会自动热替换。
 
-每个人使用自己的 Claude 本机认证和额度。安装器准备插件私有的已验证执行版本，保留 Claude 原有安装；不自动登录或切换账号。Skill 会在首次实际需要委派时调用在线凭证检查（bridge 每轮的自动预检仅查本地配置），会使用少量 Claude 额度；近期成功调用可复用。
+每个人使用自己的 Claude 本机安装、认证和额度。安装器只检查并报告本机 Claude CLI，不下载、复制或切换执行版本；不自动登录或切换账号。Skill 会在首次实际需要委派时调用在线凭证检查（bridge 每轮的自动预检仅查本地配置），会使用少量 Claude 额度；近期成功调用可复用。
 
 首发在 macOS Apple Silicon 实测；Intel 尚未单独实测，Windows 不在本版范围。安装器要求在标准 /Applications 目录中检测到 Codex.app 或 ChatGPT.app 内置且支持 plugin 命令的 Codex CLI。仅安装 PATH Codex CLI 的宿主当前不在支持范围，不能作为桌面兼容性证据；--check 不执行安装，但条件不满足会返回非零退出码。
 
-## Claude 更新与执行版本
+## 本机 Claude CLI
 
-**插件默认自动维护自己的 Claude 执行版本。** MCP 启动后在后台检查，并在服务运行期间按已配置频道定期检查。发现可升级版本时，优先复用本机内容完全一致的原生文件；否则从官方源下载。完整性、签名和所需兼容资格全部核验成功后才原子切换，旧版本保留供回退和已有任务使用。下载或校验失败会说明原因，保留原来的执行选择。
+**插件只使用你本机已安装或明确配置的 Claude CLI。** 选择顺序为 `CLAUDE_BIN` → 插件 `settings.json` 的 `claude_bin` → MCP 进程 PATH 中的 `claude`。插件不下载、安装、更新、回退、复制或切换 CLI，不做版本资格验证，也不修改 shell、PATH 持久配置、Claude 自动更新策略、登录或账号。升级 CLI 由你用官方方式自行完成（原生安装的更新行为见 [Claude 官方说明](https://code.claude.com/docs/en/setup#auto-updates)），之后在 Codex 中说“检查 Claude 安装、登录与版本兼容情况”即可。
 
-下载会保留与版本、平台和 SHA256 绑定的断点；再次获取时请求 HTTP Range。若服务器忽略 Range，将在独立文件中重新下载，完整成功前保留原断点。安装终端显示百分比和 MiB，后台详情显示已收字节。默认连续 120 秒无数据才判无进展，同时保留单次 3600 秒资源上限；同目标下载锁最多等待 30 秒。失败保留断点和旧选择；自动重试间隔 3600 秒，手动刷新或重跑安装可立即重试。最终大小、哈希和签名全部通过前不会执行下载文件。
+版本号只作诊断，不作白名单：新版本只要满足本轮任务的实际要求就能使用。每轮任务的准入检查是：
 
-显式切换/回退会把执行选择与 manual 策略一起提交；资格检查或并发校验失败不暂停 automatic。崩溃恢复只处理能够证明属于本事务的写入；检测到旧版本进程后续修改时保留现值，并显示需要核对的冲突通知，避免覆盖用户的新选择。
+- `--help` 以完整选项形式列出本轮所需 flag（续跑另需 `--resume`）；缺少时报告具体 flag，不派单。
+- `claude auth status --json` 报告已登录；未登录、状态读不出分别说明。
+- packet 明确要求 `max_turns` / `max_budget_usd` 时，对应 flag 必须存在，否则本轮被阻止，不会忽略预算。
 
-**两种更新来源分别标明。** `bundled` 使用已安装插件随包审计清单，作为旧配置默认和首次安装的可用基线；`latest` 查询 Claude 官方发布频道及该版本元数据，不要求每次发布插件才能发现新 CLI。通过 `claude_cli_update(action="policy", policy="automatic", channel="latest", auto_qualify=true)` 一次启用全流程；设 `auto_qualify=false` 则只获取候选并提示待验证。每次验证最多10场景/900秒，无USD硬上限。已运行任务仍使用原身份，新任务只使用有当前资格的能力；缺组可回退到保留版本。这里自动维护的是Claude CLI，插件包自身仍通过新包安装或宿主插件更新机制更新。
+help 只证明 CLI 声明了这些语法，不代表行为已测试。行为由每轮的实际证据确认：启动前的 hook 自检、每个文件工具的 hook 覆盖、实际使用的工具必须在本轮工具集内（普通角色出现 Bash 等工具即判失败）、会话身份一致以及结构化结果校验。`--version` 或 `--help` 失败时，诊断会保留退出码、信号或超时类型和脱敏后的输出摘要。
 
-官方发现每六小时检查一次；MCP 服务运行时后台每五分钟检查是否到期及接续维护，新任务也可触发维护。关闭 Codex 后不会另装常驻系统服务；重开后继续。资格验证完成到后续切换可能等待下一次后台检查。升级插件后请打开新 Codex 任务加载新版工具；已经运行的 MCP 进程不热替换代码，不能假定旧任务已获得本版修复。
+每次派单固定所选可执行文件的路径和 SHA-256，启动前再次核对；变化即失败，不临时换用其他 CLI。续跑要求本机 CLI 与上一轮是同一文件：你升级或更换 CLI 后，续跑会被明确拒绝并提示改用 fresh 新一轮，不会恢复旧版本。0.4.2/0.4.3 的完整执行描述符仍可按续跑协议 1 续跑；0.4.1 及更早的历史 run 没有完整身份凭据，需核对旧结果后另起 fresh 轮次。
 
-Codex 会简要说明当前版本、目标版本、保留或升级的原因，以及对本次任务的影响；默认简洁详情显示更新进度与待说明的结果，完整模式可查清单来源。正常“已是支持的最新版”检查保持安静。用户主动回退或指定执行版本后，自动维护暂停，直到用户明确恢复；刷新检查不会取消这个暂停。
-
-系统 Claude 自动更新后，插件保留的可用版本仍可处理任务；陌生版本可作为候选，按已授权策略通过隔离验证后再使用。无需因系统更新全局降级或关闭 Claude 全局自动更新。原生安装的更新行为见 [Claude 官方说明](https://code.claude.com/docs/en/setup#auto-updates)。
-
-私有版本位于 `~/.codex/claude-orchestrator/cli/versions`（尊重 CODEX_HOME），以平台、版本和内容 SHA256 标识，校验原生签名和文件内容。安装时优先保留本机已验证的原生版本；需要时从官方分发源准备精确的已验证基线。复制对象不含凭据。只有插件启动的私有执行进程禁用自动更新，全局 launcher、账号和设置保持原样。
-
-每次派单固定执行文件身份，运行证据与详情中可查。切换和回退影响后续新任务；续跑沿用原轮次身份，不追随新的默认版本。文件损坏或丢失时明确阻断，不临时换 PATH。0.4.2/0.4.3 的完整执行描述符可迁移到续跑协议 1；后续兼容补丁沿用该协议，不再仅因源码哈希变化而拒绝续跑。仍要求原执行文件完整、任务契约不变、当前能力资格有效，并在新回执记录首次与当前实现契约。真正不兼容的续跑协议明确要求 fresh。0.4.1 及更早的历史 run 没有完整身份凭据，需核对旧结果后另起 fresh 轮次。
-
-版本管理入口已整合到 Skill，日常仍正常提需求。需要维护时可以直接说：
+**旧版本的受管执行版本已停用。** 早期版本在 `~/.codex/claude-orchestrator/cli`（尊重 CODEX_HOME）保存的私有 CLI、选择记录、资格回执和维护状态会原样保留、不会删除，但不再参与派单、续跑或模型目录，也不会阻断使用本机 CLI。`claude_cli_status` 会把它们列为历史记录，并显示保留文件的字节数（只统计记录大小与实际文件一致的版本）。确认不再需要后可自行清理该目录；运行证据不在其中。
 
 | 需求 | 工具行为 |
 | --- | --- |
-| 查看 Claude 版本和兼容情况 | `claude_cli_status`，分别列出系统版本、当前执行版本、候选、登录与实际调用记录 |
-| 检查支持版本的更新进度 | `claude_cli_update(action="refresh")`，接续后台维护；已授权 auto_qualify 时可能启动有界资格调用，尊重已暂停的策略 |
-| 暂停自动更新 / 恢复自动更新 | `claude_cli_update(action="policy", policy="manual"/"automatic")`；不改变运行中任务 |
-| 准备可用的 Claude 执行版本 | `claude_cli_update(action="prepare")`，准备私有文件，不发模型请求 |
-| 验证系统新版，通过后切换 | `claude_cli_update(action="validate")`，返回验证 job_id，可查询进度与报告 |
-| 先验证，不切换 | 上述工具加 `activate_on_success=false` |
-| 停止这次版本验证 | `claude_cli_update(action="cancel", job_id=...)`，等确认进程已停止 |
-| 回退 Claude 执行版本 | `claude_cli_update(action="rollback")`，核对保留版本后原子切换，并暂停自动更新以保留选择 |
-
-验证分为核心调用/取消、只读、写入、续跑和 Workflow 能力组；必须取得实际证据，参数出现在 help 里不算通过。新版本可取得与执行文件和当前桥接契约绑定的本地资格，不需要改内置列表。可选组未通过时，依赖该能力的任务选择仍被保留、资格有效的版本。认证、网络、配额或没有实际观察到测试工具调用会标成“未确认”，不会误报登录失效或兼容通过。
-
-陌生版本的资格验证会消耗Claude额度：手动validate或用户一次开启latest+auto_qualify后，才可发起。已启用时每个候选身份/当前桥接契约只自动尝试一次；未确认、失败不会在每次轮询或重启后重复付费。状态查询永远不发模型请求，模型目录只用initialize元数据查询；远端模型实际可用性以真实调用为准。验证失败、取消或与另一切换发生冲突时，保留原执行选择。已确认的能力违规会阻断对应身份的能力。历史文件保留以支持回退与续跑，本版不自动清理这些执行版本；版本状态的 storage_summary 显示已核验保留版本字节数，未计入下载断点和运行证据。清理工具尚未实现，不能删除被旧任务引用的执行文件。新任务若需要当前默认版不支持的已验证可选限制或能力，可选择资格有效的保留版本；详情记录本轮实际选择。
+| 查看 Claude 版本和兼容情况 | `claude_cli_status`，列出本机 CLI、安装、登录、实际调用记录和历史受管记录 |
+| 旧的准备/验证/切换/回退/刷新/策略请求 | `claude_cli_update` 已退役，只返回说明，不改变任何状态 |
+| 停止旧版本留下的验证任务 | `claude_cli_update(action="cancel", job_id=...)`，等确认进程已停止 |
 
 ### 模型升级
 
-`opus`、`sonnet`、`haiku` 等是官方类别别名，不是固定模型版本。`claude_models(cwd)` 查询当前执行CLI公布的模型选择项、`resolvedModel`和effort选项，也支持指定保留的CLI身份做比较。新模型类别会自动出现在返回目录中；插件不会自行切到更贵的类别，或把目录声明当作账户调用成功。组织、提供方和官方模型环境覆盖仍由Claude处理。
+`opus`、`sonnet`、`haiku` 等是官方类别别名，不是固定模型版本。`claude_models(cwd)` 查询本机 CLI 公布的模型选择项、`resolvedModel` 和 effort 选项；不再支持指定历史 CLI 身份。新模型类别会自动出现在返回目录中；插件不会自行切到更贵的类别，或把目录声明当作账户调用成功。组织、提供方和官方模型环境覆盖仍由 Claude 处理。
 
-模型升级可能同时要求CLI升级；旧CLI仍可用不代表已经使用新模型。请求类别别名与实际provider回报分别保存；历史任务不会被新目录改写。具体要求以[官方模型配置](https://code.claude.com/docs/en/model-config)为准。
+模型升级可能同时要求 CLI 升级；旧 CLI 仍可用不代表已经使用新模型。请求类别别名与实际 provider 回报分别保存；历史任务不会被新目录改写。具体要求以[官方模型配置](https://code.claude.com/docs/en/model-config)为准。
 
-### 显式使用外部安装
+### 桌面找不到 Claude 时指定路径
 
-下面的 `Install.command` 命令仅用于 ZIP 安装。Git marketplace 用户不要执行它或其配置参数；优先使用既有的受管 `prepare` 路径，保留所选 Git source/ref。
+下面的 `Install.command` 命令仅用于 ZIP 安装。Git marketplace 用户不要执行它或其配置参数，可在启动 Codex 的环境中设置 `CLAUDE_BIN`。
 
-需要自行管理 npm/custom 安装时，可显式选择外部模式。它按 `CLAUDE_BIN` → 插件 `settings.json` 的 `claude_bin` → MCP PATH 选择，仍有兼容预检；不享有插件私有版本的保留保证。若终端能找到 Claude、桌面找不到，在终端用 `command -v claude` 确认具体路径，再运行：
+若终端能找到 Claude、桌面找不到，在终端用 `command -v claude` 确认具体路径，再运行：
 
 ```bash
 bash Install.command --configure-claude-bin /你确认的绝对路径/claude
 bash Install.command --diagnose-json
 ```
 
-该配置只影响插件，不 source `.zshrc`、不切换 Node、不改全局 PATH。npm/nvm 的 `bin/claude` 符号链接会保留原路径，让旧式 Node shim 找到同一 bin 目录的 Node。更新配置后在新 Codex 任务加载插件。使用 prepare 可重新准备托管执行；状态页会清楚区分系统候选发现与实际派单的选择。
+该配置只影响插件，不 source `.zshrc`、不切换 Node、不改全局 PATH。npm/nvm 的 `bin/claude` 符号链接会保留原路径，让旧式 Node shim 找到同一 bin 目录的 Node。更新配置后在新 Codex 任务加载插件。
 
 ## 检查状态与执行详情
 
@@ -97,7 +82,7 @@ bash Install.command --diagnose-json
 
 派单后先显示具体任务 ID、目标、范围、请求模型与真实执行状态，并提供可点击工作台链接。同一 Codex 任务内，仅主代理在确认尚未请求打开时自动请求一次，发出前即记账；queued 只表示面板排队，失败不自动重开，上下文不明时只给链接。后续执行通过工作台任务列表查看；用户显式要求时可重新取得同一 run 的链接并打开，这不会新增 Claude 执行。主代理从自己的 MCP 取得 Viewer 链接，不直接依赖监督席的临时服务。详情失败不会重新派单。单页范围是同一任务内存活的 Viewer，跨 MCP/重启的统一入口和宿主深链复用标签页不作保证。主 Codex 用同一 run_id 等待增量并核验结束结果。插件工具标题是否出现在宿主汇总卡片，由 Codex 客户端决定。
 
-简洁页同时显示最近公开活动及其时间、页面最后同步时间和报告核验。页面不断刷新不代表 Claude 有新活动；连接中断也不证明任务停止。完整页分开显示请求模型、初始化解析与实际响应模型；实际模型来自 assistant.message.model 或 result.modelUsage，可能有多个，只有初始化信息时保持待确认。reported 是模型交回报告，accepted 是 Codex 核验决定；两者保持分开。
+工作台详情顶部显示执行、报告、核验三项事实，执行中时附最近公开活动及其时间，顶栏显示页面最后同步时间。页面不断刷新不代表 Claude 有新活动；连接中断也不证明任务停止。可展开的“本轮执行身份”分开显示请求模型与实际响应模型；实际模型来自 assistant.message.model 或 result.modelUsage，可能有多个，只有初始化信息时仍显示待 provider 回报。reported 是模型交回报告，accepted 是 Codex 核验决定；两者保持分开。
 
 ## 自动选择和手动指定
 
@@ -110,7 +95,7 @@ bash Install.command --diagnose-json
 | 这次由 Codex 处理 | 单次指定 Codex |
 | 用 Claude 的某个 Workflow 跑这次审查 | 核对指定保存脚本、名称、哈希和权限；只有真实 Workflow 调用才算启动 |
 | 这里理解错了，按这个反例修正 | 保留原验收，选择局部续接或停止后重新派单 |
-| 打开执行详情 | 打开同一执行的简洁卡片，可展开或切完整模式 |
+| 打开执行详情 | 在工作台打开同一执行：三项事实与报告直接显示，过程、文件变化、执行身份和技术记录可展开 |
 
 偏好配置在 `.agents/codex-claude/routing.json`：auto/manual，Codex/Claude 各自 0..100。提供“按任务选择”“仅手动”“Claude 偏好”三种预设；高级设置省略的字段保留当前值。默认双方50，加任务适配分；是可调的启发式偏好，不是调用配额、概率或模型能力排名。0表示不自动选择该执行者，手动仍可指定。澄清、小改动和架构裁决默认倾向 Codex；明确方案实现与独立审查默认倾向 Claude。路由同时考虑范围是否明确、独立性、主 Codex 已有上下文、响应时效、所需工具和已知可用性。需要外部连接器或超出当前能力时会解释阻断原因；手动指定保留原选择，不悄悄换执行者。路由建议不产生执行授权。
 
@@ -122,14 +107,14 @@ Claude 自身的 Workflow 属于单独的显式入口，不能因提高 Claude �
 
 inventory 从当前 `cwd` 向 Git 根查找 `.claude/workflows`，并合并个人 Claude 配置目录下的 `workflows`；项目脚本按 Claude 的项目优先级覆盖同名个人脚本。它只盘点磁盘上的保存脚本，不把旧的 Claude session、历史 run 或详情页记录当作“已安装 Workflow”。`workflow_review` 是 fresh-only：不能携带 correction，也不支持 resume。
 
-这项能力只允许 `Workflow(<已绑定名称>)` 和只读工具，执行后还要观察到对应 Workflow 的工具调用、成功工具结果与完成事件，才可进入报告核验。它不是完整的 **Claude Dynamic Workflow Review**：多席位编排策略、实施型 Workflow 以及其成本/并行/写入边界尚未验收，不能把这个单席只读模式写成完整 Workflow Review。
+这项能力只允许 `Workflow(<已绑定名称>)` 和只读工具，执行后还要观察到对应 Workflow 的工具调用、成功工具结果与完成事件，且被采用的父级结构化结果出现在完成事件之后，才可进入报告核验；Workflow 工具结果只是启动确认，完成前交回的结果只算中间结果。`claude -p` 默认在首个结果后最多空闲等待 10 分钟后台 Workflow，本入口把子进程的 `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS` 设为本次执行时限（只影响该子进程），由 `timeout_seconds` 统一约束，超时与取消仍按进程组停止。它不是完整的 **Claude Dynamic Workflow Review**：多席位编排策略、实施型 Workflow 以及其成本/并行/写入边界尚未验收，不能把这个单席只读模式写成完整 Workflow Review。
 
 ## 你能看到什么
 
 - **Codex 主任务**：选择执行者的简短原因、阶段进度、需你决定的问题、最终核验结论。
 - **原生子代理入口**：适合独立委派且主代理能并行核验时，看到负责本次 Claude 执行的 **Codex 监督子代理**；可查看其调用和摘要。Claude 本身不是 Codex 原生代理。
-- **默认简洁详情**：一句任务目标、统一状态、时长/最近同步、可读报告、核验结论与直接证据入口；可切轮次，展开查看公开过程。失败、未知和断连说明原因与下一步。
-- **完整模式**：文件筛选、工作区 diff、执行轮次、实际模型/会话、输入与结果证据。
+- **工作台详情**：左侧任务列表，右侧一句任务目标、执行/报告/核验三项事实、时长与同步时间、可读报告、下一步和核验依据；可切轮次。失败、未知和断连说明原因与下一步。
+- **可展开区**：公开活动（可按文件、工具筛选）、文件变化与工作区 diff、本轮执行身份（请求与实际模型、CLI）、技术记录（会话、输入与结果证据）。页面没有单独的完整模式。
 
 工具活动取自真实公开事件，不展示私有思考，不伪造完成百分比。没有新事件不等于停止。`reported` 是 Claude 已交回报告；主 Codex 核对真实文件与检查后才记录 `accepted` 或 `returned`。原生卡片样式和宿主 CLI 界面由 Codex 客户端决定，插件不能直接修改；插件详情页只提供相近的简洁阅读方式。
 
@@ -139,7 +124,18 @@ inventory 从当前 `cwd` 向 Git 根查找 `.claude/workflows`，并合并个�
 
 随包包含 v2.9 协议原文；项目已有协议优先。项目采用绑定参考协议 SHA；完整协议任务仍从已批准 delta/dispatch/基线恢复。正式 packet 的 protocol_binding 核对批准基线中的协议与 delta 身份，不能凭安装或一次模型 success 宣称已完成协议验收。
 
-局部完成后的纠正使用精确 run_id 续接，结构/方向变化在确认旧写入结束后 fresh。重连时优先核对绑定本轮输入的执行回执，并确认原进程已停止：完整证据可恢复到实际 reported/failed/cancelled 等终态；已结束状态不会被旧轮询写回运行中。启动前失败有独立回执，缺少 child.json 本身不能证明从未启动。未知状态先核实，不盲目重派。对于仍缺执行证据的 unknown，有“检查恢复”入口：Codex 对照记录检查执行进程组已停止、cwd 无执行者、当前文件快照一致，附实际证据后登记恢复。人工解除 unknown 占用不会把旧 unknown 改成成功，也不恢复旧会话；仅解除明确核验过的占用，允许另起 fresh 轮次。缺少进程身份或权限时仍保持阻断。重连后的非 owner 也可发送持久取消请求，仍须等待停止确认。多次验收/退回保留 decision_history。同一 finding 次数跨轮次保留；v2.9 只允许一轮自修后由协调者裁决。项目现有 PROGRESS/DECISIONS/DEBT/findings/final 是正式进度来源，插件记录仅作运行证据索引。
+局部完成后的纠正使用精确 run_id 续接，结构/方向变化在确认旧写入结束后 fresh。重连时优先核对绑定本轮输入的执行回执，并确认原进程已停止：完整证据可恢复到实际 reported/failed/cancelled 等终态；已结束状态不会被旧轮询写回运行中。启动前失败有独立回执，缺少 child.json 本身不能证明从未启动。未知状态先核实，不盲目重派。对于仍缺执行证据的 unknown，有“检查恢复”入口：Codex 对照记录检查执行进程组已停止、cwd 无执行者、当前文件快照一致，附实际证据后登记恢复。人工解除 unknown 占用不会把旧 unknown 改成成功，也不恢复旧会话；仅解除明确核验过的占用，允许另起 fresh 轮次。缺少进程身份或权限时仍保持阻断。新版记录的 Git 子目录 cwd 已被删除时，检查改在该 worktree 仍存在的根目录取证，快照仍按原 cwd 坐标计算；旧记录、位置被 symlink/嵌套仓库占用或 packet 无法核对时不能取证，需先恢复原目录。cwd 存在时也先核对它仍是原 worktree 中解析到自身的真实目录，被 symlink、嵌套仓库或新 worktree 替换的路径不会被当作原工作区。重连后的非 owner 也可发送持久取消请求，仍须等待停止确认。多次验收/退回保留 decision_history。同一 finding 次数跨轮次保留；v2.9 只允许一轮自修后由协调者裁决。项目现有 PROGRESS/DECISIONS/DEBT/findings/final 是正式进度来源，插件记录仅作运行证据索引。
+
+## 协调内容的动态更新（0.6.0 起）
+
+`SKILL.md` 是稳定入口，只保留名称/简介、关键权限与验收边界；详细协调说明在 `references/guide.md`，与同目录参考文件一起由 `references/manifest.json` 声明（schema、入口、协议参考、文件清单与 sha256、所需内容接口能力）。这些 Markdown 与插件版本解耦，不按 CLI 补丁版本准入。
+
+- **来源**：固定为仓库 `BryanYue/codex-claude-orchestrator` 的 `plugins/codex-claude-orchestrator/skills/codex-claude-orchestrator/references`。`claude_content_check(ref?)` 先把 ref（默认 `main`，或环境变量 `CLAUDE_ORCHESTRATOR_CONTENT_REF`）解析为实际 commit，再按 commit 读取清单与声明文件；只允许 HTTPS 访问 `api.github.com` 与 `raw.githubusercontent.com`，拒绝重定向，单次请求 10 秒、整次检查 45 秒，清单 64 KiB、最多 32 个扁平 `.md` 文件、单文件 256 KiB、合计 1 MiB，必须是 UTF-8 文本。不读取或发送任何凭据，不 git checkout/pull 用户源码，不安装依赖。开发/测试可传显式绝对路径 `local_dir`：只读取清单声明的普通文件（拒绝符号链接），固定其字节与哈希，不修改原目录。
+- **状态位置**：`<状态根>/content/`（默认 `~/.codex/claude-orchestrator/content/`）：`staging/<digest>` 暂存未审候选，`snapshots/<digest>` 保存已批准或内置快照，`reviews/<digest>.json` 保存不可改写的审查记录，`state.json` 记录 active、disabled、pending、最近检查与历史。不会写入自动发现的 Skill 目录；内容身份为清单字节的 sha256，写入经文件锁串行化并原子替换。
+- **审查与激活**：检查结果只暂存候选，返回 diff、文件列表与 digest，标为不可信资料。主 Codex 检查后调用 `claude_content_review(digest, decision, reason, evidence)`：approve 时重新核对全部哈希后生成快照；动态内容已停用时只保存批准记录（approved_disabled），保持内置内容，直到用户明确要求恢复并调用 rollback，否则激活给新任务使用；reject 后该 digest 不能再激活或回退。清单出现额外字段（例如 `approved`）一律视为无效，远端不能自带批准或关闭检查。接口版本或能力不兼容的候选不会暂存。
+- **生效范围**：激活、`claude_content_switch(action="disable")` 与 `action="rollback"` 都只影响之后的新 fresh 任务。每个 fresh run 在 `content-binding.json`（run 目录）与回执/结果中记录所用 digest、来源 commit、审查记录哈希与快照路径；resume 沿用原 run 的绑定，即使当前 active 已变或已停用。快照或审查记录被篡改时拒绝派单或续跑，不会当成功或静默换用其他版本。packet 中不能自带 `content_binding`。
+- **边界**：MCP 不能唤醒 Codex，也不能热改已载入的说明；检查只在 Codex 实际使用技能时由入口触发，同一会话不重复拉取。离线、无效或不兼容时继续使用上一已通过版本，首次没有外部内容时使用随插件分发的 guide。内容中的协议参考不会覆盖已采用或已批准的协议，也不改变 `protocol_binding`、`project_workflow` 或既有验收。Skill 名称/简介、MCP 代码、工具与权限的升级仍随插件安装发生。
+- **维护清单**：修改 `references/` 下的 Markdown 后，在插件目录运行 `uv run python scripts/content_store.py write-manifest` 刷新哈希，`uv run python scripts/content_store.py verify` 核对；`orchestration-protocol.md` 的字节不应改变。
 
 ## 普通文档与资料审校
 
@@ -151,11 +147,12 @@ inventory 从当前 `cwd` 向 Git 根查找 `.claude/workflows`，并合并个�
 
 - 普通 review 只读；implement 仅允许精确 owned_files 的 Edit/Write。构建/测试由 Codex 执行，Claude 此桥没有 shell。
 - 原有 Claude 配置/hook 保留；文件 hook 不是 OS 沙箱。完整协议要求的 oracle 登记、OS 保护、项目构建/下游/设备闸需由项目真实提供，缺失必需保护时停止依赖它的工作。
-- 同 cwd 排他防止接入桥的重复写入；其他工具仍由主代理协调。取消请求与确认停止分别记录。
-- `claude_start` 的执行时限默认 300 秒，可按任务显式设置为 1..14400 秒；它与每次最长 25 秒的进度等待不同。长任务在开始前选合适的有界时限，不到时自动续费重跑。可设置 Claude 最大轮数与 API 计价预算。轮数/预算仅在已测试 CLI profile 且参数实际可用时启用；不支持时拒绝带该控制的派单。费用与 token 来自 provider 回报，不等同订阅剩余额度或账单保证。
+- 执行排他按 Git worktree（真实 toplevel）计算：同一 worktree 的根目录、子目录和兄弟子目录共用一个执行位与 unknown 阻断，`git worktree add` 出的其他 worktree 相互独立；artifacts 资料目录按精确目录独立。接入桥的重复写入由此防止；其他工具仍由主代理协调。取消请求与确认停止分别记录。
+- `claude_start` 的执行时限默认 300 秒，可按任务显式设置为 1..14400 秒；它与每次最长 25 秒的进度等待不同。长任务在开始前选合适的有界时限，不到时自动续费重跑。可设置 Claude 最大轮数与 API 计价预算。轮数/预算仅在本机 CLI 的 help 列出对应参数时启用；不支持时拒绝带该控制的派单，不会忽略预算。
+- 用量按统计范围分开保存与显示：`result.usage_report.cli_session` 取最终 result 的 `modelUsage` 与 `total_cost_usd`，是 CLI 会话累计估算（含子代理），按模型列出并给合计；续跑会话的累计可能包含此前轮次支出，不是本轮新增，不跨轮相加。`main_agent_final` 是最终 `usage`，只代表主代理最后一次回报。多个 result 事件重复同一累计值，只取最后一个；两个范围不相加。原始 `usage`、`usage_summary`、`total_cost_usd` 字段保留原语义，另存原始 `model_usage`。缺项或畸形值记为未知而不是 0；没有 `usage_report` 的旧记录不补算整任务 token。费用是 CLI 客户端估算，不是实际扣费、账单保证或订阅剩余额度。
 - 详情页按游标增量读取；历史分页，终态降低刷新频率，页面不可见时减少查询。状态与验收结论使用同一规则，历史轮次被替代后不能显示为当前已完成。
-- 本地运行记录默认 `~/.codex/claude-orchestrator`，含项目资料，不随分发包发送。详情服务仅绑定127.0.0.1，随机端口/访问令牌，只读；重连后取新详情链接。
-- cwd 的跨版本锁/unknown marker 暂沿用系统临时目录，与 0.4.0 共用同一协调协议。不能手工删除活动锁或 marker 来解锁；系统清理临时目录仍是已知局限，持久协调目录迁移尚未交付。
+- 本地运行记录默认 `~/.codex/claude-orchestrator`，含项目资料，不随分发包发送。这个运行状态根不跟随 `CODEX_HOME`（与安装源、插件设置和历史 CLI 记录不同），需要其他位置时用 `CLAUDE_ORCHESTRATOR_STATE_DIR` 显式指定；改变它不会迁移已有记录，旧位置的 run 需在原状态目录中查看或恢复。详情服务仅绑定127.0.0.1，随机端口/访问令牌，只读；重连后取新详情链接。
+- 执行锁/unknown marker 暂沿用系统临时目录（按 TMPDIR 区分）。worktree 根目录的锁与 marker 键与旧版一致，仍与旧版互斥；旧版 marker 与旧记录按其记录的 cwd 归属到所在 worktree，已删除目录的旧 marker、以及旧记录在目录删除后重启生成的 marker，都按路径保守阻断所在 worktree（跨状态目录同样生效）。混合版本边界：旧版进程从子目录派单时只锁精确子目录，新版只有在同一状态目录里看到它的活动记录时才会额外检查该旧锁并拒绝派单；另一状态目录或独立旧 bridge 的子目录执行不能被新版识别，旧版也看不到新版的子目录执行。升级前先等旧版执行结束。不能手工删除活动锁或 marker 来解锁；系统清理临时目录仍是已知局限，持久协调目录迁移尚未交付。
 - 本版不自动删除运行证据，也不设无限后台采集。原始日志可能含任务资料；按团队留存规则在确认无活动执行后归档，分发只发安装包。诊断摘要与运行证据分开。
 - 不自动合并/发布，不实现无人值守协调者替换。停用项目采用不会自动停止正在运行的 Claude，先正常取消并等待终态。
 
