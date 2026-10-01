@@ -1,6 +1,6 @@
 # Runtime 与完整 Workflow 的边界
 
-本页区分 0.4.1 已交付的持久 Runtime、受限保存 Workflow 审查，以及仍未验收的完整 Dynamic Workflow Review；不把候选设计写成当前能力。
+本页以已发布 **0.6.1** 的 Runtime/Bridge 为当前实现基线，区分已交付的监督执行、受限保存 Workflow 审查和仍未验收的完整 Dynamic Workflow Review。标明历史版本的实测仅证明当时覆盖；本文的协调内容版本独立于插件版本，更新本文不升级旧 Runtime。
 
 ## 已交付：持久 Runtime 与受监督执行
 
@@ -10,7 +10,7 @@
 
 未交付的是无人值守 daemon、自动更换协调者、自动合并/发布，以及把状态存储升级为某一特定 TypeScript、Agent SDK 或 SQLite 技术栈。这些是后续候选，不是本版技术契约。
 
-## 0.4.5 补充：报告处置、快照和可见进度
+## 报告处置、快照和可见进度（当前行为）
 
 `claude_decide` 的 accepted/returned 仍表示原 Claude 报告的核验决定。returned 默认 resolution=revision_requested；协调者亲自补齐并核验任务后，可显式提供 completed_by_codex、completion_summary、reason、evidence。历史决定追加保存，原 provider result 与 receipt 不改；缺少明确记录不推断闭环，superseded 仍优先显示历史轮。
 
@@ -24,7 +24,9 @@
 
 start/status/wait/details/decide 增加可选 compact，默认 false 保留旧接口；Skill 常规调用传 true。摘要省略完整 result/decision_history，保留证据读取入口；wait 摘要省略 provider 活动计数事件并给省略数，next_cursor 仍是原始流游标。完整事件仍可查询。
 
-## 必须验证的机制
+## 任务级核验要求（由协调者落实）
+
+以下是协调与验收要求，不表示每个普通 packet 都具备完整协议字段，或 Runtime 已自动执行所有项目闸。
 
 - 派单带 task/lane/revision/attempt/要求来源/基线身份；结果绑定同一身份与实际代码/产物。
 - 重复交付去重；未知结果先 reconciliation，不把断流等于失败，不因重启自动重做外部动作。
@@ -50,9 +52,19 @@ Dynamic Workflows 可用于 CLI、Desktop、`-p` 与 SDK。关键词触发只适
 
 若以后接入完整模式，需单独验收“架构独立审查→具体实现→证据复核→合成”的多席策略、并行/成本可见性、失败语义、写入与权限边界、审查输出目录，以及实施型 Workflow 的真实效果。普通单席 review 或当前 `workflow_review` 都不能替代这些证据，也不能作为每个 lane 的默认循环。
 
-## 0.4.1 状态恢复
+## 状态恢复与 0.6.1 启动交接
 
-运行事实与主 Codex 验收分别记录。终态拒绝旧活动快照覆盖；新 bridge 在 run-dir 之外保存输入哈希绑定的启动阶段回执（pre_dispatch → launch_intent → executing → terminal）。launch_intent 尚未持久化 child 身份时不能推断未启动。重连读取可信终态、确认桥/Claude 进程组停止并持有该 run 的 worktree lane（旧版子目录记录另需其旧的精确 cwd 锁）后同步结果；证据不足仍 unknown。人工 reconcile 只解除已核验占用，不创造 reported 或 accepted。带 `lane_identity` 的记录其 Git 子目录 cwd 已删除时，inspect 在仍解析为该 lane 的 worktree 根目录取证，快照保持原 cwd 坐标，不改写 packet；无 lane 身份的旧记录、symlink/嵌套仓库/越界位置或 packet 绑定不符时仍不能取证。cwd 仍存在时同样须是解析到自身、worktree 根仍为该 lane 的真实目录，否则不取证。0.4.0 记录通过其旧 packet/receipt/进程绑定核验迁移，不能只靠新字段缺失判死。
+0.6.1 的 Runtime 从自己的有效状态目录启动 Bridge，显式设置 `Popen(cwd=state_root)`；Claude 子进程继续使用 packet 中批准的任务 cwd。解析其他 Bridge 子命令时不再提前调用 `Path.cwd()`；隐式 doctor cwd 不可用时返回有解释的诊断错误，显式 `--cwd` 不依赖已删除的父 cwd。
+
+在创建新运行记录前，Runtime 检查加载时捕获的执行模块身份与磁盘一致；代码已更换或无法读取时拒绝派单。启动 Bridge 前在执行目录之外写 `runtime_pre_spawn`，绑定 nonce、协议版本、代码摘要、run/task/revision、packet、CLI 描述符和 lane。该阶段 `child_started=null`，不能被旧恢复 reader 当成已证明未启动。Bridge 通过 `--startup-nonce` 核对交接，接管后才进入后续阶段；旧 Bridge 不识别这个参数时会拒绝启动，不退回无绑定执行。
+
+运行记录中的 `bridge_spawn_cwd` 与任务 `cwd` 分开保留。`claude_diagnostics.bridge_startup` 将启动目录和代码身份与 CLI 安装/认证结果分开：旧父 cwd 不可用不等于登录失败；只有新加载的 Runtime 才具有这些守卫，旧进程不会因安装动作自动更新。
+
+运行事实与主 Codex 验收分别记录。终态拒绝旧活动快照覆盖；新 bridge 在 run-dir 之外保存输入哈希绑定的启动阶段回执（0.6.1 受监督派发为 runtime_pre_spawn → pre_dispatch → launch_intent → executing → terminal）。launch_intent 尚未持久化 child 身份时不能推断未启动。重连读取可信终态、确认桥/Claude 进程组停止并持有该 run 的 worktree lane（旧版子目录记录另需其旧的精确 cwd 锁）后同步结果；证据不足仍 unknown。人工 reconcile 只解除已核验占用，不创造 reported 或 accepted。带 `lane_identity` 的记录其 Git 子目录 cwd 已删除时，inspect 在仍解析为该 lane 的 worktree 根目录取证，快照保持原 cwd 坐标，不改写 packet；无 lane 身份的旧记录、symlink/嵌套仓库/越界位置或 packet 绑定不符时仍不能取证。cwd 仍存在时同样须是解析到自身、worktree 根仍为该 lane 的真实目录，否则不取证。历史记录继续按自身的 packet/receipt/进程绑定核验，不能只靠新字段缺失推断已停止或从未启动。
+
+对 0.6.1 新绑定的 run，只有整个执行目录不存在时，恢复才可使用外置派单 packet；目录存在时要求完整且一致的目录内 packet/CLI 副本。仍须在 lane 锁内证明 Bridge 进程组已停止、无其他执行者、工作区与 expected_workspace_digest 一致，并验证生命周期的 nonce/代码/lane 绑定。损坏绑定不能借 `child.json` 绕过，启动结果不确定时保持 unknown。
+
+恢复先持久化审计事实，再提交 registry，最后只移除匹配本轮的 marker。执行目录存在时沿用 `reconciliation.json`；整个目录尚未生成时写 `<state_root>/recovery-receipts/<run_id>.json`，不补造目录或活动日志。后一路径即使回执已写、registry 提交失败，重试也只能采纳同一份绑定事实；不覆写原因/证据。恢复后旧 unknown 状态和历史证据保留，只允许新的 fresh revision。旧版缺少启动绑定的事故记录不因此获得恢复资格。
 
 Claude 子进程在独立进程组中运行，不继承 lane 锁。因此 bridge 在 lane 锁内复查无 marker 后，于 Claude Popen 之前发布本 run 的 lane 级 launch intent marker，记录原 cwd、规范 lane、run_id、run_dir 与 lifecycle 文件位置。Runtime 与 bridge 都崩溃而子进程仍存活时，其他状态目录的 Runtime 与独立 bridge 仍会被这个 marker 拒绝，同一 worktree 的任何 cwd 都不能派发；linked worktree 不受影响。bridge 只在以下条件都满足后，才按 nonce 删除自己未被改写的 marker：直接子进程已回收、进程组确认不存在（或 Popen 明确失败、从未启动），且回执与终态 lifecycle 已落盘。清理未确认、启动被中断、以及任何崩溃窗口都保留 marker。Runtime 判定 unknown 时，会用带 `state_root` 的同 run marker 覆盖它。之后只能由原状态目录采纳可信终态，或经 inspect/reconcile 核实进程组已停止后清除，不凭 PID 自动清理。
 

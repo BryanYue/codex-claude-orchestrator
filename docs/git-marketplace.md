@@ -120,18 +120,26 @@ Version, provenance and byte identity are separate fields.
 
 [RELEASE-VERIFICATION.md](../RELEASE-VERIFICATION.md) distinguishes actual
 remote installation, upgrade/rollback and MCP protocol checks from source
-checks, synthetic UI tests and real Claude execution. The remote experiment
-was completed on 2026-09-29 for the two fixed commits recorded there, including
-an invalid-ref recovery and pinned refresh. This is a single-host result,
-not a second-machine, new-user or Claude model execution test. It is a
-historical record for the published release, not verification of the
-0.6.1 installation. The new source/test/provider evidence is listed separately in the same verification document.
+checks, synthetic UI tests and real Claude execution. On 2026-10-02, the
+published `v0.6.1` tag resolved to
+`871818a9fabc297e53b8ca398ab317cd6470461f`. After candidate acceptance it was
+fetched and reinstalled through the normal Git marketplace commands. All
+83 plugin files matched the accepted candidate, and a fresh native MCP
+connection completed a real Sonnet 5.5 read-only smoke. Downloaded release
+assets also matched the reproducible build. This is a single-host result,
+not a cold second-machine or every-provider qualification.
 
-Verified rollback reference for this preview:
-`a40de37f583e51f333e61b93b0b2636d7620c1da` (full plugin version
-`0.5.0+codex.20260929020601`). It retains the older publisher metadata;
-`v0.5.0` contains the personal publisher metadata. Use the same explicit
-remove/add/install sequence to select this rollback SHA.
+The 2026-09-29 upgrade, rollback, invalid-ref and pinned-refresh experiments
+remain historical v0.5.0 evidence. They do not prove every v0.6.1 rollback
+or failure path. When rolling back, restore the source and fixed ref actually
+recorded before your update. The predecessor `v0.6.0` still points to
+`7dd38ca9bf40f092884e6a81d1a39981bff4c595`; the older tested v0.5.0 preview
+SHA remains in the historical verification section rather than being the
+default rollback target for all installations.
+
+Documentation corrections on `main` do not move `v0.6.1` or replace its ZIP.
+Versioned Markdown under `references/` can update through the reviewed content
+channel; it does not update executable code or an already-running MCP process.
 
 Report issues at [GitHub Issues](https://github.com/BryanYue/codex-claude-orchestrator/issues)
 with the plugin version, operating system and a sanitized error. Do not attach

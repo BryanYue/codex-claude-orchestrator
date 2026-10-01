@@ -4,13 +4,25 @@
 
 这里保留本机 CLI 准入、运行记录、权限边界和开发验证等细节。首次使用请先看[快速开始](getting-started.zh-CN.md)。本页为中文技术参考；[安装与恢复](install-and-recovery.md)及[Git 分发](git-marketplace.md)另有英文说明。
 
-文档重组不改变插件行为。下面的 ZIP 安装器命令只适用于完整构建包；Git marketplace 用户继续使用所选 Git 来源。
+本页按当前发布版 **v0.6.1** 的行为维护。下面的 ZIP 安装器命令只适用于完整构建包；Git marketplace 用户继续使用所选 Git 来源。
+
+## 版本与文档的对应关系
+
+| 内容 | 身份与更新方式 |
+| --- | --- |
+| 插件代码与安装包 | 当前发布 `v0.6.1`，完整版本 `0.6.1+codex.20261001182536`；固定标签、提交和发布包不可因文档修订而替换 |
+| README、docs、发布验证 | `main` 保存最新勘误与补齐的验收事实；旧标签和 ZIP 内保留发布时的文档快照 |
+| `references/` 动态协调说明 | 由 `manifest.json` 的 `content_version` 与文件哈希独立标识；只更新内容版本，不要求提升插件版本，仍须 Codex 检查和审查后激活 |
+| 历史变更与设计 | CHANGELOG 的旧版本、RELEASE-VERIFICATION 的历史段和 UI 设计提案保留原时间/基线；不能当作当前功能或新版本验收 |
+| 已采用的项目协议与任务输入 | 使用各自批准并钉住的协议、基线和内容 digest；插件或文档更新不替换它们 |
+
+查看“当前安装了什么”用实际安装清单与原生 MCP 诊断；查看“本轮执行了什么”用该轮的插件身份和 provider 回执。插件文件摘要包含随包 Markdown，因此 `main` 上仅改文档也可能改变源码树的整体摘要；不能据此改写已发布 `v0.6.1` 的摘要或声称已安装内容同步改变。
 
 ## 使用 ZIP 安装包开始
 
 1. 安装并登录 **Codex 桌面客户端**、**Claude Code CLI**；安装 `uv`（[官方说明](https://docs.astral.sh/uv/getting-started/installation/)，已有 Homebrew 可用 `brew install uv`）。
 2. 解压完整安装包，在终端运行 `bash /解压目录/Install.command`；也可双击 **Install.command**。若下载后的 Gatekeeper 阻止双击，使用上述 bash 入口，不必关闭系统安全设置。安装器校验包内哈希并检查环境，使用官方 Codex plugin 命令安装。Claude 尚未安装或登录时也可以先安装插件，再由诊断提示补齐；实际委派仍会被预检阻止。
-3. 安装后打开一个新的 Codex 任务，让客户端加载插件。项目已经有采用入口时，直接提任务；首次采用一个项目只需说：
+3. 安装后先按[依赖准备](install-and-recovery.md#first-time-preparation-both-paths)显式预热，再打开一个新的 Codex 任务，让客户端加载插件。项目已经有采用入口时，直接提任务；首次采用一个项目只需说：
 
    > 这个项目以后采用 Codex–Claude 协作流程。
 
@@ -47,7 +59,7 @@ bash Install.command --rollback <上一步返回的备份ID>
 
 help 只证明 CLI 声明了这些语法，不代表行为已测试。行为由每轮的实际证据确认：启动前的 hook 自检、每个文件工具的 hook 覆盖、实际使用的工具必须在本轮工具集内（普通角色出现 Bash 等工具即判失败）、会话身份一致以及结构化结果校验。`--version` 或 `--help` 失败时，诊断会保留退出码、信号或超时类型和脱敏后的输出摘要。
 
-每次派单固定所选可执行文件的路径和 SHA-256，启动前再次核对；变化即失败，不临时换用其他 CLI。续跑要求本机 CLI 与上一轮是同一文件：你升级或更换 CLI 后，续跑会被明确拒绝并提示改用 fresh 新一轮，不会恢复旧版本。0.4.2/0.4.3 的完整执行描述符仍可按续跑协议 1 续跑；0.4.1 及更早的历史 run 没有完整身份凭据，需核对旧结果后另起 fresh 轮次。
+每次派单固定所选可执行文件的路径和 SHA-256，启动前再次核对；变化即失败，不临时换用其他 CLI。续跑要求本机 CLI 与上一轮是同一文件：你升级或更换 CLI 后，续跑会被明确拒绝并提示改用 fresh 新一轮，不会恢复旧版本。旧记录是否可续跑须同时满足完整的续跑协议身份和本机 CLI 身份检查；早期受管私有 CLI 身份不能恢复使用。缺少完整身份凭据的历史 run，需核对旧结果后另起 fresh 轮次。
 
 **旧版本的受管执行版本已停用。** 早期版本在 `~/.codex/claude-orchestrator/cli`（尊重 CODEX_HOME）保存的私有 CLI、选择记录、资格回执和维护状态会原样保留、不会删除，但不再参与派单、续跑或模型目录，也不会阻断使用本机 CLI。`claude_cli_status` 会把它们列为历史记录，并显示保留文件的字节数（只统计记录大小与实际文件一致的版本）。确认不再需要后可自行清理该目录；运行证据不在其中。
 
@@ -126,6 +138,16 @@ inventory 从当前 `cwd` 向 Git 根查找 `.claude/workflows`，并合并个�
 
 局部完成后的纠正使用精确 run_id 续接，结构/方向变化在确认旧写入结束后 fresh。重连时优先核对绑定本轮输入的执行回执，并确认原进程已停止：完整证据可恢复到实际 reported/failed/cancelled 等终态；已结束状态不会被旧轮询写回运行中。启动前失败有独立回执，缺少 child.json 本身不能证明从未启动。未知状态先核实，不盲目重派。对于仍缺执行证据的 unknown，有“检查恢复”入口：Codex 对照记录检查执行进程组已停止、cwd 无执行者、当前文件快照一致，附实际证据后登记恢复。人工解除 unknown 占用不会把旧 unknown 改成成功，也不恢复旧会话；仅解除明确核验过的占用，允许另起 fresh 轮次。缺少进程身份或权限时仍保持阻断。新版记录的 Git 子目录 cwd 已被删除时，检查改在该 worktree 仍存在的根目录取证，快照仍按原 cwd 坐标计算；旧记录、位置被 symlink/嵌套仓库占用或 packet 无法核对时不能取证，需先恢复原目录。cwd 存在时也先核对它仍是原 worktree 中解析到自身的真实目录，被 symlink、嵌套仓库或新 worktree 替换的路径不会被当作原工作区。重连后的非 owner 也可发送持久取消请求，仍须等待停止确认。多次验收/退回保留 decision_history。同一 finding 次数跨轮次保留；v2.9 只允许一轮自修后由协调者裁决。项目现有 PROGRESS/DECISIONS/DEBT/findings/final 是正式进度来源，插件记录仅作运行证据索引。
 
+### 0.6.1 的启动与早期失败恢复
+
+Runtime 从有效的状态目录启动 Bridge，Claude 子进程仍使用批准的任务 cwd。`claude_diagnostics` 的 `bridge_startup` 分开报告父进程 cwd、实际启动目录以及加载代码/磁盘代码身份；父 cwd 不可用不等于 Claude 登录失败，也不再单独导致 Bridge 提前崩溃。
+
+Runtime 在派发前检查执行模块身份，并在启动 Bridge 前保存绑定 run/task/revision、packet、CLI、lane、nonce 和代码摘要的 `runtime_pre_spawn` 回执。Bridge 验证后接管该记录，之后才进入 `pre_dispatch → launch_intent → executing → terminal`。代码已替换或无法读取时应重连，不能通过换任务 ID、删除 marker 或重复调用来绕过。
+
+仅当整个执行目录尚不存在，且新协议及派单输入能核对时，恢复才可使用外置 packet。还须确认 Bridge 进程组已停止、lane 空闲且工作区 digest 一致。执行目录存在时必须核对目录内副本，不能用外置 packet 掩盖缺失或不符的运行证据。恢复回执先持久化：目录存在时写 `run-dir/reconciliation.json`，不存在时写 `<状态根>/recovery-receipts/<run_id>.json`，不补造执行目录；随后更新 registry 并仅清理本轮 marker。
+
+旧 `unknown` 若没有这些证据，或已进入启动结果不确定的 `launch_intent`，仍可能不能恢复。新连接解决加载身份问题，不能代替旧任务的恢复证明。安装完成后要用新连接确认实际加载版本；旧进程不会自动得到新守卫。以上机制是插件代码 0.6.1 的能力，下载新 Markdown 不会把旧 Runtime 升级为 0.6.1。
+
 ## 协调内容的动态更新（0.6.0 起）
 
 `SKILL.md` 是稳定入口，只保留名称/简介、关键权限与验收边界；详细协调说明在 `references/guide.md`，与同目录参考文件一起由 `references/manifest.json` 声明（schema、入口、协议参考、文件清单与 sha256、所需内容接口能力）。这些 Markdown 与插件版本解耦，不按 CLI 补丁版本准入。
@@ -182,7 +204,7 @@ uv run --project plugins/codex-claude-orchestrator --frozen --no-dev python tool
 
 自动回归、真实 Claude 调用、原生宿主接入和浏览器观察分别记录；小夹具通过不证明生产长任务零偏差。整体结构为：用户 → 主 Codex + Skill/规格 → 原生 Codex 监督席 → MCP Runtime → Claude；证据原路返回，由主 Codex 核验。
 
-发布验证同时覆盖隔离夹具、MCP 协议、浏览器和安装。具体版本与覆盖以随包 RELEASE-VERIFICATION.md 为准；不将历史版本的通过数当作本版证据。普通请求在新桌面任务中从路由到委派的完整自动入口，需要在目标宿主正常权限下走查；本机 MCP 直连不替代这项验收。
+验证记录区分隔离夹具、MCP 协议、浏览器和安装各层证据。v0.6.1 已完成候选安装与正式 Git 标签复装后的原生 MCP/真实 Claude 只读 smoke；没有因此重做全部浏览器或冷机验收。具体身份与覆盖见 [RELEASE-VERIFICATION.md](../RELEASE-VERIFICATION.md)，不将历史版本的通过数当作本版证据。普通请求在新桌面任务中从路由到委派的完整自动入口，需要在目标宿主正常权限下走查；本机 MCP 直连不替代这项验收。
 
 源码与 Git marketplace 由个人仓库 BryanYue/codex-claude-orchestrator 维护，使用固定发布 ref 安装。具体取源、升级、回退步骤见 [Git marketplace 说明](../docs/git-marketplace.md)，实际验证范围见 [发布验证](../RELEASE-VERIFICATION.md)。问题请通过仓库 Issues 提交，并去除凭据、viewer token 与业务代码。当前未指定开源许可证。
 

@@ -2,8 +2,10 @@
 
 This covers the two install paths for `codex-claude-orchestrator` and the
 first-use preparation both share. See [git-marketplace.md](git-marketplace.md)
-for the Git-specific commands and identity, and `RELEASE-VERIFICATION.md` for
+for the Git-specific commands and identity, and [RELEASE-VERIFICATION.md](../RELEASE-VERIFICATION.md) for
 which of the steps below have actually been exercised for the current version.
+The current release is `v0.6.1`; the completed candidate and published-tag
+reinstall checks are recorded there separately from older experiments.
 
 ## Two install paths
 
@@ -108,6 +110,9 @@ order:
 | `claude_cli_status` reports no discovered Claude CLI | No local Claude executable is visible to the MCP process | Install Claude Code yourself, or set `CLAUDE_BIN` for Codex; a ZIP install may instead use its installer with `--configure-claude-bin` |
 | Environment check reports `cli_incompatible` | Your local CLI's `--help` does not list a flag this task needs (named in the report) | Upgrade or reconfigure your own Claude CLI; the plugin will not substitute another version |
 | `claude_cli_status` reports not authenticated | Claude CLI is present but the user has not logged in | Log in with the Claude CLI yourself; the plugin will not do this for you |
+| 0.6.1 diagnostics reports a startup code mismatch or unreadable plugin code | The loaded Runtime and current files cannot establish the same identity | Start a new MCP connection with the installed version; do not delete markers or repeatedly dispatch |
+| The old chat errors after a plugin source switch, while a fresh connection works | The original MCP process may still refer to the removed installation | Reconnect or restart the client, then check the actual loaded version; do not infer it from the install inventory |
+| A previous `unknown` still blocks dispatch after reconnecting | The old run has separate unresolved execution evidence | Inspect that run with the normal recovery tools; reconnecting alone cannot establish whether Claude started |
 | Delegation is blocked even though the plugin is installed | Claude readiness (steps 2–4) is separate from plugin registration (this doc's "Two install paths") | Re-check readiness with `claude_cli_status`/diagnostics, not just install success |
 
 ## Migrating from the local catalog to a Git source

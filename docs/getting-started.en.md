@@ -122,7 +122,7 @@ To switch back to occasional use, say “Only use Claude when I explicitly ask f
 | The plugin is installed, but Claude is unavailable | Check whether your local Claude Code is found, whether it lacks a required option, and whether it is authenticated. If a correction cannot resume after you upgraded Claude Code, ask Codex to start a fresh round. |
 | The workbench did not open | Ask “Open the workbench for this task,” or use the link Codex provides. Opening the page does not require rerunning the task. |
 | No recent activity appears | Ask Codex to check execution status. No new activity does not mean the task has stopped. |
-| You want to update or roll back | Follow the [version-switching steps](git-marketplace.md#change-a-fixed-ref-or-migrate-from-zip). A fixed `v0.5.0` ref does not automatically advance to another release. |
+| You want to update or roll back | Follow the [version-switching steps](git-marketplace.md#change-a-fixed-ref-or-migrate-from-zip). A fixed ref (for example `v0.5.0` or `v0.6.0`) does not automatically advance to another release. |
 | You have a ZIP file | Built installation packages and Git installation use separate paths. GitHub's “Download ZIP” is a source archive, not a built installer package. See the [ZIP setup notes](install-and-recovery.md#two-install-paths). |
 
 For further help, open an [issue](https://github.com/BryanYue/codex-claude-orchestrator/issues) with your macOS version, plugin version, the step that failed and a sanitized error. Leave out credentials, workbench URLs containing access tokens and private project code.

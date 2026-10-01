@@ -120,7 +120,7 @@ bash scripts/launch.sh --prepare-dependencies
 | 已安装，但提示没有可用 Claude | 让 Codex 检查本机 Claude Code 能否被找到、是否缺少所需功能，再确认它的登录。升级 Claude Code 后若续跑被拒绝，让 Codex 另起新一轮。 |
 | 页面没自动打开 | 说“打开这次协作的工作台”，或点击 Codex 给出的链接。打开页面不需要重跑任务。 |
 | 页面暂时没有新活动 | 让 Codex 查询执行状态；没有新活动不代表任务已停止。 |
-| 想更新或回退插件 | 查看[版本切换步骤](git-marketplace.md#change-a-fixed-ref-or-migrate-from-zip)。固定 `v0.5.0` 不会自动跳到新发布版本。 |
+| 想更新或回退插件 | 查看[版本切换步骤](git-marketplace.md#change-a-fixed-ref-or-migrate-from-zip)。固定 ref（例如 `v0.5.0` 或 `v0.6.0`）不会自动跳到新发布版本。 |
 | 手上有 ZIP 包 | 完整安装包与 Git 安装使用不同流程。GitHub 的 “Download ZIP” 是源码归档，不能当作已经构建好的安装包。见[ZIP 安装说明](advanced-usage.zh-CN.md#使用-zip-安装包开始)。 |
 
 仍有问题时，向 [Issues](https://github.com/BryanYue/codex-claude-orchestrator/issues)提供 macOS 版本、插件版本、停在哪一步和去除敏感信息后的报错。请不要提交账号凭据、带访问令牌的工作台链接或业务代码。

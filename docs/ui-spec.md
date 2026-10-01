@@ -1,6 +1,24 @@
-# 0.5.0 workbench implementation specification
+# 工作台当前实现与历史设计参考
 
-The implementation amendments below take precedence over conflicting reference pseudocode. Stage A preserves the read-only viewer and execution contract; future backend fields stay gated off.
+## 当前状态：v0.6.1
+
+本节按已发布 v0.6.1 的 `assets/dashboard.html` 与 `scripts/viewer.py` 核对。后面的 0.5.0 实现修订和 0.4.7 基线 v2 设计保留其历史用途，不能据此声明所有提案已经实现。冲突时以本节和当前源码为准；实际验收覆盖见 [RELEASE-VERIFICATION.md](../RELEASE-VERIFICATION.md)。
+
+| 项目 | 当前行为与边界 |
+| --- | --- |
+| 页面与接口 | 单页只读工作台；保留 GET 的 runs/snapshot/events/artifact/cli-maintenance，POST 仍为 405，没有停止、重派或验收按钮 |
+| 本机 CLI 状态 | CLI 版本管理已经退役。`/api/cli-maintenance` 保留为只读本机 CLI/历史记录状态接口；抽屉展示本轮 CLI 与本机路径/来源，不提供下载或切换 CLI |
+| 本轮身份 | 记录本轮 CLI、请求模型/effort、实际 provider 模型、环境与执行证据；实际模型缺失时显示等待回报。旧设计的 `cli_selection_reason`、全局版本差异标签不作为已实现字段 |
+| 执行、报告、核验 | 分开显示三项事实；失败/unknown 的已有报告仍是未验收证据。报告内容使用中性色，绿色用于当前核验通过结论 |
+| B1/B2/B3 | `gate` 仍全部为 false；截断完整性、待收集、报告契约的拟新增字段不能描述成当前后端能力，模拟 gate 测试不等于已启用 |
+| 公开活动 | 允许事件是权限检查，CLI/Workflow 完成消息也不能替代最终报告与 Codex 验收；不展示私有推理 |
+| 打开与重连 | 由主代理按既有记账最多自动请求一次；queued 只表示排队。跨 MCP 的统一入口和宿主标签页复用未交付 |
+
+下面提及的设计任务文件和原型是历史来源，不是本仓库附带的可执行输入。历史验收清单表示当时的要求，不自动构成本次版本的实测记录。
+
+## 0.5.0 实现修订（历史）
+
+以下修订在当时优先于 v2 参考伪代码。Stage A 保留只读 Viewer 和执行契约；未实现的后端字段保持关闭。
 
 ## 4. A 阶段的具体实现规则
 

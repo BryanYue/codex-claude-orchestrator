@@ -34,6 +34,8 @@ Small tasks can stay with Codex. You can also choose who handles a particular ta
 | Follow the work | A shared workbench shows tasks, execution rounds, reports and verification results. |
 | Continue or correct a task | Add instructions in the same conversation; Codex checks existing progress before proceeding. |
 
+This page describes the published **v0.6.1** plugin. Documentation on `main` can be corrected independently; release tags and packages remain frozen. Coordination guidance has a separate content version and takes effect only after Codex reviews it; it does not upgrade plugin code. See [release verification](RELEASE-VERIFICATION.md) for the fixed release identity and completed installation checks.
+
 ## Get started
 
 ### 1. Have these ready

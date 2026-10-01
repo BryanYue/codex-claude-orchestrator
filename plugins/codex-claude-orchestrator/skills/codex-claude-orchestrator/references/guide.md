@@ -6,7 +6,7 @@ Codex 拥有任务目标、计划、技术裁决和验收。用本技能把明�
 
 ## 能力与边界
 
-本版是**macOS 监督式插件**：主 Codex 协调目标与验收，MCP Runtime 管理本机 Claude CLI。保存每轮输入、公开活动、结构化结果和回执。Git 项目支持只读 review、精确文件编辑、已保存命名 Workflow、指定会话纠正；普通资料文件夹支持明确文本清单的只读审校。支持取消、核对异常状态后 fresh 改向，以及默认简洁的结果/进度详情。
+本版是**macOS 监督式插件**：主 Codex 协调目标与验收，MCP Runtime 管理本机 Claude CLI。保存每轮输入、公开活动、结构化结果和回执。Git 项目支持只读 review、精确文件编辑、已保存命名 Workflow、指定会话纠正；普通资料文件夹支持明确文本清单的只读审校。支持取消、核对异常状态后 fresh 改向，以及显示执行/报告/核验三项事实、可展开证据的工作台。
 
 未实现：无人值守 daemon、自动更换 Codex 协调者、自动合入、完整 Claude Dynamic Workflow Review。用户请求这些能力时明确说明缺口；单席 review 不能标成 Workflow Review。完整 Runtime 设计见 [runtime-design.md](runtime-design.md)，仅在设计升级或恢复机制时读。
 
@@ -18,11 +18,17 @@ Codex 拥有任务目标、计划、技术裁决和验收。用本技能把明�
 
 读取本说明时保存 `claude_content_read` 返回的 digest。所有参考文件通过 `claude_content_read(path, digest=<同一 digest>)` 获取；fresh 派单使用 `claude_start(..., expected_content_digest=<所读 digest>)`。若另一会话切换内容，派单拒绝并要求重新读取；resume 使用原 run 的 content_binding.digest，不跟随 active 切换。旧客户端只使用内置内容时可省略此参数，这只记录派单时的内置快照，不证明协调者已经阅读。
 
+本文档内容版本由 `manifest.json` 独立标识，不等于插件代码版本。下载或批准 Markdown 不会更新 Runtime/Bridge、安装目录或已有任务；明确标为 0.6.1 的启动机制只适用于实际加载该版本的 MCP。旧版缺少相应记录或字段时报告缺口，不能补造记录或把新文案当作旧版能力。
+
 ## 首次安装与依赖恢复
 
 Git marketplace 安装不会运行根 `Install.command`。MCP 工具缺失或启动超时时，先检查实际安装版本与启动错误；不要把注册成功当作依赖或 Claude 已就绪。MCP 启动器需要 uv、Python >=3.11 和锁定依赖，第一次可能下载。可从插件根（`SKILL.md` 所在目录向上两层）执行 `bash scripts/launch.sh --prepare-dependencies` 显式预热；此命令只准备该完整 manifest 版本的 venv，不发 Claude 请求。无 uv 时说明缺项并按官方安装方式处理，不静默安装 Homebrew、改 shell 配置或登录。
 
 预热成功后重新加载插件 MCP，再用 `claude_cli_status(cwd)` 或 `claude_diagnostics(cwd)` 区分插件/宿主、本机 CLI 与本地认证；它们不证明冷下载或远端模型调用成功。本机没有 Claude CLI 时说明需要用户按官方方式安装，插件不代为下载；认证由用户完成。Git 来源不能用 `Install.command` 或其配置参数补救，以免切回本地 catalog；保留原 source/ref。预热后仍失败则核对实际错误，不无限延长120秒启动窗口或重派模型任务。
+
+升级或更换插件来源后，要通过新原生 MCP 连接核对实际加载的完整插件版本。原连接可能仍持有旧代码或指向已移除的安装目录；即使客户端先前重启过，也不能由安装清单推断这条连接已经更新。原连接失败时保留当前 run_id 与记录，按宿主支持的重连/重启方式恢复，不启动旁路 Claude 执行。新连接的成功不等于旧连接也更新，更不能解除旧任务的 unknown。
+
+0.6.1 的 `claude_diagnostics` 另给 `bridge_startup`：父进程 cwd 状态、Bridge 实际启动目录、已加载与磁盘执行模块的身份，以及是否可启动。父 cwd 不可用但状态目录有效时可以正常启动 Bridge；代码身份无法核对时应重新连接，不能把它误报成 Claude 登录失败。
 
 ## 自然入口与项目采用
 
@@ -90,10 +96,12 @@ Git marketplace 安装不会运行根 `Install.command`。MCP 工具缺失或启
 1. 按本次工作量选择有界 `timeout_seconds`（默认 300 秒，最大 14400 秒；不是进度轮询时限），调用 `claude_start(packet, timeout_seconds, resume_run_id?, expected_content_digest=<所读 digest>)`。取得具体 `run_id` 后说明任务目标、范围、请求模型和记录中的实际状态；“已创建执行记录”不等于进程已启动，`claude_started` 未确认时如实说明。
 2. 主代理在本 Codex 任务内按"打开请求记账"维护 `not_requested / requested / failed` 状态（只存在对话上下文，不写入 Runtime 或执行状态）。只有能确认 `not_requested` 且取得有效链接时才自动打开：给出 `[查看 Claude 协作工作台](details_url)`，在发出 `open_in_codex` 调用前先记为 `requested`，再用 browser target 请求一次；成功与 `queued` 都保持 `requested`（`queued` 只表示排队，不能说已显示），明确失败改为 `failed`、不自动重试。已处于 `requested` 或 `failed` 时，同任务后续 start/details 只给可点击链接和一句状态，不再自动调用 `open_in_codex`。上下文恢复时沿用已有记账；无法确认是否请求过时只给链接，不能按 `not_requested` 猜测重开。工具调用中的 URL 不代替用户可点击回复。详情不可用时保留原 `run_id` 继续查询，绝不因此重新派单。重连后用主代理自己的 `claude_details(run_id)` 取新链接；页面依赖 MCP 进程存活。用户显式说"重新打开/另开查看/打不开了"时，取新链接、先记 `requested` 再请求打开一次；这不新增 Claude run。不能保证宿主深链复用原标签页时，使用原工作台的任务列表定位；单页承诺限定为同一 Codex 任务内存活的 Viewer。原生监督席永不调用 `open_in_codex`，只回传 run_id 与 details_url。
 3. 用 `claude_wait(run_id, after=<上次 next_cursor>, timeout_seconds=25)` 获取增量，围绕同一 ID 跟踪到结束。报告新出现的有意义公开活动；无新事件不编造进展，也不重复相同状态。不用 latest 代替原任务，不高频轮询。默认详情区分“最近公开活动”和“页面同步”；请求模型/effort 是配置，实际模型只认 provider 证据。
-4. 执行结束读 `claude_result` 的 receipt/result/diff，按下节核验并给最终结论。`reported` 只表示 Claude 已交回结果；`claude_decide` 记录 Codex 有证据的 accepted/returned，不能省略验证，且接口只接受状态为 `reported`、未被 superseded 的 run，其他状态调用会被拒绝。公开活动、简洁/完整详情、核验依据复用现有入口，不另外创建监控任务或许诺无人值守通知。
+4. 执行结束读 `claude_result` 的 receipt/result/diff，按下节核验并给最终结论。`reported` 只表示 Claude 已交回结果；`claude_decide` 记录 Codex 有证据的 accepted/returned，不能省略验证，且接口只接受状态为 `reported`、未被 superseded 的 run，其他状态调用会被拒绝。公开活动、可展开详情、核验依据复用现有入口，不另外创建监控任务或许诺无人值守通知。
 5. `claude_cancel(run_id, reason)` 发出取消；继续等待终态回执。`unknown` 表示无法确认，先核实进程和残留变更，不能直接重派。
 
 重连后先查询原 run；Runtime 会核对输入身份、回执和进程停止事实，证据完整可回到实际终态。非 owner 可通过 `claude_cancel` 请求原 bridge 停止，不能凭取消已发送认定已停止。仍出现 unknown 时调用 `claude_recovery(run_id)`，对照实际文件与返回的进程/工作区证据。只有系统确认进程已停止、lane 空闲且本轮 workspace digest 与核对一致，才用 `claude_reconcile(run_id, reason, evidence, expected_workspace_digest)` 记录恢复。证据须指向实际检查，不填“已核对”占位字符串。核对失败就报告具体缺口，不手动删除 marker/改 registry；人工 reconcile 核对成功也只允许新的 fresh 轮次，不能把缺少执行证据的旧 unknown 改为成功或继续旧 session。正常运行的例行状态查询不需要恢复操作。
+
+0.6.1 对尚未生成执行目录的早期失败另有证据路径：Runtime 在 Bridge 启动前保存 nonce/代码/任务/lane 绑定的 `runtime_pre_spawn` 记录。只有该记录与外置派单输入可核对、Bridge 已停止且工作区一致时，正常 recovery/reconcile 才可能通过；恢复回执保存在状态根的 `recovery-receipts`，不会创建假的执行目录。目录已存在时必须核对目录内输入；`launch_intent` 启动不确定、证据损坏或历史记录无绑定时仍阻断。没有 `child.json` 或“换过连接”都不是未启动证明，不能补写启动记录来获得恢复资格。
 
 ### 普通资料文件夹
 
@@ -109,7 +117,7 @@ Git marketplace 安装不会运行根 `Install.command`。MCP 工具缺失或启
 - 每轮用新 run-dir；同一任务保持 task_id，revision 递增。MCP 记录默认在 `~/.codex/claude-orchestrator`，在现有 PROGRESS 中链接对应 run，不污染实现仓或改正式判据。
 - review 只有读文件与搜索工具；implement 增加 Write/Edit，精确列出 owned_files。普通角色不向 Claude 提供 shell、代理、Workflow 或 MCP 工具，构建/测试由 Codex 在用户授权的环境中执行。
 - 明确请求已保存 Workflow 时，使用 `role=workflow_review`、空 owned_files 与 inventory 返回的 `workflow={name,path,sha256,args?}`，只允许该名称和精确参数。它是只读、fresh-only，不能 resume；缺失真实工具调用或关联完成通知就不能记成功，完成通知之前交回的结构化结果只是中间结果。`timeout_seconds` 同时约束 Workflow 的后台等待，按脚本规模设足时限。开始前阅读脚本确认只读意图；失败则报告，不擅自替换为普通 review。完整协议的审查席与验收仍须单独满足。
-- MCP Runtime 托管 bridge；需要 CLI fallback 时在托管终端启动，保留运行 session id。不要用 `nohup` 或丢弃进程管理把本版伪装成持久服务。
+- 用户任务由原生 `claude_*` MCP Runtime 托管 bridge。MCP 不可用时报告限制并恢复正常连接，不改为直接 CLI 或临时监督脚本；只读安装/环境诊断及开发离线夹具与真实委派分开。不要用 `nohup` 或丢弃进程管理把本版伪装成持久服务。
 - 默认保留 Claude 的配置和 hook；附加本轮文件约束。宿主沙箱仍生效。若命令因为沙箱不能写 Claude 自身会话目录而失败，按宿主的权限升级流程请求具体命令权限，不使用 bypass/bare 或搬移凭证绕过。
 
 ## 接收、审查和验收

@@ -1,6 +1,6 @@
 # Claude bridge 使用
 
-路径中的 `<skill>` 是本技能目录；由 Codex 展开为实际绝对路径。桥接器只依赖 Python 3 标准库，要求本机已安装且可正常认证的 `claude`。它沿用本机认证，不读取或复制 token。
+路径中的 `<skill>` 是本技能目录；由 Codex 展开为实际绝对路径。本页描述当前 0.6.1 的 Bridge；它要求 Python >=3.11 与本机已安装且可正常认证的 `claude`，沿用本机认证，不读取或复制 token。用户任务经原生 `claude_*` MCP 执行，本页底层 CLI 参数是开发参考，不能当作 MCP 不可用时的真实委派后备。仅更新 Markdown 不会升级已加载的 Bridge。
 
 ## 任务包
 
@@ -30,7 +30,7 @@
 - implement 的第一次运行要求干净 Git 工作区。已有合法脏改动由协调者安排合适候选目录，不得 stash 或覆盖。
 - 纠正续跑的工作区、要求源内容与文件范围必须仍匹配上一轮快照，避免沿旧依据继续工作。保持 task/cwd/role/model、baseline、constraints、acceptance 和 owned/protected 范围不变；把局部补充放 objective/correction。这些边界需要变更时重新派 fresh 任务；effort 可以按方法需要调整。
 - requirement_sources 是原始约束入口，也是保护对象。protected_files 按当前任务实际列出，不能把所有新测试自动称为正式 oracle。
-- 运行目录放项目任务记录目录中的独立运行区，或者授权的本地任务目录；不要放进当前被编辑的仓而产生未知脏文件。
+- MCP Runtime 自行管理状态根下每轮的独立运行目录；在项目 PROGRESS 中引用它，不将运行日志写进被编辑仓库。开发夹具也使用隔离目录，不产生待审工作区的额外脏文件。
 - `model` 和 `effort` 必须为非空字符串。模型目录用 `claude_models(cwd)` 从本机 CLI 的 initialize 响应发现（`identity_id` 已退役），返回 `value`、`resolvedModel` 及 effort 信息；只保留模型字段，不输出账号信息，不发送模型提示词。按类别跟随最新时原样传官方 alias；完整模型 ID 按用户显式要求原样传递。类别默认值不是固定版本映射，实际解析由 Claude CLI/提供方/组织/环境配置决定。目录声明、请求值和 provider 实际回报分别记述。
 
 ### 普通资料目录
@@ -70,7 +70,10 @@ bridge 仅允许 packet 精确绑定的 `Workflow(name[, args])`，不接受 inl
 
 历史记录：早期版本曾在 Claude CLI 2.1.276、2.1.277 和 2.1.278 上用真实 MCP 只读夹具观察过该模式：放行结构校验后的输出工具，并以同一 session、同一 Workflow tool_use_id 的 system/task_notification completed 作为完成证据。这不是当前版本的准入名单；其他版本同样以每轮观察到的完成证据为准。启动回执不算完成。仅涉及该受限模式，不覆盖任意脚本或完整审查策略。
 
-## 命令
+## MCP 入口与底层开发参数
+
+正常委派使用 `claude_start`、`claude_status`、`claude_cancel`、`claude_recovery` 等 MCP 工具。下列 CLI 入口用于开发接口说明和有界诊断/离线夹具；独立 Bridge 仍保留这些参数，但不等同受监督 Runtime 的外置启动交接，也不是用户任务的旁路执行方案。
+
 
 ```text
 python3 <skill>/scripts/bridge.py doctor --cwd /absolute/project
@@ -111,9 +114,9 @@ python3 <skill>/scripts/bridge.py cancel --run-dir /absolute/runs/001 --reason "
 
 `--verify` 禁用 agent 工具、MCP 和 slash commands，最多一个 agent turn，不保存可续跑会话；保留宿主权限和原有 hook，会使用少量模型额度。CLI 可按自身正常机制刷新认证；桥不直接读取或保存密钥。输出仅含认证方式、provider、脱敏账号等状态字段，不保存原始认证响应/在线探测输出；不把本地状态、一次在线成功、额度与会话持久化混为一个承诺。
 
-每次 `run` 在启动任务请求前自动执行本地预检。失败写入 `environment.json` 与 blocked 回执，返回非零，不启动 Claude 任务。处理问题后使用新的 run-dir 重试。已成功的在线检查只作当前会话的证据，不缓存为长期有效的凭证证明。
+每次 `run` 在启动任务请求前自动执行本地预检。失败写入 `environment.json` 与 blocked 回执，返回非零，不启动 Claude 任务。确认预检失败回执并处理问题后，经原生 MCP 派发新的 fresh 轮次；unknown 仍须先核对恢复条件。已成功的在线检查只作当前会话的证据，不缓存为长期有效的凭证证明。
 
-示例的 300 秒只是小夹具的运行上限；实际任务按范围设置，不是质量或验收阈值。run 是前台受监督进程，应由 Codex 的终端工具保留 session 并等待，不能在启动后直接汇报完成。
+示例的 300 秒只是小夹具的运行上限；实际任务通过 `claude_start(timeout_seconds=...)` 按范围设置，不是质量或验收阈值。用户任务的 Bridge 由 MCP Runtime 监督，通过原 run_id 等待和核验；启动记录不等于完成。
 
 局部纠正写新 packet、递增 revision、增加：
 
@@ -132,7 +135,13 @@ python3 <skill>/scripts/bridge.py run --packet /absolute/packet-002.json --run-d
 
 只对已完成且身份匹配的会话使用 resume，结构/方向改变使用 fresh（不传 resume-from）。需要先处理旧执行和残留改动；新 revision 本身不构成需求变更授权。若涉及新决定，保存原有明确授权或取得必要决定后继续。
 
-成功拿到结果不代表 Claude 已成功持久化会话。若 `--resume` 返回 `No conversation found`，该续跑应记失败；检查本机会话保存及宿主权限。不要猜另一个 session ID，也不要把新会话当成原会话续接。沙箱限制应走宿主的正常权限升级流程，随后用新的 run-dir 重试；保留原失败证据。
+成功拿到结果不代表 Claude 已成功持久化会话。若 `--resume` 返回 `No conversation found`，该续跑应记失败；检查本机会话保存及宿主权限。不要猜另一个 session ID，也不要把新会话当成原会话续接。沙箱限制应走宿主的正常权限升级流程，随后经原生 MCP 用新 revision 重试；保留原失败证据。
+
+## 0.6.1 受监督启动记录
+
+Runtime 先验证执行模块身份，再在 Bridge Popen 前写执行目录之外的 `runtime_pre_spawn` 回执，并通过 `--startup-nonce` 交接。Bridge 核对 nonce、代码身份、输入和 lane 后接管，再记录 `pre_dispatch`、`launch_intent`、`executing` 与 `terminal`。这些是 Runtime/Bridge 产生的证据，不是协调者可手填的 packet 字段。
+
+Bridge 从有效的 Runtime 状态目录启动；Claude 仍使用任务 cwd。Runtime 的 `bridge_spawn_cwd` 和诊断的 `bridge_startup` 可分别检查启动位置与代码身份。`doctor` 仅在未指定 `--cwd` 时解析当前目录；父目录已删除时，显式 cwd 和其他子命令不因无关的当前目录求值提前崩溃。
 
 ## 阅读回执
 
@@ -150,9 +159,13 @@ structured 内容中的 `checks` 是 Claude 自报；本工具集没有 shell，
 
 ## unknown 的恢复
 
-通过 MCP `claude_recovery(run_id)` 查看恢复条件、进程组、当前工作区快照与 digest。主 Codex 核查文件与真实进程证据后调用 `claude_reconcile(run_id, reason, evidence, expected_workspace_digest)`；该工具在 cwd 锁内重新检查，任一进程存活、身份不明、权限不足或快照变化均不能恢复。
+通过 MCP `claude_recovery(run_id)` 查看恢复条件、进程组、当前工作区快照与 digest。主 Codex 核查文件与真实进程证据后调用 `claude_reconcile(run_id, reason, evidence, expected_workspace_digest)`；该工具在同一 worktree lane 锁内重新检查，任一进程存活、身份不明、权限不足或快照变化均不能恢复。
 
-成功只登记 `reconciliation.json` 和解除本轮占用，不把旧 unknown 改为 accepted/reported。后续必须 fresh 且新 revision，不自动重试。保留旧回执与恢复证据，不通过人工删锁或 marker 绕过判断。
+执行目录存在时，成功恢复沿用目录内 `reconciliation.json`。0.6.1 新协议记录若在整个执行目录尚未生成时失败，只有 nonce/代码/lane、外置 packet 和 CLI 身份、停止事实及工作区均可核对，才允许把恢复回执写到 `<state_root>/recovery-receipts/<run_id>.json`；不创建假的执行目录，也不追加伪造的运行活动。目录存在但输入副本缺失或不符时，不使用外置 packet 兜底。
+
+先持久化恢复证据，再提交 registry，最后仅清理本轮匹配的 marker。外置回执已经写入而 registry 提交失败时，重试必须匹配同一事实，不能覆写第一次原因与证据。缺少 child.json 本身不证明未启动；损坏绑定、launch_intent 启动不确定或历史证据不足时仍阻断。
+
+恢复只解除已核验占用，不把旧 unknown 改为 accepted/reported。后续必须 fresh 且新 revision，不自动重试。保留旧回执与恢复证据，不通过人工删锁或 marker 绕过判断。
 
 bridge 在启动 Claude 之前，会先在系统临时目录的 `codex-claude-cwd-unknown/` 下发布本 run 的 launch intent marker，记录原 cwd、lane、run_id、run_dir 和 lifecycle 文件位置。只有 Claude 进程组确认停止或确认从未启动、且回执已写入后，bridge 才删除这个 marker。如果 Runtime 与 bridge 都已崩溃，marker 会继续阻止其他状态目录和独立 bridge 在同一 worktree 派发。这时到 marker 记录的原状态目录执行 `claude_recovery`/`claude_reconcile`；独立 bridge 的 run 需人工核实进程和工作区。marker 检查在 lane 锁内进行：lane 仍被占用时报告 active run；lane 空闲而 marker 仍在时，新 run-dir 记录 failed 回执，Claude 不会启动。
 

@@ -1,11 +1,16 @@
 # 0.6.1 verification and supported scope
 
-Full plugin version: `0.6.1+codex.20261001182536`. Fixed release target: `v0.6.1`.
+Full plugin version: `0.6.1+codex.20261001182536`. Published fixed ref: `v0.6.1`.
+Release commit: `871818a9fabc297e53b8ca398ab317cd6470461f`.
+[GitHub release and artifacts](https://github.com/BryanYue/codex-claude-orchestrator/releases/tag/v0.6.1).
+This section is updated with the completed delivery checks. Its code and
+package digests identify that immutable release, not later documentation-only
+commits on `main`; the packaged copy retains its publication-time wording.
 Verified on 2026-10-02 (Asia/Shanghai), Apple Silicon macOS, Codex desktop CLI
 0.159.0 and the user's existing Claude CLI 2.1.285. Older sections below are
 historical evidence for their own versions.
 
-## Verified source and installed candidate
+## Verified source, package and installed release
 
 - The reviewed repair passed 375 plugin tests and 125 Bridge tests. The 29
   added test methods cover deleted parent cwd, startup code identity,
@@ -27,7 +32,22 @@ historical evidence for their own versions.
   run `run-5dETZmR3l8jCh4nD` used `claude-sonnet-5-5`, returned provider exit 0,
   had 1/1 audited Read calls with no denials, and left the fixture unchanged.
   Codex independently verified and accepted that installed-candidate smoke.
-- The plugin file digest is
+- The committed-tree distribution suite passed all 29 tests, bringing the
+  release regression total to 529 (375 plugin + 125 Bridge + 29 distribution).
+  The ZIP was built twice with identical bytes; all 99 manifest entries and
+  archive contents were verified. Its SHA-256 is
+  `c0b96a4bcfd3710e00d6fda98ef4842d6b6a896efcb0c041a66d758f72cc2a50`.
+  The ZIP and release manifest downloaded back from GitHub matched the build.
+- After publication, the candidate marketplace registration was removed and
+  the published `v0.6.1` Git ref fetched and installed. Its checkout resolved
+  to the release commit above; all 83 plugin files matched the candidate and
+  installed cache. A second fresh native MCP connection completed real run
+  `run-4qwB9Dz7_J48O0O1` with `claude-sonnet-5-5`: provider exit 0, 1/1 audited
+  Read calls, no denials, unchanged input and accepted by independent Codex
+  checks. Seven startup/recovery probes also passed against the installed
+  release. The existing CLI binary and 23 unrelated plugin installations
+  were unchanged.
+- The released plugin file digest is
   `dcf3f5bdb620e6a5fdcae150094bce8b92fd3e78f561ac32b76a7b371b36dee4`.
   The startup executable-code digest is
   `ca7a0c47cf908d30de051ae6b09eb0992ca751af711381a30a631588f7f780f7`.
@@ -36,14 +56,14 @@ historical evidence for their own versions.
 
 ## Delivery and recovery boundaries
 
-- Publishing is gated on the installed-candidate smoke above. The 29-test
-  distribution suite and deterministic ZIP build run on the committed tree;
-  exact artifact hashes and post-publication Git-ref reinstall results are
-  recorded with the GitHub release rather than inferred from source tests.
-- After publication, reinstall from the fixed Git tag and use a fresh native
-  MCP connection for another real-provider smoke. Existing MCP processes
-  retain their loaded code; an installation inventory alone proves neither
-  loaded code nor a provider execution.
+- The installed-candidate acceptance preceded commit/publication; the fixed-tag
+  reinstall and second native-provider smoke above happened after publication.
+  These are distinct observed stages, not conclusions inferred from tests.
+- Existing MCP processes retain loaded code. The original old connection
+  returned a diagnostics error after the installation switch; the two fresh
+  connections passed. Reconnect or restart before dispatching from an old
+  connection. Installation inventory alone proves neither loaded code nor a
+  provider execution.
 - No CLI binary, account, login, credential or auto-update policy is changed.
   No historical unknown run is automatically reconciled. Old records lacking
   proof of whether Claude started remain blocked; deleting a marker or
@@ -125,7 +145,7 @@ login settings or installed plugin cache was changed to obtain these results.
 
 # 0.5.0 verification and supported scope
 
-> The section below is retained historical v0.5.0 evidence. Its test counts, tool counts, CLI qualification and unchanged-contract statements do not describe 0.6.0.
+> The section below is retained historical v0.5.0 evidence. Its test counts, tool counts, CLI qualification and unchanged-contract statements do not describe v0.6.0 or v0.6.1.
 
 
 The integrated candidate contains the read-only task workbench, single-opening
