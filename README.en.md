@@ -1,4 +1,4 @@
-# Codex–Claude Collaboration · 0.6.0
+# Codex–Claude Collaboration · 0.6.1
 
 [简体中文](README.md) · **English**
 
@@ -49,13 +49,13 @@ This release has been checked on an **Apple Silicon Mac**. Intel Macs have not b
 Run these commands in your terminal, one at a time:
 
 ```bash
-codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v0.6.0
+codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v0.6.1
 codex plugin add codex-claude-orchestrator@codex-claude-team
 ```
 
 The first adds the plugin source; the second installs the plugin. The repository is public, so no GitHub invitation or sign-in is needed.
 
-> **About versions:** `v0.6.0` includes the local CLI policy, Codex-reviewed Markdown updates, and execution-evidence and workspace-isolation fixes. The old `v0.5.0` tag is unchanged. Existing installations pinned to it need the [version-switching steps](docs/git-marketplace.md#change-a-fixed-ref-or-migrate-from-zip) to select `v0.6.0`; refreshing a fixed marketplace ref does not advance it to another tag.
+> **About versions:** `v0.6.1` fixes bridge startup from a deleted parent directory and adds startup code identity checks and evidence-bound early-failure recovery. The old `v0.5.0` and `v0.6.0` tags remain unchanged. Use the [version-switching steps](docs/git-marketplace.md#change-a-fixed-ref-or-migrate-from-zip) to select `v0.6.1`; refreshing a fixed ref does not advance it to another tag.
 
 **On first installation, prepare the dependencies before opening a new Codex task.** If you prefer help with the terminal, see `codex: command not found`, or have an older local installation, follow the [step-by-step guide](docs/getting-started.en.md). It also includes an installation request you can paste into Codex.
 

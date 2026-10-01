@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "skills/codex-claude-orchestrator/scripts"))
 import bridge
 import cli_store
+import startup_protocol
 import cli_validation
 from executable_locator import locate_claude
 
@@ -123,7 +124,22 @@ def _maintenance_status() -> dict:
         return {"state": "unavailable", "reason": f"{type(exc).__name__}: {exc}"}
 
 
-def collect(cwd: str, *, recent_runs: list[dict] | None = None, job_id: str | None = None) -> dict:
+def _bridge_startup(supplied: dict | None) -> dict:
+    """Bridge startability is its own dimension; it never changes CLI login or readiness."""
+    if isinstance(supplied, dict):
+        return supplied
+    try:
+        script = Path(bridge.__file__).resolve()
+        loaded = startup_protocol.loaded_identity(startup_protocol.plugin_root(script))
+        value = startup_protocol.startup_readiness(loaded, script)
+        value['runtime_state'] = 'not_supplied'
+        return value
+    except Exception as exc:
+        return {'ready': False, 'status': 'unavailable', 'reason': f'{type(exc).__name__}: {exc}'}
+
+
+def collect(cwd: str, *, recent_runs: list[dict] | None = None, job_id: str | None = None,
+            bridge_startup: dict | None = None) -> dict:
     folder = Path(cwd)
     if not folder.is_absolute() or not folder.is_dir():
         raise ValueError('cwd must be an existing absolute directory')
@@ -212,6 +228,7 @@ def collect(cwd: str, *, recent_runs: list[dict] | None = None, job_id: str | No
     return {'schema_version': 2, 'plugin': {'name': manifest['name'], 'version': manifest['version']},
             'platform': {'system': platform.system(), 'machine': platform.machine()},
             'codex': host, 'uv_installed': uv_ready, 'claude': claude,
+            'bridge_startup': _bridge_startup(bridge_startup),
             'cli_management': cli_management,
             'cli_maintenance': maintenance,
             'ready': bool(host['desktop_compatibility'] == 'verified' and uv_ready and environment.get('ready')),

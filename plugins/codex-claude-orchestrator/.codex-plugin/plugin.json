@@ -1,6 +1,6 @@
 {
   "name": "codex-claude-orchestrator",
-  "version": "0.6.0+codex.20260930055451",
+  "version": "0.6.1+codex.20261001182536",
   "description": "Project-aware Codex–Claude orchestration with portable specifications, native Codex supervision, configurable routing, MCP execution and compact progress details.",
   "author": {
     "name": "BryanYue",

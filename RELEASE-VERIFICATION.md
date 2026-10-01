@@ -1,3 +1,59 @@
+# 0.6.1 verification and supported scope
+
+Full plugin version: `0.6.1+codex.20261001182536`. Fixed release target: `v0.6.1`.
+Verified on 2026-10-02 (Asia/Shanghai), Apple Silicon macOS, Codex desktop CLI
+0.159.0 and the user's existing Claude CLI 2.1.285. Older sections below are
+historical evidence for their own versions.
+
+## Verified source and installed candidate
+
+- The reviewed repair passed 375 plugin tests and 125 Bridge tests. The 29
+  added test methods cover deleted parent cwd, startup code identity,
+  nonce-bound handoff and early-failure recovery. Existing test expectations
+  were not relaxed. Independent baseline/candidate probes also passed seven
+  startup scenarios and sixteen recovery/adversarial scenarios.
+- The full 375-test plugin suite passed again after the 0.6.1 version and
+  installation-documentation changes. Sandbox process-group restrictions
+  were preserved in the first failing log and the original suite was rerun
+  with normal host permissions. The Bridge suite had the same explicit host
+  permission boundary; its unchanged 125 tests passed with those permissions.
+- Claude implemented the initial repair; Codex reproduced and fixed three
+  recovery edge cases. A fresh read-only Claude Opus 5.5 review of the frozen
+  final repair found no blocking issues, with 35/35 audited tool calls and
+  zero permission denials. Codex independently accepted that source review.
+- A normal local marketplace installation copied all 83 plugin files with
+  identical hashes. A fresh native Codex MCP connection reported this exact
+  full version and matching loaded/disk startup identity. Its real read-only
+  run `run-5dETZmR3l8jCh4nD` used `claude-sonnet-5-5`, returned provider exit 0,
+  had 1/1 audited Read calls with no denials, and left the fixture unchanged.
+  Codex independently verified and accepted that installed-candidate smoke.
+- The plugin file digest is
+  `dcf3f5bdb620e6a5fdcae150094bce8b92fd3e78f561ac32b76a7b371b36dee4`.
+  The startup executable-code digest is
+  `ca7a0c47cf908d30de051ae6b09eb0992ca751af711381a30a631588f7f780f7`.
+  Installed caches without Git metadata honestly report unknown revision;
+  their bytes must be compared with the independently verified source/ref.
+
+## Delivery and recovery boundaries
+
+- Publishing is gated on the installed-candidate smoke above. The 29-test
+  distribution suite and deterministic ZIP build run on the committed tree;
+  exact artifact hashes and post-publication Git-ref reinstall results are
+  recorded with the GitHub release rather than inferred from source tests.
+- After publication, reinstall from the fixed Git tag and use a fresh native
+  MCP connection for another real-provider smoke. Existing MCP processes
+  retain their loaded code; an installation inventory alone proves neither
+  loaded code nor a provider execution.
+- No CLI binary, account, login, credential or auto-update policy is changed.
+  No historical unknown run is automatically reconciled. Old records lacking
+  proof of whether Claude started remain blocked; deleting a marker or
+  fabricating a startup record is not a supported recovery.
+- A single-host smoke is not a fresh-machine cold install, Intel/Windows/Linux
+  qualification, every-provider test or a long-running load test. Earlier
+  release tags remain immutable.
+
+---
+
 # 0.6.0 verification and supported scope
 
 Full plugin version: `0.6.0+codex.20260930055451`. Fixed release target: `v0.6.0`.

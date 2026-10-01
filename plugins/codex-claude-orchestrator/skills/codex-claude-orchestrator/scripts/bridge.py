@@ -32,6 +32,7 @@ if PLUGIN_SCRIPTS.is_dir():
 from executable_locator import RETIRED_SELECTION_SOURCES, locate_claude, cli_environment
 import content_store
 import plugin_identity
+import startup_protocol
 
 from events import append as append_activity
 import usage as usage_scope
@@ -1814,20 +1815,45 @@ def run(args: argparse.Namespace) -> int:
 
     Missing child metadata is never proof of no dispatch: launch_intent is
     persisted before Popen and remains indeterminate across a hard crash.
+    With a startup nonce, the sidecar already holds Runtime's pre-spawn record;
+    it is replaced only after the handoff binding verifies, and a failed
+    handoff leaves that record untouched.
     """
     sidecar = os.environ.get("CODEX_BRIDGE_LIFECYCLE_FILE")
+    startup_nonce = getattr(args, "startup_nonce", None)
+    if startup_nonce is not None and not sidecar:
+        raise BridgeError("startup handoff requires the Runtime lifecycle file")
     if sidecar:
+        loaded_code = (startup_protocol.loaded_identity(startup_protocol.plugin_root(Path(__file__).resolve()))
+                       if startup_nonce is not None else None)
         packet_path = require_absolute(args.packet, "packet")
         raw = load(packet_path)
         args._lifecycle_path = require_absolute(sidecar, "lifecycle file")
         args._lifecycle_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        args._lifecycle = {"schema_version": 1, "run_id": Path(args.run_dir).name,
-                           "task_id": raw.get("task_id"), "revision": raw.get("revision"),
-                           "cwd": str(Path(raw.get("cwd", "")).resolve()),
-                           "packet_sha256": sha256_file(packet_path), "bridge_pid": os.getpid(),
-                           "cli_descriptor_sha256": getattr(args, "cli_descriptor_sha256", None),
-                           "phase": "pre_dispatch", "status": "starting", "child_started": False,
-                           "terminal": False}
+        packet_cwd = raw.get("cwd")
+        lifecycle = {"schema_version": 1, "run_id": Path(args.run_dir).name,
+                     "task_id": raw.get("task_id"), "revision": raw.get("revision"),
+                     "cwd": str(Path(packet_cwd).resolve()) if isinstance(packet_cwd, str) and os.path.isabs(packet_cwd) else None,
+                     "packet_sha256": sha256_file(packet_path), "bridge_pid": os.getpid(),
+                     "cli_descriptor_sha256": getattr(args, "cli_descriptor_sha256", None),
+                     "phase": "pre_dispatch", "status": "starting", "child_started": False,
+                     "terminal": False}
+        if startup_nonce is not None:
+            try:
+                pre_spawn = load(args._lifecycle_path)
+            except (OSError, ValueError):
+                pre_spawn = None
+            try:
+                startup_protocol.verify_handoff(pre_spawn, nonce=startup_nonce, run_id=lifecycle["run_id"],
+                                                packet_sha256=lifecycle["packet_sha256"],
+                                                cli_descriptor_sha256=lifecycle["cli_descriptor_sha256"], code=loaded_code)
+            except startup_protocol.StartupError as exc:
+                raise BridgeError(str(exc)) from exc
+            lifecycle.update(startup_nonce=startup_nonce, startup_protocol_version=startup_protocol.STARTUP_PROTOCOL_VERSION,
+                             code_identity=loaded_code["value"], lane_identity=pre_spawn.get("lane_identity"),
+                             taken_over_from=startup_protocol.PRE_SPAWN_PHASE)
+            args._startup_code = loaded_code
+        args._lifecycle = lifecycle
         args._lifecycle["bridge_identity"] = capture_process_identity(os.getpid())
         lifecycle_update(args)
     try:
@@ -2038,6 +2064,12 @@ def _run(args: argparse.Namespace) -> int:
             child_env["CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS"] = "1" if prior_cap == "1" else "2"
             workflow_wait_ceiling_ms = print_background_wait_ceiling_ms(args.timeout)
             child_env[PRINT_BG_WAIT_CEILING] = str(workflow_wait_ceiling_ms)
+        # The hook command re-executes bridge.py from disk on every tool call.
+        startup_code = getattr(args, "_startup_code", None)
+        if startup_code is not None:
+            problem = startup_protocol.mismatch(startup_code, startup_protocol.code_identity(startup_protocol.plugin_root(bridge)))
+            if problem:
+                raise BridgeError(problem + "; Claude was not launched")
         # Publishing over a marker that appeared since the locked check (for
         # example Runtime's post-spawn escalation of this run) would erase it.
         if unknown_markers(lane):
@@ -2368,7 +2400,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Supervised Claude CLI bridge; invocation constraints are not an OS sandbox.")
     sub = parser.add_subparsers(dest="command", required=True)
     d = sub.add_parser("doctor", help="check CLI installation/login; optionally verify one no-tool request")
-    d.add_argument("--cwd", default=str(Path.cwd()))
+    # Resolved only for doctor: other subcommands must start without a valid parent cwd.
+    d.add_argument("--cwd", default=None, help="directory to check; defaults to the current directory")
     d.add_argument("--verify", action="store_true", help="make one minimal request to verify effective authentication")
     d.add_argument("--model", default="sonnet")
     d.add_argument("--timeout", type=float, default=60)
@@ -2379,12 +2412,19 @@ def main() -> int:
     r.add_argument("--cli-descriptor-sha256", help=argparse.SUPPRESS)
     r.add_argument("--content-binding", help=argparse.SUPPRESS)
     r.add_argument("--content-binding-sha256", help=argparse.SUPPRESS)
+    r.add_argument(startup_protocol.NONCE_ARGUMENT, dest="startup_nonce", help=argparse.SUPPRESS)
     s = sub.add_parser("status"); s.add_argument("--run-dir", required=True)
     c = sub.add_parser("cancel"); c.add_argument("--run-dir", required=True); c.add_argument("--reason", required=True)
     h = sub.add_parser("hook"); h.add_argument("--packet", required=True); h.add_argument("--cwd", required=True)
     args = parser.parse_args()
     try:
         if args.command == "doctor":
+            if args.cwd is None:
+                try:
+                    args.cwd = os.getcwd()
+                except OSError as exc:
+                    raise BridgeError(f"the current directory is unavailable ({type(exc).__name__}: {exc}); "
+                                      "pass --cwd with an existing absolute directory") from exc
             cwd = require_absolute(args.cwd, "cwd").resolve()
             if not cwd.is_dir() or args.timeout <= 0:
                 raise BridgeError("doctor requires an existing cwd and a positive timeout")

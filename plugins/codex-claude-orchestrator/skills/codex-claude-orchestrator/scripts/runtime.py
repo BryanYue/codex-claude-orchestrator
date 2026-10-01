@@ -20,6 +20,10 @@ except ImportError:  # executed from the scripts directory by the MCP server
     import bridge  # type: ignore
     from events import append, latest, latest_meaningful, read, statistics  # type: ignore
 import content_store  # bridge placed the plugin scripts directory on sys.path
+import startup_protocol
+
+# Must be taken while this module is being imported; see loaded_identity().
+_LOADED_CODE = startup_protocol.loaded_identity(startup_protocol.plugin_root(Path(bridge.__file__).resolve()))
 
 
 ACTIVE = {"starting", "running", "executing", "collecting", "cancelling"}
@@ -327,6 +331,7 @@ class Runtime:
                      and lifecycle.get("packet_sha256") == record.get("packet_sha256"))
             if record.get("cli_descriptor_sha256"):
                 bound = bound and lifecycle.get("cli_descriptor_sha256") == record["cli_descriptor_sha256"]
+            bound = bound and startup_protocol.nonce_bound(lifecycle, record)
             status = lifecycle.get("status")
             started = lifecycle.get("child_started")
             phase = lifecycle.get("phase")
@@ -349,6 +354,8 @@ class Runtime:
         # Backward compatibility for 0.4.0 runs that completed after their
         # Runtime owner died.  A missing child.json is deliberately not enough:
         # Popen can succeed before child.json is persisted.
+        if startup_protocol.has_startup_binding(record):
+            return None
         legacy_packet = self._packet_binding(record, require_run_copy=True)
         if legacy_packet is None:
             return None
@@ -439,6 +446,10 @@ class Runtime:
         with self._guard:
             if self._closing:
                 raise RuntimeError("runtime is closing; it will not dispatch a new Claude process")
+            # Rejected before any run, packet, lifecycle or marker exists: this
+            # process would otherwise pair its loaded modules with other bridge code.
+            bridge_script = Path(bridge.__file__).resolve()
+            code_identity = startup_protocol.require_unchanged(_LOADED_CODE, startup_protocol.plugin_root(bridge_script))
             lane = self._lane_lock(lane_identity)
             proc = None
             thread = None
@@ -511,6 +522,13 @@ class Runtime:
                     content_sha256 = self._file_sha256(content_path)
                 lifecycle_path = self._lifecycle_path(run_id)
                 lifecycle_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                startup_nonce = secrets.token_hex(16)
+                # Written once, before the bridge exists; only the bridge may
+                # replace it, after verifying this binding.
+                bridge.dump(lifecycle_path, startup_protocol.pre_spawn_record(
+                    run_id=run_id, task_id=normalized["task_id"], revision=normalized["revision"], cwd=normalized["cwd"],
+                    packet_sha256=packet_sha256, cli_descriptor_sha256=cli_sha256, lane_identity=lane_identity,
+                    nonce=startup_nonce, code_value=code_identity["value"]))
                 record = {"run_id": run_id, "task_id": normalized["task_id"], "revision": normalized["revision"], "cwd": normalized["cwd"],
                           "lane_identity": lane_identity, "status": "starting", "phase": "starting", "started_at": time.time(), "updated_at": time.time(),
                           "last_activity_at": None, "model": normalized["model"], "session_id": None, "summary": "bridge starting",
@@ -525,6 +543,10 @@ class Runtime:
                           "content_binding": content_store.binding_summary(content_binding),
                           "content_binding_file": str(content_path) if content_path else None,
                           "content_binding_sha256": content_sha256,
+                          "startup_nonce": startup_nonce,
+                          "startup_protocol_version": startup_protocol.STARTUP_PROTOCOL_VERSION,
+                          "bridge_code_identity": code_identity["value"], "bridge_script": str(bridge_script),
+                          "bridge_spawn_cwd": str(self.state_root),
                           "changed_files": None, "workspace_changes": workspace_changes(None, None),
                           "environment": {"isolation": "bridge hook constraints only; no OS sandbox claim"}}
                 record["events_count"] = 0
@@ -535,8 +557,9 @@ class Runtime:
                             old.setdefault("superseded_by", run_id)
                             old["updated_at"] = time.time()
                 self._update(register)
-                command = [sys.executable, str(Path(bridge.__file__).resolve()), "run", "--packet", str(packet_path), "--run-dir", str(run_dir), "--timeout", str(timeout),
-                           "--cli-descriptor", str(cli_path), "--cli-descriptor-sha256", cli_sha256]
+                command = [sys.executable, str(bridge_script), "run", "--packet", str(packet_path), "--run-dir", str(run_dir), "--timeout", str(timeout),
+                           "--cli-descriptor", str(cli_path), "--cli-descriptor-sha256", cli_sha256,
+                           startup_protocol.NONCE_ARGUMENT, startup_nonce]
                 if resume_run_id:
                     command += ["--resume-from", previous["run_dir"]]
                 if content_path is not None:
@@ -549,8 +572,10 @@ class Runtime:
                 environment["CODEX_BRIDGE_CANCEL_FILE"] = str(cancel_request)
                 environment["CODEX_BRIDGE_LIFECYCLE_FILE"] = str(lifecycle_path)
                 cancel_request.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-                proc = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr, text=True, start_new_session=True,
-                                        env=environment, pass_fds=(lane.fileno(),))
+                # The bridge must not inherit this server's cwd, which a plugin
+                # reinstall can delete; Claude itself still runs in packet cwd.
+                proc = subprocess.Popen(command, cwd=str(self.state_root), stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr,
+                                        text=True, start_new_session=True, env=environment, pass_fds=(lane.fileno(),))
                 bridge_identity = bridge.capture_process_identity(proc.pid)
                 self._update(lambda data: data["runs"][run_id].update(bridge_pid=proc.pid, bridge_process_group=proc.pid,
                                                                         bridge_identity=bridge_identity,
@@ -660,6 +685,13 @@ class Runtime:
             terminated = True
             stdout.close(); stderr.close()
             self._archive_bridge_logs(run_id)
+            if not os.path.lexists(self._run_dir(run_id)):
+                try:
+                    logs = self._bridge_log_evidence(run_id)
+                    self._update(lambda data: data["runs"][run_id].update(bridge_logs=logs)
+                                 if run_id in data.get("runs", {}) else _NO_REGISTRY_CHANGE)
+                except Exception:
+                    pass
             current = self._registry().get("runs", {}).get(run_id, {})
             if isinstance(current.get("cwd"), str):
                 cwd = current["cwd"]
@@ -705,6 +737,28 @@ class Runtime:
                 os.replace(source, run_dir / name)
             except OSError:
                 pass
+
+    def _bridge_log_evidence(self, run_id: str) -> dict[str, Any]:
+        """Locate and hash the bridge's own stdout/stderr without exposing their text."""
+        run_dir = self._run_dir(run_id)
+        evidence: dict[str, Any] = {}
+        for stream in ("stdout", "stderr"):
+            evidence[stream] = {"path": None, "state": "missing"}
+            for path in (run_dir / f"runtime_bridge.{stream}.log", self.logs_root / f"{run_id}.{stream}.log"):
+                try:
+                    size = path.stat().st_size
+                    digest = bridge.sha256_file(path)
+                except OSError:
+                    continue
+                evidence[stream] = {"path": str(path), "state": "present", "size": size, "sha256": digest}
+                break
+        return evidence
+
+    def _recovery_receipt_path(self, run_id: str) -> Path:
+        return self.state_root / "recovery-receipts" / f"{self._run_dir(run_id).name}.json"
+
+    def startup_readiness(self) -> dict[str, Any]:
+        return startup_protocol.startup_readiness(_LOADED_CODE, Path(bridge.__file__).resolve(), spawn_cwd=self.state_root)
 
     def _refresh(self, run_id: str, exit_code: int | None = None, owned: bool = False,
                  allow_unowned_active: bool = False, trusted_terminal: dict[str, Any] | None = None) -> None:
@@ -940,6 +994,8 @@ class Runtime:
             return None
         if record.get("cli_descriptor_sha256") and lifecycle.get("cli_descriptor_sha256") != record.get("cli_descriptor_sha256"):
             return None
+        if not startup_protocol.nonce_bound(lifecycle, record):
+            return None
         return lifecycle
 
     def _recorded_cwd_observation_root(self, record: dict[str, Any], packet: dict[str, Any]) -> Path | None:
@@ -986,7 +1042,9 @@ class Runtime:
         if not record:
             raise ValueError("run_id was not found")
         run_dir = self._run_dir(run_id)
+        run_dir_present = os.path.lexists(run_dir)
         lifecycle = self._bound_lifecycle(record)
+        protocol_bound = startup_protocol.has_startup_binding(record)
         detail: dict[str, Any] = {
             "run_id": run_id,
             "status": record.get("status"),
@@ -994,6 +1052,9 @@ class Runtime:
             "lane_available": lane_available,
             "bridge": self._process_presence(record.get("bridge_process_group"), group=True,
                                              label="recorded bridge process group", identity=record.get("bridge_identity")),
+            "run_dir_present": run_dir_present,
+            "lifecycle_phase": lifecycle.get("phase") if isinstance(lifecycle, dict) else None,
+            "bridge_logs": self._bridge_log_evidence(run_id),
         }
         state = self._read_json(run_dir / "state.json") or {}
         # State is written by bridge before its sole Claude Popen.  Prefer it
@@ -1015,13 +1076,32 @@ class Runtime:
             detail["child"] = self._process_presence(lifecycle.get("child_process_group"), group=True,
                                                      label="lifecycle Claude child process group",
                                                      identity=lifecycle.get("child_identity"))
+        elif not run_dir_present and startup_protocol.bound_pre_spawn(lifecycle, record):
+            # A protocol bridge replaces this record before it can create the
+            # run directory or publish a launch intent.
+            detail["child"] = {"state": "stopped",
+                               "reason": "bound runtime pre-spawn record proves the bridge never took over, so no Claude child was launched"}
         else:
             detail["child"] = {"state": "unconfirmed",
                                "reason": "Claude child launch is unconfirmed; no bound pre-dispatch proof or durable child identity exists"}
         packet = self._read_json(run_dir / "packet.json")
+        dispatched_fallback = (not run_dir_present and isinstance(record.get("startup_nonce"), str)
+                               and isinstance(record.get("packet_sha256"), str))
+        if dispatched_fallback:
+            # Only a never-created execution directory may substitute the
+            # strictly bound outer packet; an existing one keeps its own copy.
+            packet = self._packet_binding(record, require_run_copy=False)
+        packet_mismatch = False
+        if protocol_bound and run_dir_present and isinstance(packet, dict):
+            # An existing execution copy must match the dispatched inputs in
+            # full; matching only task/cwd coordinates is not enough.
+            packet = self._packet_binding(record, require_run_copy=True)
+            packet_mismatch = packet is None
         workspace: dict[str, Any] = {"state": "unconfirmed"}
         if not isinstance(packet, dict):
-            workspace["reason"] = "packet.json is missing or malformed"
+            workspace["reason"] = ("execution packet or CLI binding cannot be verified" if packet_mismatch else
+                                   "dispatched packet binding cannot be verified" if dispatched_fallback
+                                   else "packet.json is missing or malformed")
         else:
             try:
                 # bridge owns both Git and declared-artifact snapshot semantics.
@@ -1037,6 +1117,8 @@ class Runtime:
                 if observed_root is not None:
                     workspace.update(observed_at="established_worktree_root", observed_root=str(observed_root),
                                      recorded_cwd=packet["cwd"], recorded_cwd_present=False)
+                if dispatched_fallback:
+                    workspace["packet_source"] = "dispatched_packet"
                 recorded = self._read_json(run_dir / "workspace_after.json")
                 if not isinstance(recorded, dict):
                     recorded = self._read_json(run_dir / "git_after.json")
@@ -1052,6 +1134,8 @@ class Runtime:
             blocking.append("run is not unknown")
         if self._has_reconciliation(record):
             blocking.append("unknown run already has a confirmed reconciliation")
+        if protocol_bound and lifecycle is None:
+            blocking.append("startup lifecycle binding is missing or invalid")
         if lane_available is not True:
             blocking.append("cwd lane is not exclusively available")
         if detail["bridge"]["state"] != "stopped":
@@ -1115,6 +1199,9 @@ class Runtime:
                         raise RuntimeError("expected_workspace_digest does not match the recorded reconciliation")
                     if actual_digest != recorded_digest:
                         raise RuntimeError("workspace changed since recorded reconciliation; marker was not cleared")
+                    if reconciliation.get("run_dir_present") is False:
+                        if self._read_json(self._recovery_receipt_path(run_id)) != reconciliation:
+                            raise RuntimeError("persisted recovery receipt does not match the recorded reconciliation")
                     self._require_matching_unknown_marker(current["cwd"], run_id)
                     self._clear_matching_unknown_marker(current["cwd"], run_id)
                     return self.snapshot(run_id)
@@ -1127,12 +1214,46 @@ class Runtime:
                          "workspace_digest": actual_digest, "recorded_at": time.time(),
                          "note": "manual recovery fact; old unknown receipt remains terminal and is not accepted"}
                 run_dir = self._run_dir(run_id)
+                run_dir_present = detail.get("run_dir_present") is not False
+                receipt_path = run_dir / "reconciliation.json"
+                if not run_dir_present:
+                    # Creating the execution directory here would fabricate
+                    # run evidence and disable the outer-packet fallback that a
+                    # marker-cleanup retry depends on.
+                    receipt_path = self._recovery_receipt_path(run_id)
+                    value.update(run_id=run_id, run_dir_present=False, receipt_file=str(receipt_path),
+                                 packet_sha256=current.get("packet_sha256"), startup_nonce=current.get("startup_nonce"),
+                                 lifecycle_phase=detail.get("lifecycle_phase"),
+                                 lifecycle_sha256=self._file_sha256(self._lifecycle_path(run_id)),
+                                 bridge_logs=detail.get("bridge_logs"))
                 def persist(data):
                     current = data.get("runs", {}).get(run_id)
                     if not current or not self._unreconciled_unknown(current):
                         raise RuntimeError("unknown run is no longer eligible for reconciliation")
-                    bridge.dump(run_dir / "reconciliation.json", value)
-                    current["reconciliation"] = value
+                    persisted = value
+                    if not run_dir_present:
+                        if os.path.lexists(run_dir):
+                            raise RuntimeError("execution run directory appeared during reconciliation; inspect again")
+                        receipt_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                        if os.path.lexists(receipt_path):
+                            # A crash can commit this receipt but not registry.json.
+                            # Adopt only that same fact; never replace it with a retry.
+                            existing = self._read_json(receipt_path)
+                            keys = ("run_id", "outcome", "run_dir_present", "receipt_file", "packet_sha256",
+                                    "startup_nonce", "workspace_digest", "lifecycle_phase", "lifecycle_sha256")
+                            if (not isinstance(existing, dict)
+                                    or any(existing.get(key) != value.get(key) for key in keys)
+                                    or not isinstance(existing.get("reason"), str) or not existing["reason"].strip()
+                                    or not isinstance(existing.get("evidence"), list) or not existing["evidence"]
+                                    or not all(isinstance(item, str) and item.strip() for item in existing["evidence"])
+                                    or not isinstance(existing.get("recorded_at"), (int, float))):
+                                raise RuntimeError("existing recovery receipt does not match this recovery fact; it was not overwritten")
+                            persisted = existing
+                        else:
+                            bridge.dump(receipt_path, persisted)
+                    else:
+                        bridge.dump(receipt_path, persisted)
+                    current["reconciliation"] = persisted
                     current["updated_at"] = time.time()
                     current["summary"] = "unknown run manually reconciled as stopped; a fresh higher revision may be dispatched"
                 self._update(persist)
@@ -1140,7 +1261,8 @@ class Runtime:
                 # immutable recovery fact and can be retried only through the
                 # guarded branch above, never by reviving this unknown run.
                 self._clear_matching_unknown_marker(record["cwd"], run_id)
-                append(run_dir, "reconciliation", "unknown run manually confirmed stopped", status="unknown")
+                if run_dir_present:
+                    append(run_dir, "reconciliation", "unknown run manually confirmed stopped", status="unknown")
                 return self.snapshot(run_id)
             finally:
                 self._release_lanes(held)
@@ -1162,8 +1284,10 @@ class Runtime:
         # Execution visibility is evidence, not an inference from a run ID or
         # a successful preflight. A launch-intent crash stays indeterminate.
         lifecycle = self._read_json(self._lifecycle_path(run_id)) or {}
-        bound = all(lifecycle.get(key) == record.get(key) for key in
-                    ("run_id", "task_id", "revision", "cwd", "packet_sha256", "cli_descriptor_sha256"))
+        bound = (all(lifecycle.get(key) == record.get(key) for key in
+                     ("run_id", "task_id", "revision", "cwd", "packet_sha256", "cli_descriptor_sha256"))
+                 and startup_protocol.nonce_bound(lifecycle, record)
+                 and lifecycle.get("phase") != startup_protocol.PRE_SPAWN_PHASE)
         copy["claude_started"] = lifecycle.get("child_started") if bound else None
         if copy.get("session_id") or copy.get("provider_response_observed"):
             copy["claude_started"] = True

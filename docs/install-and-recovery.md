@@ -162,3 +162,22 @@ and MCP initialization do not prove a new task's natural-language routing,
 automatic browser reuse, a cold second machine or another user's credentials.
 Failure recovery is tested only where explicitly recorded; do not infer that
 every interruption or permission failure was exercised.
+
+## 0.6.1 startup recovery
+
+A fresh 0.6.1 MCP connection launches its bridge from a valid state directory,
+even when the MCP process inherited a deleted working directory. The Claude
+process still uses the task's approved working directory. Diagnostics expose
+bridge startup readiness separately from CLI authentication.
+
+If plugin executable code changes after the Runtime loaded it, dispatch fails
+before creating a new run. Start a new connection with the installed version;
+reinstalling alone does not replace code already loaded by an old process.
+
+For new runs, recovery can use a nonce- and identity-bound startup record to
+prove failure before Claude started, including failure before an execution
+directory exists. Recovery persists an audit receipt before updating state or
+removing that run's marker. Use the normal recovery inspection and reconciliation
+tools; do not fabricate startup records or delete markers. Historical unknown
+runs without sufficient evidence remain blocked, and changing connections does
+not resolve that separate uncertainty.

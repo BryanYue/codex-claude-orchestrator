@@ -16,7 +16,7 @@ Use a Mac and prepare the following. This release has been checked on Apple Sili
 
 The plugin needs Python 3.11 or later. During dependency preparation, uv locates or downloads the required environment. The first download can take some time.
 
-> **About versions:** `v0.6.0` includes the local CLI policy, Codex-reviewed Markdown updates, and execution-evidence and workspace-isolation fixes. The old `v0.5.0` tag is unchanged. Existing installations pinned to it need the [version-switching steps](git-marketplace.md#change-a-fixed-ref-or-migrate-from-zip) to select `v0.6.0`; refreshing a fixed marketplace ref does not advance it to another tag.
+> **About versions:** `v0.6.1` fixes bridge startup from a deleted parent directory and adds startup code identity checks and evidence-bound early-failure recovery. The old `v0.5.0` and `v0.6.0` tags remain unchanged. Use the [version-switching steps](git-marketplace.md#change-a-fixed-ref-or-migrate-from-zip) to select `v0.6.1`; refreshing a fixed ref does not advance it to another tag.
 
 ## Install with help from Codex
 
@@ -25,7 +25,7 @@ Paste this request into an existing Codex conversation:
 ```text
 Help me install the Codex–Claude collaboration plugin:
 https://github.com/BryanYue/codex-claude-orchestrator
-Use the fixed v0.6.0 release through a Git marketplace.
+Use the fixed v0.6.1 release through a Git marketplace.
 
 First check that I have a Codex desktop app with plugin commands and uv.
 If codex is not on PATH, check for the CLI bundled with the desktop app.
@@ -55,7 +55,7 @@ codex plugin --help
 Then run these commands one at a time:
 
 ```bash
-codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v0.6.0
+codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v0.6.1
 codex plugin add codex-claude-orchestrator@codex-claude-team
 ```
 

@@ -16,7 +16,7 @@
 
 插件需要 Python 3.11 或更新版本；稍后的依赖准备会由 uv 查找或下载所需环境。首次下载可能需要一些时间。
 
-> **关于版本：** `v0.6.0` 包含本机 CLI 策略、经 Codex 审查的 Markdown 动态更新，以及运行证据和工作区隔离修复。旧 `v0.5.0` 标签保持不变；已安装且固定在旧标签的用户须按[版本切换步骤](git-marketplace.md#change-a-fixed-ref-or-migrate-from-zip)改到 `v0.6.0`，单独刷新 marketplace 不会自动跨标签升级。
+> **关于版本：** `v0.6.1` 修复已删除父工作目录导致的桥接启动失败，增加启动代码身份核验及有证据的早期失败恢复。旧 `v0.5.0` 和 `v0.6.0` 标签保持不变；固定在旧标签的安装需按[版本切换步骤](git-marketplace.md#change-a-fixed-ref-or-migrate-from-zip)改到 `v0.6.1`，刷新 marketplace 不会自动跨标签升级。
 
 ## 安装：可以让 Codex 帮你完成
 
@@ -25,7 +25,7 @@
 ```text
 请帮我安装 Codex–Claude 协作插件：
 https://github.com/BryanYue/codex-claude-orchestrator
-使用固定版本 v0.6.0，通过 Git marketplace 安装。
+使用固定版本 v0.6.1，通过 Git marketplace 安装。
 
 先检查本机是否有支持 plugin 命令的 Codex 桌面客户端，以及 uv。
 如果 PATH 中找不到 codex，请检查桌面应用内置的 CLI。
@@ -53,7 +53,7 @@ codex plugin --help
 然后依次执行：
 
 ```bash
-codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v0.6.0
+codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v0.6.1
 codex plugin add codex-claude-orchestrator@codex-claude-team
 ```
 
