@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run pinned lint and focused type checks; report structural metrics without quotas.
+"""Run pinned lint and focused type checks; enforce baseline complexity ceilings and report structural metrics.
 
 From the repository root:
   uv run --project plugins/codex-claude-orchestrator --group dev --frozen python tools/check_quality.py
@@ -38,7 +38,7 @@ def structural_metrics() -> dict[str, list[tuple[int, str]]]:
 
 def print_metrics() -> None:
     metrics = structural_metrics()
-    print("Structural snapshot (information only; no size or complexity threshold):", flush=True)
+    print("Structural snapshot (line counts informational; Ruff enforces baseline complexity/branch/statement ceilings):", flush=True)
     for kind in ("modules", "functions"):
         print(f"Largest {kind}:", flush=True)
         for lines, source in metrics[kind][:5]:

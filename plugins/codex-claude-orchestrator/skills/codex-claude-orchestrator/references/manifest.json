@@ -1,6 +1,6 @@
 {
   "schema": "codex-claude-orchestrator.content/v1",
-  "content_version": "2026.10.03.1",
+  "content_version": "2026.10.03.2",
   "entry": "guide.md",
   "protocol_reference": "orchestration-protocol.md",
   "requires": {
@@ -15,7 +15,7 @@
   "files": [
     {
       "path": "guide.md",
-      "sha256": "5ea60176a8b9ca9f2e9b31605b3448a9f998a19b1b5d854222eeee63a210b39e"
+      "sha256": "5b97afae1c2c653be81e7a43cbce2657ee6ccb2f0f0d9e7ec7427348c4066324"
     },
     {
       "path": "orchestration-protocol.md",
@@ -27,11 +27,11 @@
     },
     {
       "path": "bridge.md",
-      "sha256": "6520227972746a1eb9b1f429f4abe1928cd97abf30c8f3cc7d6c9c84c92b010a"
+      "sha256": "04ff6217c6d869e876696afe679fcadcd42f9377ecba9e9cd5288dfbece3325d"
     },
     {
       "path": "runtime-design.md",
-      "sha256": "89ae0f4ef9fb1d8efc4ee46d50f4fa52edaafb75723e387a6f341a3f43903f0c"
+      "sha256": "f65d2a686a2b807ffa7efe04a08a36706c7eb7fd61d3e9420ed9d505e536a5fe"
     },
     {
       "path": "source-snapshot.md",

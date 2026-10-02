@@ -4,14 +4,14 @@
 
 这里保留本机 CLI 准入、运行记录、权限边界和开发验证等细节。首次使用请先看[快速开始](getting-started.zh-CN.md)。本页为中文技术参考；[安装与恢复](install-and-recovery.md)及[Git 分发](git-marketplace.md)另有英文说明。
 
-本页按 **v0.7.0** 源码候选维护，完整构建 `0.7.0+codex.20261003090000`；发布与验收状态以验证记录为准，历史机制保留首次引入版本。下面的 ZIP 安装器命令只适用于完整构建包；Git marketplace 用户继续使用所选 Git 来源。
+本页按 **v0.7.1** 源码候选维护，完整构建 `0.7.1+codex.20261003035940`；发布与验收状态以验证记录为准，历史机制保留首次引入版本。下面的 ZIP 安装器命令只适用于完整构建包；Git marketplace 用户继续使用所选 Git 来源。
 
 ## 版本与文档的对应关系
 
 | 内容 | 身份与更新方式 |
 | --- | --- |
-| 插件代码与安装包 | 目标版本 `v0.7.0`，完整版本 `0.7.0+codex.20261003090000`；发布后标签、提交和资产固定，文档修订不替换发布包 |
-| 旧版本 | `v0.6.1`、`v0.6.2` 等标签保持冻结；旧安装不会自动取得 0.7.0 的独立审查与 bundled-only 说明 |
+| 插件代码与安装包 | 目标版本 `v0.7.1`，完整版本 `0.7.1+codex.20261003035940`；发布后标签、提交和资产固定，文档修订不替换发布包 |
+| 旧版本 | `v0.6.1`、`v0.6.2` 等标签保持冻结；旧安装不会自动取得 0.7.1 的独立审查与 bundled-only 说明 |
 | README、docs、发布验证 | `main` 保存当前源码说明与验收事实；旧标签和 ZIP 内保留各自发布时的文档快照，不能把新源码能力归给旧安装 |
 | `references/` 协调说明 | 随插件发布，由 manifest 的内容版本与哈希标识；新 run 只固定 bundled，旧 run 的不可变绑定保留 |
 | 历史变更与设计 | CHANGELOG 的旧版本、RELEASE-VERIFICATION 的历史段和 UI 设计提案保留原时间/基线；不能当作当前功能或新版本验收 |
@@ -125,15 +125,17 @@ bash Install.command --diagnose-json
 | `review_mode=strict` | 只读取/搜索；仓外仅精确 requirement_sources。旧调用缺原话保持此模式；artifacts 必须 strict |
 | `implement` | 保留精确 owned_files 的 Edit/Write；构建与测试由 Codex 执行 |
 
-OS 保护只限制声明资源写入，不是凭证、网络或全文件系统沙箱。外部 MCP 默认关闭，不提供自动继承开关；其他外部动作仍须符合授权。macOS 保护不可用时明确拒绝，可选 strict；删除 remote、hook 或事后快照都不能替代预防保护。副本 refs/config 独立，不共享原仓写入；ignored 依赖不保证复制，子模块、某些链接/index 状态会明确拒绝。
+OS 保护只限制声明资源写入，不是凭证、网络或全文件系统沙箱。外部 MCP 始终关闭，本版不提供继承开关；其他外部动作仍须符合授权。macOS 保护不可用时明确拒绝，可选 strict；删除 remote、hook 或事后快照都不能替代预防保护。副本 refs/config 独立，不共享原仓写入；ignored 依赖不保证复制，子模块、某些链接/index 状态会明确拒绝。
 
-完整 JSON 写到副本 `.codex-review/<run_id>.json`，采集到 run 的 review-report.json 并记录字节/哈希；用 `claude_result(artifact="review_report")` 读取，父级简报不能替代它。Agent/Workflow 的真实调用、完成和失败维度仍须核对。副本随 run 保留供纠正/resume，returned/unknown 不自动删除；清理需要明确处置与停止事实。
+完整 JSON 写到副本 `.codex-review/<run_id>.json`，采集到 run 的 review-report.json 并记录字节/哈希；用 `claude_result(artifact="review_report")` 读取，父级简报不能替代它。Agent/Workflow 的真实调用、完成和失败维度仍须核对。副本随 run 保留供纠正/resume，returned/unknown 不自动删除；明确accepted或returned/completed_by_codex且停止后调用claude_cleanup_review；保留报告与tracked patch/status，未跟踪产物需先另存。
 
 插件自带可选 `assets/review-workflow.js`，名称 codex-full-review，运行时放到副本供选择；脚本接收原话、scope、来源和本轮 report_path，分维度审查后核验合成，保留失败/缺失维度与未确认项。不强制使用 Workflow，不要求固定发现数或删除配额。真实多席策略和业务覆盖的验收不能由一份合法文件替代。
 
 可选 findings 包含 id、category（defect/design/maintainability/test/documentation）、confidence（reproduced/code_confirmed/probable/subjective）、summary 和 evidence；确认级问题必须有证据，设计建议不强制运行时 trigger。有 findings 的 reported run 逐项给 finding_decisions：accepted、downgraded 或 rejected，后两者说明 reason，原发现保留。整轮 accepted/returned 与独立完成仍由 Codex 核验记录。
 
-## 兼容命名 Workflow：受限只读审查
+嵌套macOS沙箱可能导致SwiftPM等失败或skip；不要把skip当作通过。保护范围内的硬链接可用，外部硬链接（包括本地clone共享的Git对象）、外部符号链接仍拒绝；可使用无共享对象的独立clone或strict。进程停止证据覆盖组及带标记/已观察后代，不能证明恶意去标记进程的全主机封闭。
+
+## 已弃用但兼容的命名 Workflow：受限只读审查
 
 `workflow_review` 是单独、受限的保存 Workflow 入口，只用于一次新的只读审查。它先从 `claude_saved_workflows` inventory 中取得有效条目，再在 packet 中绑定**完全相同**的 `name`、绝对 `path` 和 `sha256`；如该脚本需要参数，`args` 也必须精确匹配。不能把名称相同、路径不同或内容已变的脚本替代进去。
 
@@ -170,7 +172,7 @@ Runtime 在派发前检查执行模块身份，并在启动 Bridge 前保存绑�
 
 ## 协调说明随插件发布
 
-0.7.0 新 fresh run 只固定随包 bundled 说明。`claude_content_status` 查看实际说明身份，`claude_content_read(path?,digest?)` 读取随包或明确指定的历史快照；check/review/switch 三项在线工具已移除，不再抓取、审批或激活新内容。
+0.7.0 起的新 fresh run 只固定随包 bundled 说明。`claude_content_status` 查看实际说明身份，`claude_content_read(path?,digest?)` 读取随包或明确指定的历史快照；check/review/switch 三项在线工具已移除，不再抓取、审批或激活新内容。
 
 运行记录中的 content-binding.json、snapshots 和 reviews 继续保留；resume 沿原绑定核对完整性与当前代码兼容性，篡改时拒绝，不静默替换成新 bundled。旧 state.json 的 active 或损坏内容不影响新 run，也不被重写。说明不能改变已批准协议、基线或验收，安装新版本需新 MCP 连接。
 
@@ -187,7 +189,7 @@ Runtime 在派发前检查执行模块身份，并在启动 Bridge 前保存绑�
 - review 的 full 覆盖与 strict/isolated 权限模式独立；isolated 在副本复现/测试，strict 只读。implement 仅允许精确 owned_files 的 Edit/Write，构建/测试由 Codex 执行。
 - 原有 Claude 配置/hook 保留；文件 hook 不是 OS 沙箱。完整协议要求的 oracle 登记、OS 保护、项目构建/下游/设备闸需由项目真实提供，缺失必需保护时停止依赖它的工作。
 - 执行排他按 Git worktree（真实 toplevel）计算：同一 worktree 的根目录、子目录和兄弟子目录共用一个执行位与 unknown 阻断，`git worktree add` 出的其他 worktree 相互独立；artifacts 资料目录按精确目录独立。接入桥的重复写入由此防止；其他工具仍由主代理协调。取消请求与确认停止分别记录。
-- `claude_start` 的执行时限默认 300 秒，可按任务显式设置为 1..14400 秒；它与每次最长 25 秒的进度等待不同。长任务在开始前选合适的有界时限，不到时自动续费重跑。可设置 Claude 最大轮数与 API 计价预算。轮数/预算仅在本机 CLI 的 help 列出对应参数时启用；不支持时拒绝带该控制的派单，不会忽略预算。
+- `claude_start` 省略执行时限时，isolated full review 默认 3600 秒，其余模式默认 300 秒，可按任务显式设置为 1..14400 秒；它与每次最长 25 秒的进度等待不同。长任务在开始前选合适的有界时限，不到时自动续费重跑。可设置 Claude 最大轮数与 API 计价预算。轮数/预算仅在本机 CLI 的 help 列出对应参数时启用；不支持时拒绝带该控制的派单，不会忽略预算。
 - 用量按统计范围分开保存与显示：`result.usage_report.cli_session` 取最终 result 的 `modelUsage` 与 `total_cost_usd`，是 CLI 会话累计估算（含子代理），按模型列出并给合计；续跑会话的累计可能包含此前轮次支出，不是本轮新增，不跨轮相加。`main_agent_final` 是最终 `usage`，只代表主代理最后一次回报。多个 result 事件重复同一累计值，只取最后一个；两个范围不相加。原始 `usage`、`usage_summary`、`total_cost_usd` 字段保留原语义，另存原始 `model_usage`。缺项或畸形值记为未知而不是 0；没有 `usage_report` 的旧记录不补算整任务 token。费用是 CLI 客户端估算，不是实际扣费、账单保证或订阅剩余额度。
 - 详情页按游标增量读取；历史分页，终态降低刷新频率，页面不可见时减少查询。状态与验收结论使用同一规则，历史轮次被替代后不能显示为当前已完成。
 - 本地运行记录默认 `~/.codex/claude-orchestrator`，含项目资料，不随分发包发送。这个运行状态根不跟随 `CODEX_HOME`（与安装源、插件设置和历史 CLI 记录不同），需要其他位置时用 `CLAUDE_ORCHESTRATOR_STATE_DIR` 显式指定；改变它不会迁移已有记录，旧位置的 run 需在原状态目录中查看或恢复。详情服务仅绑定127.0.0.1，随机端口/访问令牌，只读；重连后取新详情链接。
@@ -221,7 +223,7 @@ uv run --project plugins/codex-claude-orchestrator --frozen --no-dev python tool
 
 自动回归、真实 Claude 调用、原生宿主接入和浏览器观察分别记录；小夹具通过不证明生产长任务零偏差。整体结构为：用户 → 主 Codex + Skill/规格 → 原生 Codex 监督席 → MCP Runtime → Claude；证据原路返回，由主 Codex 核验。
 
-验证记录区分隔离夹具、MCP 协议、浏览器和安装各层证据。历史 v0.6.2 已完成最终版本打包、远程固定标签复装、新原生连接和真实 Claude 只读审阅；长短 Workflow 复用相同执行模块的修复验收，v0.6.1 的验收保留在历史段，没有因此重做全部浏览器或冷机验收。0.7.0 的候选、安装、真实 Claude 与业务验收须单独记录；具体身份与覆盖见 [RELEASE-VERIFICATION.md](../RELEASE-VERIFICATION.md)，不将历史版本的通过数当作本版证据。普通请求在新桌面任务中从路由到委派的完整自动入口，需要在目标宿主正常权限下走查；本机 MCP 直连不替代这项验收。
+验证记录区分隔离夹具、MCP 协议、浏览器和安装各层证据。历史 v0.6.2 已完成最终版本打包、远程固定标签复装、新原生连接和真实 Claude 只读审阅；长短 Workflow 复用相同执行模块的修复验收，v0.6.1 的验收保留在历史段，没有因此重做全部浏览器或冷机验收。0.7.1 的候选、安装、真实 Claude 与业务验收须单独记录；具体身份与覆盖见 [RELEASE-VERIFICATION.md](../RELEASE-VERIFICATION.md)，不将历史版本的通过数当作本版证据。普通请求在新桌面任务中从路由到委派的完整自动入口，需要在目标宿主正常权限下走查；本机 MCP 直连不替代这项验收。
 
 源码与 Git marketplace 由个人仓库 BryanYue/codex-claude-orchestrator 维护，使用固定发布 ref 安装。具体取源、升级、回退步骤见 [Git marketplace 说明](../docs/git-marketplace.md)，实际验证范围见 [发布验证](../RELEASE-VERIFICATION.md)。问题请通过仓库 Issues 提交，并去除凭据、viewer token 与业务代码。当前未指定开源许可证。
 

@@ -30,7 +30,7 @@ def snapshot_digest(snapshot: dict[str, Any]) -> str:
     material = dict(snapshot)
     material.pop("ignored_directory_entries", None)
     canonical = json.dumps(material, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return hashlib.sha256(canonical.encode("utf-8", "surrogateescape")).hexdigest()
 
 
 def artifact_snapshot_difference(before: dict[str, Any], after: dict[str, Any]) -> list[str]:

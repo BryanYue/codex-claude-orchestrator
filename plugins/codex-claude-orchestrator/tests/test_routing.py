@@ -115,11 +115,32 @@ class RoutingTests(unittest.TestCase):
         with self.assertRaises(routing.RoutingError):
             routing.set_policy(str(self.repo), mode="")
 
-    def test_named_workflow_capability_is_read_only_and_explicit(self):
+    def test_named_workflow_routes_new_git_review_to_isolated(self):
         yes = routing.select(str(self.repo), "review", "claude_workflow", {"required_tools":["Workflow","Read"]})
         self.assertEqual(yes["dispatch_status"], "preflight_required")
+        self.assertEqual(yes["executor"], "claude")
+        self.assertFalse(yes["needs_workflow_name"])
+        self.assertEqual(yes["suggested_packet"], {"role": "review", "review_mode": "isolated"})
+        self.assertFalse(yes["suggested_workflow"]["inventory_binding_required"])
+        self.assertEqual(yes["deprecated_role"], "workflow_review")
+        legacy = routing.select(str(self.repo), "review", "claude_workflow", {"review_mode": "strict", "required_tools": ["Workflow"]})
+        self.assertEqual(legacy["executor"], "claude_workflow")
+        self.assertTrue(legacy["needs_workflow_name"])
+        self.assertEqual(legacy["deprecated_role"], "workflow_review")
         no = routing.select(str(self.repo), "implementation", "claude_workflow")
         self.assertEqual(no["dispatch_status"], "blocked")
+
+    def test_isolated_review_uses_default_builtin_tools_and_still_blocks_mcp(self):
+        tools = ["Bash", "Agent", "Workflow", "Skill", "Edit", "Write", "WebSearch", "WebFetch", "FutureBuiltin"]
+        selected = routing.select(str(self.repo), "review", "claude", {"required_tools": tools})
+        self.assertEqual(selected["dispatch_status"], "preflight_required")
+        self.assertTrue(selected["claude_eligible"])
+        strict = routing.select(str(self.repo), "review", "claude", {"review_mode": "strict", "required_tools": tools})
+        self.assertEqual(strict["dispatch_status"], "blocked")
+        external = routing.select(str(self.repo), "review", "claude", {"required_tools": ["mcp__connector__write"]})
+        self.assertEqual(external["dispatch_status"], "blocked")
+        artifacts = routing.select(str(self.base), "review", "claude", {"required_tools": ["Bash"]})
+        self.assertEqual(artifacts["dispatch_status"], "blocked")
 
     def test_existing_permissions_are_preserved(self):
         self.adopt()
@@ -136,7 +157,7 @@ class RoutingTests(unittest.TestCase):
             ({"context_in_codex": True}, "codex", True),
             ({"latency_sensitive": True}, "codex", True),
             ({"requires_external_tools": True}, "codex", False),
-            ({"required_tools": ["WebSearch"]}, "codex", False),
+            ({"required_tools": ["WebSearch"]}, "claude", True),
             ({"required_tools": ["Read"]}, "claude", True),
             ({"claude_available": False}, "codex", False),
             ({"scope_defined": False}, "codex", False),
@@ -146,7 +167,7 @@ class RoutingTests(unittest.TestCase):
                 result = routing.select(str(self.repo), "review", features=features)
                 self.assertEqual(result["executor"], executor)
                 self.assertEqual(result["claude_eligible"], eligible)
-        forced = routing.select(str(self.repo), "review", "claude", {"required_tools": ["WebSearch"]})
+        forced = routing.select(str(self.repo), "review", "claude", {"required_tools": ["mcp__external__search"]})
         self.assertEqual(forced["executor"], "claude")
         self.assertEqual(forced["dispatch_status"], "blocked")
         self.assertTrue(forced["blocking_reasons"])
@@ -171,7 +192,7 @@ class RoutingTests(unittest.TestCase):
             result = routing.select(str(self.base), kind, "claude")
             self.assertEqual(result["workspace_kind"], "artifacts")
             self.assertEqual(result["claude_eligible"], allowed)
-        for features in ({"scope_defined": "yes"}, {"required_tools": "Read"}, {"unrecognized": True}, [1]):
+        for features in ({"scope_defined": "yes"}, {"required_tools": "Read"}, {"unrecognized": True}, {"review_mode": []}, {"review_mode": "other"}, [1]):
             with self.assertRaises(routing.RoutingError):
                 routing.select(str(self.repo), "review", features=features)
 

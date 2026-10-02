@@ -17,7 +17,13 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 from typing import Any, Sequence
+
+PLUGIN_SCRIPTS = Path(__file__).resolve().parents[3] / "scripts"
+if str(PLUGIN_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(PLUGIN_SCRIPTS))
+import trusted_git
 
 
 class ReviewWorkspaceError(RuntimeError):
@@ -30,19 +36,40 @@ class ProtectionUnavailable(ReviewWorkspaceError):
 
 METADATA_NAME = "review-workspace.json"
 COPY_NAME = "review-workspace"
-_GIT = ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "init.templateDir="]
+_GIT = [trusted_git.GIT, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "init.templateDir="]
+GIT_TIMEOUT_SECONDS = 30
+TREE_SCAN_TIMEOUT_SECONDS = 60
 
 
 def _git(cwd: Path, *args: str, input_data: bytes | None = None) -> bytes:
-    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
-    env.update({"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_TERMINAL_PROMPT": "0"})
     try:
-        completed = subprocess.run(_GIT + list(args), cwd=cwd, env=env, input=input_data, capture_output=True, check=False)
+        completed = trusted_git.run(cwd, *args, input=input_data, check=False, timeout=GIT_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired as exc:
+        raise ReviewWorkspaceError(f"Git review workspace command timed out after {GIT_TIMEOUT_SECONDS}s: {args[0] if args else 'git'}") from exc
     except OSError as exc:
         raise ReviewWorkspaceError(f"Git is unavailable: {exc}") from exc
     if completed.returncode:
         raise ReviewWorkspaceError(f"Git review workspace failed: {completed.stderr.decode('utf-8', 'replace').strip()}")
     return completed.stdout
+
+
+def _global_excludes(cwd: Path) -> str | None:
+    """Read just the user's ignore path; never enable arbitrary global config."""
+    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    env.update({"GIT_CONFIG_NOSYSTEM": "1", "GIT_TERMINAL_PROMPT": "0"})
+    # An explicitly selected global file is still only read as configuration.
+    if os.environ.get("GIT_CONFIG_GLOBAL"):
+        env["GIT_CONFIG_GLOBAL"] = os.environ["GIT_CONFIG_GLOBAL"]
+    try:
+        result = subprocess.run(_GIT + ["config", "--includes", "--path", "--get", "core.excludesFile"],
+                                cwd=cwd, env=env, capture_output=True, timeout=GIT_TIMEOUT_SECONDS)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ReviewWorkspaceError(f"Cannot read global Git ignore configuration: {exc}") from exc
+    if result.returncode == 1:
+        return None
+    if result.returncode:
+        raise ReviewWorkspaceError("Cannot read global Git ignore configuration: " + result.stderr.decode("utf-8", "replace").strip())
+    return os.fsdecode(result.stdout.rstrip(b"\n"))
 
 
 def _inside(path: Path, root: Path) -> bool:
@@ -76,11 +103,10 @@ def _source_file(source: Path, root: Path) -> None:
         info = source.stat()
         if not stat.S_ISREG(info.st_mode):
             raise ReviewWorkspaceError(f"Non-file review input (submodules are unsupported): {source}")
-        if info.st_nlink != 1:
-            raise ReviewWorkspaceError(f"Hardlinked source file cannot be path-protected: {source}")
 
 
-def _validate_protected_tree(root: Path, *, git_metadata: bool = False) -> None:
+def _validate_protected_trees(roots: Sequence[Path], *, git_metadata: bool = False,
+                              metadata_roots: Sequence[Path] = (), excluded_paths: Sequence[Path] = ()) -> None:
     """Stat entries without importing ignored state or following directory links.
 
     Existing external hardlink aliases could bypass a path-based deny rule.
@@ -89,17 +115,42 @@ def _validate_protected_tree(root: Path, *, git_metadata: bool = False) -> None:
     """
     def walk_error(error: OSError) -> None:
         raise ReviewWorkspaceError(f"Cannot establish source write boundary: {error}") from error
-    for directory, dirs, files in os.walk(root, followlinks=False, onerror=walk_error):
-        for name in dirs + files:
-            path = Path(directory) / name
-            try:
-                info = path.lstat()
-                if stat.S_ISREG(info.st_mode) and info.st_nlink != 1:
-                    raise ReviewWorkspaceError(f"Hardlinked source file cannot be path-protected: {path}")
-                if git_metadata and stat.S_ISLNK(info.st_mode) and not _inside(_canonical(path), root):
-                    raise ReviewWorkspaceError(f"External symlink in original Git metadata: {path}")
-            except OSError as exc:
-                raise ReviewWorkspaceError(f"Cannot establish source write boundary: {path}") from exc
+    deadline = time.monotonic() + TREE_SCAN_TIMEOUT_SECONDS
+    seen: set[Path] = set()
+    aliases: dict[tuple[int, int], tuple[int, set[Path]]] = {}
+    for root in roots:
+        if any(_inside(root, path) for path in excluded_paths):
+            continue
+        for directory, dirs, files in os.walk(root, followlinks=False, onerror=walk_error):
+            if time.monotonic() > deadline:
+                raise ReviewWorkspaceError("Source write-boundary scan timed out; use strict review for this tree")
+            dirs[:] = [name for name in dirs if not any(_inside(Path(directory) / name, path) for path in excluded_paths)]
+            for name in dirs + files:
+                if len(seen) % 256 == 0 and time.monotonic() > deadline:
+                    raise ReviewWorkspaceError("Source write-boundary scan timed out; use strict review for this tree")
+                path = Path(directory) / name
+                if any(_inside(path, item) for item in excluded_paths):
+                    continue
+                if path in seen:
+                    continue
+                seen.add(path)
+                try:
+                    info = path.lstat()
+                    if stat.S_ISREG(info.st_mode) and info.st_nlink != 1:
+                        key = (info.st_dev, info.st_ino)
+                        count, paths = aliases.setdefault(key, (info.st_nlink, set()))
+                        if count != info.st_nlink:
+                            raise ReviewWorkspaceError(f"Hardlink changed during source boundary scan: {path}")
+                        paths.add(path)
+                    if (git_metadata or any(_inside(path, item) for item in metadata_roots)) and stat.S_ISLNK(info.st_mode) and not any(_inside(_canonical(path), item) for item in roots):
+                        raise ReviewWorkspaceError(f"External symlink in original Git metadata: {path}")
+                except OSError as exc:
+                    raise ReviewWorkspaceError(f"Cannot establish source write boundary: {path}") from exc
+    for count, paths in aliases.values():
+        if len(paths) != count:
+            path = min(paths)
+            raise ReviewWorkspaceError(f"Hardlinked source file has aliases outside protected trees ({len(paths)}/{count} protected): {path}; "
+                                       "use strict review or independently clone/copy the source without external hardlinks")
 
 
 def prepare_review_workspace(source_cwd: Path | str, run_dir: Path | str,
@@ -115,6 +166,12 @@ def prepare_review_workspace(source_cwd: Path | str, run_dir: Path | str,
     if not cwd.is_dir() or not run.is_dir():
         raise ReviewWorkspaceError("Source cwd and run_dir must be existing directories")
     source = _canonical(os.fsdecode(_git(cwd, "rev-parse", "--show-toplevel").rstrip(b"\n")))
+    # Git reports the actual prefix even when a case-insensitive filesystem
+    # accepted a differently cased spelling of cwd.
+    prefix = Path(os.fsdecode(_git(cwd, "rev-parse", "--show-prefix").rstrip(b"\n")))
+    if prefix.is_absolute() or ".." in prefix.parts:
+        raise ReviewWorkspaceError("Git source cwd prefix escapes the repository")
+    cwd = source / prefix
     if _inside(run, source) or _inside(source, run):
         raise ReviewWorkspaceError("Review run directory must not overlap the source repository")
     requested_sources = sorted({str(_canonical(Path(raw) if Path(raw).is_absolute() else cwd / raw))
@@ -136,9 +193,14 @@ def prepare_review_workspace(source_cwd: Path | str, run_dir: Path | str,
         raise ReviewWorkspaceError("Unowned review workspace path already exists")
     git_dirs = sorted({str(_canonical(os.fsdecode(_git(cwd, "rev-parse", "--path-format=absolute", option).rstrip(b"\n"))))
                        for option in ("--git-dir", "--git-common-dir")})
-    _validate_protected_tree(source)
+    worktrees = sorted({str(_canonical(os.fsdecode(entry[len(b"worktree "):])))
+                        for entry in _git(source, "worktree", "list", "--porcelain", "-z").split(b"\0")
+                        if entry.startswith(b"worktree ")})
+    if any(_inside(run, Path(raw)) or _inside(Path(raw), run) for raw in worktrees):
+        raise ReviewWorkspaceError("Review run directory must not overlap any source worktree")
+    _validate_protected_trees([Path(raw) for raw in sorted({*worktrees, *git_dirs})],
+                              metadata_roots=[Path(raw) for raw in git_dirs])
     for raw in git_dirs:
-        _validate_protected_tree(Path(raw), git_metadata=True)
         alternates = Path(raw) / "objects" / "info" / "alternates"
         if alternates.exists() or alternates.is_symlink():
             raise ReviewWorkspaceError(f"Original Git alternates are unsupported; external object paths are not protected: {alternates}")
@@ -151,7 +213,9 @@ def prepare_review_workspace(source_cwd: Path | str, run_dir: Path | str,
     if any(entry and (entry.startswith(b"S ") or b"a" <= entry[:1] <= b"z") for entry in index_flags):
         raise ReviewWorkspaceError("Sparse/skip-worktree or assume-unchanged index entries are unsupported; use strict review")
     tracked = {os.fsdecode(raw) for raw in _git(source, "ls-files", "--cached", "-z").split(b"\0") if raw}
-    untracked = {os.fsdecode(raw) for raw in _git(source, "ls-files", "--others", "--exclude-standard", "-z").split(b"\0") if raw}
+    global_excludes = _global_excludes(source)
+    ignore_args = ("-c", f"core.excludesFile={global_excludes}") if global_excludes is not None else ()
+    untracked = {os.fsdecode(raw) for raw in _git(source, *ignore_args, "ls-files", "--others", "--exclude-standard", "-z").split(b"\0") if raw}
     sensitive_untracked = sorted(name for name in untracked if any(
         part.lower() in {".claude", ".codex"} or part.lower() == ".env" or part.lower().startswith(".env.")
         for part in Path(name).parts))
@@ -169,9 +233,18 @@ def prepare_review_workspace(source_cwd: Path | str, run_dir: Path | str,
     staged_diff = _git(source, "diff", "--cached", "--binary", "--full-index", "--no-ext-diff", "--no-textconv", "--no-renames", head, "--")
     staged_names = _git(source, "diff", "--cached", "--name-only", "-z", "--no-renames", head, "--")
     staged_input_count = len([name for name in staged_names.split(b"\0") if name])
+    # Git's public ITA switch reveals entries otherwise omitted from cached
+    # diffs. Recreate them only after working-tree files have been copied.
+    visible_ita = {raw for raw in _git(source, "diff", "--cached", "--ita-visible-in-index", "--name-only", "-z", head, "--").split(b"\0") if raw}
+    hidden_ita = {raw for raw in _git(source, "diff", "--cached", "--ita-invisible-in-index", "--name-only", "-z", head, "--").split(b"\0") if raw}
+    intent_to_add = sorted(visible_ita - hidden_ita)
     try:
         _git(run, "clone", "--no-local", "--no-hardlinks", "--no-checkout", "--", str(source), str(destination))
         _git(destination, "remote", "remove", "origin")
+        # Only the ignore path is inherited; hooks, filters and other user's
+        # executable Git configuration never become part of the copy.
+        if global_excludes is not None:
+            _git(destination, "config", "core.excludesFile", global_excludes)
         # Populate only the index: checkout could execute smudge filters from
         # Git configuration before the provider's protected process starts.
         _git(destination, "read-tree", head)
@@ -198,13 +271,38 @@ def prepare_review_workspace(source_cwd: Path | str, run_dir: Path | str,
             else:
                 shutil.copyfile(original, target)
                 target.chmod(stat.S_IMODE(original.stat().st_mode))
+        if intent_to_add:
+            absent_ita = []
+            modes = {entry.split(b"\t", 1)[1]: entry.split(b" ", 1)[0]
+                     for entry in staged_entries if entry}
+            for name in intent_to_add:
+                target = destination / os.fsdecode(name)
+                if not target.exists() and not target.is_symlink():
+                    # An ITA entry may have been deleted after add -N. Git
+                    # needs a temporary leaf to recreate its index flag/mode.
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    if modes[name] == b"120000":
+                        target.symlink_to("missing-ita-target")
+                    else:
+                        target.touch(exist_ok=False)
+                        target.chmod(0o755 if modes[name] == b"100755" else 0o644)
+                    absent_ita.append(target)
+            _git(destination, "add", "--intent-to-add", "--", *(os.fsdecode(name) for name in intent_to_add))
+            for target in absent_ita:
+                target.unlink()
         review_cwd = destination / cwd.relative_to(source)
         review_cwd.mkdir(parents=True, exist_ok=True)
+        artifact_directory = destination / ".codex-review"
+        suffix = hashlib.sha256(str(run).encode()).hexdigest()[:12]
+        while artifact_directory.exists() or artifact_directory.is_symlink() or any(
+                name == artifact_directory.name or name.startswith(artifact_directory.name + "/") for name in files):
+            artifact_directory = artifact_directory.with_name(artifact_directory.name + "-" + suffix)
         material = {"version": 1, "workspace_root": str(destination), "cwd": str(review_cwd),
                     "source_root": str(source), "source_cwd": str(cwd), "source_head": head,
                     "staged_input_count": staged_input_count, "staged_diff_sha256": hashlib.sha256(staged_diff).hexdigest(),
-                    "source_git_dirs": git_dirs, "requirement_sources": requested_sources,
-                    "protected_paths": sorted({str(source), *git_dirs, *requested_sources, str(metadata_path)}),
+                    "source_git_dirs": git_dirs, "source_worktrees": worktrees, "requirement_sources": requested_sources,
+                    "artifact_directory": str(artifact_directory),
+                    "protected_paths": sorted({str(source), *worktrees, *git_dirs, *requested_sources, str(metadata_path)}),
                     "metadata_path": str(metadata_path), "protection": "macos-sandbox-exec-source-write-deny",
                     "scope": "source writes only; credentials, other local paths and network are not isolated"}
         envelope = {"identity": material, "sha256": _digest(material)}
@@ -240,7 +338,8 @@ def load_review_workspace(run_dir: Path | str) -> dict[str, Any]:
         if identity["cwd"] != str(expected_cwd) or _canonical(expected_cwd) != expected_cwd:
             raise ReviewWorkspaceError("Review cwd is redirected")
         paths = identity["protected_paths"]
-        expected_paths = sorted({str(source), *identity["source_git_dirs"], *identity["requirement_sources"], str(metadata_path)})
+        expected_paths = sorted({str(source), *identity.get("source_worktrees", []), *identity["source_git_dirs"],
+                                 *identity["requirement_sources"], str(metadata_path)})
         if paths != expected_paths or _inside(run, source) or _inside(source, run):
             raise ReviewWorkspaceError("Review protected path identity mismatch")
         for raw in paths:
@@ -249,23 +348,28 @@ def load_review_workspace(run_dir: Path | str) -> dict[str, Any]:
                 raise ReviewWorkspaceError("Review protected path is redirected")
         if (destination / ".git").is_symlink() or not (destination / ".git").is_dir():
             raise ReviewWorkspaceError("Review Git metadata is redirected")
-        if (destination / ".git" / "objects" / "info" / "alternates").exists():
+        alternates = destination / ".git" / "objects" / "info" / "alternates"
+        if alternates.exists() or alternates.is_symlink():
             raise ReviewWorkspaceError("Review copy must not use shared Git objects")
+        if "artifact_directory" in identity:
+            artifact = Path(identity["artifact_directory"])
+            if not artifact.is_absolute() or artifact.parent != destination or _canonical(artifact, exists=False) != artifact:
+                raise ReviewWorkspaceError("Review artifact directory is redirected")
         return identity
     except (OSError, ValueError, KeyError, TypeError) as exc:
         raise ReviewWorkspaceError(f"Invalid or unavailable review workspace identity: {exc}") from exc
 
 
 def protected_command(argv: Sequence[str], metadata: dict[str, Any],
-                      extra_protected: Sequence[Path | str] = ()) -> list[str]:
+                      extra_protected: Sequence[Path | str] = (), *,
+                      writable_exceptions: Sequence[Path | str] = ()) -> list[str]:
     """Wrap a command; protect trusted run files separately from writable logs.
 
-    Additional paths may name future control files (creation is denied too) or
-    an immutable plugin code directory. Only their parent entries are denied,
-    so sibling activity journals and the working copy remain writable. Select
-    declared code/config files and source directories rather than the complete
-    installation root: runtime environments such as .venv contain ordinary
-    external interpreter links and are outside this code-protection contract.
+    Writable exceptions apply only inside additional protected directories,
+    never to original source or identity paths. Existing directories grant
+    descendant writes; other paths grant writes to that single file. Root and
+    ancestor entries stay immutable so a reviewer cannot redirect a writable
+    tree, control parent, or the copy itself by renaming it.
     """
     if sys.platform != "darwin" or not Path("/usr/bin/sandbox-exec").is_file():
         raise ProtectionUnavailable("Isolated writable review requires macOS sandbox-exec; use strict review on this host")
@@ -281,9 +385,24 @@ def protected_command(argv: Sequence[str], metadata: dict[str, Any],
         path = _canonical(raw, exists=False)
         if path.is_file() and path.stat().st_nlink != 1:
             raise ReviewWorkspaceError(f"Hardlinked protected control file cannot be path-protected: {path}")
-        if path.is_dir():
-            _validate_protected_tree(path, git_metadata=True)
         extra_paths.append(str(path))
+    exceptions: list[tuple[str, str]] = []
+    for raw in writable_exceptions:
+        path = Path(raw)
+        if not path.is_absolute() or _canonical(path, exists=False) != path or path.is_symlink():
+            raise ReviewWorkspaceError("Writable exception must be an absolute, non-redirected path")
+        if not any(_inside(path, Path(parent)) and path != Path(parent) for parent in extra_paths):
+            raise ReviewWorkspaceError("Writable exception must be strictly inside an additional protected directory")
+        if any(_inside(path, Path(item)) or _inside(Path(item), path) for item in trusted["protected_paths"]):
+            raise ReviewWorkspaceError("Writable exception overlaps original source or trusted identity")
+        if path.exists() and not path.is_dir() and (not path.is_file() or path.stat().st_nlink != 1):
+            raise ReviewWorkspaceError("Writable file exception must be a non-hardlinked regular file")
+        kind = "subpath" if path.is_dir() else "literal"
+        exceptions.append((kind, str(path)))
+    # An alias in the writable copy is not protected even when its enclosing
+    # state root is denied. Count only aliases inside the effective deny area.
+    _validate_protected_trees([Path(raw) for raw in extra_paths if Path(raw).is_dir()],
+                              excluded_paths=[Path(raw) for _, raw in exceptions])
     filters: set[tuple[str, str]] = set()
     for raw in trusted["protected_paths"] + extra_paths:
         path = Path(raw)
@@ -291,9 +410,26 @@ def protected_command(argv: Sequence[str], metadata: dict[str, Any],
         # Parent rename/chmod would otherwise move a protected tree out of its
         # path filter. Literals deny changing parents without denying siblings.
         filters.update(("literal", str(parent)) for parent in path.parents if parent != Path("/"))
-    if any(any(ord(character) < 32 for character in path) for _, path in filters):
+    # Protect the owned root even when its descendants are writable; this also
+    # prevents post-run report capture or resume from following a replacement.
+    filters.add(("literal", trusted["workspace_root"]))
+    for kind, raw in exceptions:
+        if kind == "subpath":
+            filters.add(("literal", raw))
+        filters.update(("literal", str(parent)) for parent in Path(raw).parents if parent != Path("/"))
+    if any(any(ord(character) < 32 for character in path) for _, path in filters | set(exceptions)):
         raise ReviewWorkspaceError("Control characters in protected paths are unsupported")
-    expressions = " ".join(f"({kind} {json.dumps(path, ensure_ascii=False)})" for kind, path in sorted(filters))
+    expressions_list = []
+    for kind, path in sorted(filters):
+        expression = f"({kind} {json.dumps(path, ensure_ascii=False)})"
+        # Every overlapping broad deny gets the same narrow exclusions. SBPL
+        # deny rules take precedence, so a later allow cannot safely undo them.
+        if kind == "subpath" and path in extra_paths and exceptions:
+            exclusions = " ".join(f"(require-not ({mode} {json.dumps(raw, ensure_ascii=False)}))"
+                                  for mode, raw in exceptions)
+            expression = f"(require-all {expression} {exclusions})"
+        expressions_list.append(expression)
+    expressions = " ".join(expressions_list)
     profile = f"(version 1)(allow default)(deny file-write* {expressions})"
     return ["/usr/bin/sandbox-exec", "-p", profile, *argv]
 
@@ -315,17 +451,42 @@ def cleanup_review_workspace(run_dir: Path | str, *, terminal: bool, explicit: b
 
 def install_bundled_workflow(metadata: dict[str, Any]) -> dict[str, str]:
     """Make the optional multi-dimension review available only in the owned copy."""
+    if load_review_workspace(Path(metadata["metadata_path"]).parent) != metadata:
+        raise ReviewWorkspaceError("Workflow identity does not match persisted copy")
     root = Path(metadata["workspace_root"])
     directory = root / ".claude" / "workflows"
-    if not directory.resolve().is_relative_to(root):
+    if not directory.resolve().is_relative_to(root) or any(path.is_symlink() for path in (directory, directory.parent)):
         raise ReviewWorkspaceError("Workflow directory escapes the review copy")
     directory.mkdir(parents=True, exist_ok=True)
-    target = directory / "codex-full-review.js"
     source = Path(__file__).resolve().parents[3] / "assets" / "review-workflow.js"
     data = source.read_bytes()
-    if target.is_symlink() or (target.exists() and target.read_bytes() != data):
-        raise ReviewWorkspaceError("Review copy already contains a different codex-full-review workflow")
+    name = "codex-full-review"
+    tracked = {os.fsdecode(raw) for raw in _git(root, "ls-files", "-z").split(b"\0") if raw}
+    # A source workflow with the reserved name is legitimate project input.
+    # Choose a separate exported name and never overwrite or hide that input.
+    target = directory / (name + ".js")
+    suffix = hashlib.sha256(metadata["metadata_path"].encode()).hexdigest()[:12]
+    while (str(target.relative_to(root)) in tracked or target.is_symlink() or
+           (target.exists() and (not target.is_file() or target.read_bytes() != data))):
+        name += "-" + suffix
+        target = directory / (name + ".js")
+        data = source.read_bytes().replace(b'name: "codex-full-review"', f'name: "{name}"'.encode(), 1)
     if not target.exists():
         with target.open("xb") as handle:
             handle.write(data)
-    return {"name": "codex-full-review", "path": str(target), "sha256": hashlib.sha256(data).hexdigest()}
+    exclude = root / ".git" / "info" / "exclude"
+    if exclude.parent.is_symlink():
+        raise ReviewWorkspaceError("Review Git exclude directory is redirected")
+    exclude.parent.mkdir(exist_ok=True)
+    # Trust no reviewer-controlled final component on a resumed copy.
+    fd = os.open(exclude, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise ReviewWorkspaceError("Review Git exclude file must be independent and regular")
+        artifact = Path(metadata.get("artifact_directory", str(root / ".codex-review")))
+        entries = "\n/" + str(artifact.relative_to(root)) + "/\n/" + str(target.relative_to(root)) + "\n"
+        os.write(fd, entries.encode())
+    finally:
+        os.close(fd)
+    return {"name": name, "path": str(target), "sha256": hashlib.sha256(data).hexdigest()}

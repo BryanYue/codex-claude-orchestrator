@@ -6,7 +6,7 @@
 
 ## 开始之前
 
-准备一台 Mac，以及以下工具。已有 Apple Silicon Mac 的历史验证记录；0.7.0 的实际覆盖见发布验证。
+准备一台 Mac，以及以下工具。已有 Apple Silicon Mac 的历史验证记录；0.7.1 的实际覆盖见发布验证。
 
 | 需要什么 | 怎么确认 |
 | --- | --- |
@@ -16,7 +16,7 @@
 
 插件需要 Python 3.11 或更新版本；稍后的依赖准备会由 uv 查找或下载所需环境。首次下载可能需要一些时间。
 
-> **关于版本：** 本页面向 `v0.7.0`，完整构建 `0.7.0+codex.20261003090000`。安装命令固定到该版本；源码、分发包和真实 Claude 的验证范围见发布验证记录。旧 `v0.5.0`、`v0.6.0`、`v0.6.1`、`v0.6.2` 标签保持冻结；固定 ref 不会自动跨标签升级，切换按[版本切换步骤](git-marketplace.md#change-a-fixed-ref-or-migrate-from-zip)操作。
+> **关于版本：** 本页面向 `v0.7.1`，完整构建 `0.7.1+codex.20261003035940`。安装命令固定到该版本；源码、分发包和真实 Claude 的验证范围见发布验证记录。旧 `v0.5.0`、`v0.6.0`、`v0.6.1`、`v0.6.2` 标签保持冻结；固定 ref 不会自动跨标签升级，切换按[版本切换步骤](git-marketplace.md#change-a-fixed-ref-or-migrate-from-zip)操作。
 
 ## 安装：可以让 Codex 帮你完成
 
@@ -25,7 +25,7 @@
 ```text
 请帮我安装 Codex–Claude 协作插件：
 https://github.com/BryanYue/codex-claude-orchestrator
-使用固定版本 v0.7.0，通过 Git marketplace 安装。
+使用固定版本 v0.7.1，通过 Git marketplace 安装。
 
 先检查本机是否有支持 plugin 命令的 Codex 桌面客户端，以及 uv。
 如果 PATH 中找不到 codex，请检查桌面应用内置的 CLI。
@@ -53,7 +53,7 @@ codex plugin --help
 然后依次执行：
 
 ```bash
-codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v0.7.0
+codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v0.7.1
 codex plugin add codex-claude-orchestrator@codex-claude-team
 ```
 
@@ -89,7 +89,7 @@ bash scripts/launch.sh --prepare-dependencies
 
 > 请让 Claude 使用严格只读模式审查 README.md 的安装步骤，找出新手容易卡住的地方。先不要修改文件，你再核对它的建议。
 
-严格模式只读取和搜索。需要复现与运行测试时，可明确请求完整审查并使用独立副本；原仓受 OS 写保护，网络与凭证不属于该隔离范围，外部 MCP 默认关闭。
+严格模式只读取和搜索。需要复现与运行测试时，可明确请求完整审查并使用独立副本；原仓受 OS 写保护，网络与凭证不属于该隔离范围，外部 MCP 始终关闭，本版没有继承开关。
 
 这一步会实际调用 Claude，使用你自己的 Claude 额度；首次调用前的在线检查也可能使用少量额度。
 

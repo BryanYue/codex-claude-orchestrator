@@ -1,4 +1,4 @@
-# Codex–Claude 协作 · 0.7.0
+# Codex–Claude 协作 · 0.7.1
 
 **简体中文** · [English](README.en.md)
 
@@ -34,7 +34,7 @@
 | 随时知道进展 | 在协作工作台查看任务、执行轮次、报告和核验结果。 |
 | 继续或纠正工作 | 在原对话里补充要求，让 Codex 核对已有进度后继续处理。 |
 
-本页面向 **v0.7.0**：审查保留用户原话，可在独立可写副本中复现与测试，并由 OS 限制原仓写入；严格只读模式继续可用。协调说明随插件发布，历史报告和任务绑定保留。具体变更见[更新记录](CHANGELOG.md)，已执行的验证及未验收范围见[验证记录](RELEASE-VERIFICATION.md)。
+本页面向 **v0.7.1**：审查保留用户原话，可在独立可写副本中复现与测试，并由 OS 限制原仓写入；严格只读模式继续可用。协调说明随插件发布，历史报告和任务绑定保留。具体变更见[更新记录](CHANGELOG.md)，已执行的验证及未验收范围见[验证记录](RELEASE-VERIFICATION.md)。
 
 ## 开始使用
 
@@ -44,20 +44,20 @@
 - **Claude Code**：已在本机安装，并有可用的登录与额度。插件直接使用你本机的 Claude Code，不另外下载、更新或切换版本；升级由你按官方方式进行。[安装和登录说明](https://code.claude.com/docs/en/quickstart)
 - **uv**：插件用它准备运行环境。[安装说明](https://docs.astral.sh/uv/getting-started/installation/)
 
-面向 macOS；已有发布在 **Apple Silicon Mac** 上的验证记录，0.7.0 的实际覆盖另记于验证记录。独立可写审查需要可用的 macOS OS 写保护；不具备时明确拒绝，可选择严格模式。Intel Mac 尚未单独验证。
+面向 macOS；已有发布在 **Apple Silicon Mac** 上的验证记录，0.7.1 的实际覆盖另记于验证记录。独立可写审查需要可用的 macOS OS 写保护；不具备时明确拒绝，可选择严格模式。Intel Mac 尚未单独验证。
 
 ### 2. 安装插件
 
 在终端中依次执行：
 
 ```bash
-codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v0.7.0
+codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v0.7.1
 codex plugin add codex-claude-orchestrator@codex-claude-team
 ```
 
 第一条添加插件来源，第二条安装插件。仓库公开，无需 GitHub 邀请或登录。
 
-> **关于版本：** 本页面向 `v0.7.0`，完整构建 `0.7.0+codex.20261003090000`。安装命令固定到该版本；源码、分发包和真实 Claude 的验证范围见发布验证记录。旧 `v0.5.0`、`v0.6.0`、`v0.6.1`、`v0.6.2` 标签保持冻结；固定 ref 不会自动跨标签升级，切换按[版本切换步骤](docs/git-marketplace.md#change-a-fixed-ref-or-migrate-from-zip)操作。
+> **关于版本：** 本页面向 `v0.7.1`，完整构建 `0.7.1+codex.20261003035940`。安装命令固定到该版本；源码、分发包和真实 Claude 的验证范围见发布验证记录。旧 `v0.5.0`、`v0.6.0`、`v0.6.1`、`v0.6.2`、`v0.7.0` 标签保持冻结；固定 ref 不会自动跨标签升级，切换按[版本切换步骤](docs/git-marketplace.md#change-a-fixed-ref-or-migrate-from-zip)操作。
 
 **首次安装还需要准备依赖，再打开新 Codex 任务。** 不熟悉终端、遇到 `codex: command not found`，或以前装过本地版本，都可以按[一步一步的安装指南](docs/getting-started.zh-CN.md)操作；里面也有可以直接交给 Codex 的安装请求。
 
@@ -121,7 +121,7 @@ codex plugin add codex-claude-orchestrator@codex-claude-team
 
 **会自动改整个项目吗？**
 
-严格模式只读取和搜索；独立审查允许在副本中编辑、运行命令和使用 Agent/Workflow，原仓库及要求源受 OS 写保护。它不隔离网络、凭证或任意外部副作用；外部 MCP 默认关闭。实施仍限定允许编辑的文件，Codex 核验报告及改动，插件不自动合并或发布。
+严格模式只读取和搜索；独立审查允许在副本中编辑、运行命令和使用 Agent/Workflow，原仓库及要求源受 OS 写保护。它不隔离网络、凭证或任意外部副作用；外部 MCP 始终关闭，本版没有继承开关。实施仍限定允许编辑的文件，Codex 核验报告及改动，插件不自动合并或发布。
 
 **协作说明会在线更新吗？**
 

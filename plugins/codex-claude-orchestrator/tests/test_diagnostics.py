@@ -83,7 +83,7 @@ class ReadOnlyValidationHistoryTests(unittest.TestCase):
             self.assertEqual(self.diagnose()["worker_lock"], "held")
         self.assertEqual(self.tree(), before)
 
-    def test_terminal_history_and_explicit_legacy_status_keep_their_existing_behavior(self):
+    def test_terminal_and_active_history_reads_never_reconcile(self):
         self.record(status="completed", phase="completed", outcome="inconclusive")
         before = self.tree()
         result = self.diagnose()
@@ -92,9 +92,11 @@ class ReadOnlyValidationHistoryTests(unittest.TestCase):
         self.assertNotIn("reconciliation", result)
 
         self.record()
-        legacy = cli_validation.status(self.JOB_ID, environ={"CLAUDE_ORCHESTRATOR_CLI_ROOT": str(self.cli_root)})
-        self.assertEqual((legacy["status"], legacy["phase"]), ("completed", "worker_lost"))
-        self.assertTrue((self.job / "report.json").is_file())
+        before = self.tree()
+        legacy = cli_validation.read_status(self.JOB_ID, environ={"CLAUDE_ORCHESTRATOR_CLI_ROOT": str(self.cli_root)})
+        self.assertEqual((legacy["status"], legacy["phase"]), ("running", "testing"))
+        self.assertEqual(self.tree(), before)
+        self.assertFalse((self.job / "report.json").exists())
 
 
 class RecentProviderCallTests(unittest.TestCase):

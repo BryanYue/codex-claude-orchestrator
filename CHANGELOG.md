@@ -4,6 +4,19 @@
 
 以下为版本变更记录，保留实现与验证细节。首次使用见[快速开始](docs/getting-started.zh-CN.md)，实际验证范围见[发布验证](RELEASE-VERIFICATION.md)。
 
+## 0.7.1：审查链路实测修复与隔离边界补齐
+
+版本标签 `v0.7.1`，完整构建 `0.7.1+codex.20261003035940`。本轮核对 0.7.0 审查反馈，并在临时仓库实测本机 Claude CLI；失败记录与实际验收边界见[发布验证](RELEASE-VERIFICATION.md)。
+
+- 修复 Git 审查路由误拒 Bash/Agent/Workflow/Web、续跑丢失模式和范围，以及 full review 默认时限过短；未显式指定时 isolated full 为 3600 秒，其余 300 秒。严格模式继续保留。
+- `--tools default` 保留内置工具，`dontAsk` 按真实 CLI 工具名授权；真实测试发现并修复星号许可未放行 Bash/Workflow 的问题。外部 MCP 始终关闭，不增加用户 MCP 继承开关。
+- isolated 的 hook 记账缺口、已失败的 Workflow 尝试作为审计警告保留，不丢弃已经交付的完整报告；strict 仍保留守卫证据门禁。无效 JSON/schema 报告也先保存原字节、哈希与诊断，供分页核对，运行仍明确阻塞。
+- 内置 Workflow 先做公共检查，再做五维审查、独立核验和合成。兼容 CLI 在子代理 JSON 前附加的安全说明，原说明作为不可信材料保留；多对象或破损 JSON 仍拒绝，缺必需阶段仍 blocked。
+- 监督方 Git 调用集中禁用可执行回调并设置超时；保护整个 Runtime 状态、执行源码与 Python 环境；日志拒绝符号链接、硬链接和 FIFO。副本支持 intent-to-add、全局忽略、大小写路径和保护集合内的完整硬链接组，避免保留目录与 Workflow 名称冲突，并覆盖所有关联 worktree。
+- 跟踪带本轮标记的脱离进程组后代，退出时核验并清理。新增 `claude_cleanup_review`，仅在明确处置、停止证明及锁内重查通过后删除副本；保留报告、裁决、tracked diff 与状态，unknown 和待返工副本保留。
+- findings 补可选级别、位置、建议及结构化简化建议；旧 findings 返回可解释错误，历史记录可带理由交回 Codex 处置。实际 Workflow 调用和实时/最终模型身份使用一致的记录逻辑。
+- 清除剩余不可达 CLI 对账链、无效导入兜底与退休接口参数；共用锁观察、Git 和身份路径声明。Ruff 新增按既有基线测得的复杂度/分支/语句上限，局部 strict Mypy 保留；提示词同时补齐必要字段与真实边界。
+
 ## 0.7.0：完整审查、副本写保护与随包协调说明
 
 版本标签 `v0.7.0`，完整构建 `0.7.0+codex.20261003090000`。源码、分发与真实 Claude 的验证范围分别记录于 [验证记录](RELEASE-VERIFICATION.md)，旧发布条目、标签与资产保持原身份。

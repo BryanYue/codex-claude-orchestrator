@@ -16,9 +16,9 @@ contract 身份定义兼容性，启动 loaded-code 身份防止磁盘与已加�
 
 review_scope 定义 defects/quality/full 的覆盖；review_mode 定义 strict/isolated 的执行方式，两者独立。带 user_request 的新 MCP Git review 默认 isolated；旧调用缺原话或原始 packet 省略模式保持 strict，artifacts 仅 strict。原始 user_request 与来源不可由 objective 替代。
 
-isolated 提供独立可写 clone，用于复现、测试、脚本、Agent/Skill/Workflow；OS 写保护限制原仓库、相关 Git 目录与外部 requirement_sources。删除 remote、hook 和前后快照都不能单独证明预防写入。所需保护不可用时明确拒绝，不降级为假隔离。此边界不是网络、凭证或任意外部副作用沙箱；外部 MCP 默认不继承，行为仍须符合用户授权和宿主权限。
+isolated 提供独立可写 clone，用于复现、测试、脚本、Agent/Skill/Workflow；OS 写保护限制原仓库、相关 Git 目录与外部 requirement_sources。删除 remote、hook 和前后快照都不能单独证明预防写入。所需保护不可用时明确拒绝，不降级为假隔离。此边界不是网络、凭证或任意外部副作用沙箱；外部 MCP 始终不继承，行为仍须符合用户授权和宿主权限。
 
-副本和原仓分开记录；副本随 run 保留供纠正/resume，returned 后仍保留。只有处置完成且停止确认后才显式清理；unknown 不清理。续跑保持要求、输入、文件/资源范围、模型与 CLI 可执行身份，边界变化则 fresh。OS 保护不代替全部项目 oracle/构建/下游/设备闸。
+副本和原仓分开记录；副本随 run 保留供纠正/resume，returned 后仍保留。accepted或returned/completed_by_codex后才可调用claude_cleanup_review；在lane与registry锁内重读处置、核对停止后移除副本。unknown不清理。报告与tracked patch/status保留，未跟踪复现产物须先另存。续跑保持要求、输入、文件/资源范围、模型与 CLI 可执行身份，边界变化则 fresh。isolated hook与Workflow事件只记录审计事实，完整报告及覆盖由协调者核验。OS保护不代替项目oracle/构建/下游/设备闸。
 
 strict 只读工具与精确来源守卫、implement 的 owned_files 政策继续保留。外部源的父目录搜索不在精确授权内；保存 Workflow 的作者须向每个子代理传递相同边界。Runtime 锁仅约束接入本插件的执行者；Codex 仍需协调外部写入者。
 

@@ -267,6 +267,18 @@ class ViewerTests(unittest.TestCase):
 
 
 class MCPTests(unittest.IsolatedAsyncioTestCase):
+    def assert_tool_schemas(self, tools):
+        schemas = {tool.name: tool.input_schema for tool in tools}
+        self.assertEqual(set(schemas["claude_cli_update"]["properties"]), {"action", "job_id"})
+        self.assertIsNone(schemas["claude_start"]["properties"]["timeout_seconds"]["default"])
+
+    def assert_legacy_review_dispatch(self, start, listed):
+        self.assert_tool_schemas(listed)
+        self.assertEqual((start["review_mode"], start["request_provenance"], start["timeout_seconds"]),
+                         ("strict", "legacy_unspecified", 300))
+        self.assertIn("未提供 user_request", start["user_summary"])
+        self.assertTrue(start["warnings"])
+
     async def test_routine_status_and_cancellation_do_not_scan_maintenance_history(self):
         import server
         rt = Mock()
@@ -421,8 +433,7 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
                  patch.object(server.cli_validation, "start", side_effect=forbidden, create=True):
                 for action in ("prepare", "validate", "activate", "rollback", "refresh", "policy", "acknowledge"):
                     with self.subTest(action=action):
-                        result = await server.claude_cli_update(action=action, policy="automatic", channel="latest",
-                                                                auto_qualify=True, identity_id="legacy", notice_id="n")
+                        result = await server.claude_cli_update(action=action)
                         self.assertTrue(result["retired"])
                         self.assertFalse(result["changed"])
             with self.assertRaises(Exception):
@@ -495,7 +506,7 @@ print(json.dumps({'type':'result','subtype':'success','session_id':s,'structured
                     for tool in listed:
                         if tool.name in {"claude_environment", "claude_diagnostics", "claude_recovery", "claude_cli_status"}:
                             self.assertTrue(tool.annotations.read_only_hint)
-                    self.assertEqual(names, {"claude_content_status", "claude_content_read", "claude_models", "claude_environment", "claude_diagnostics", "claude_recovery", "claude_reconcile", "claude_saved_workflows", "claude_route", "claude_routing_policy", "claude_routing_set", "claude_workflow_context", "claude_workflow_enable", "claude_workflow_disable", "claude_doctor", "claude_cli_status", "claude_cli_update", "claude_start", "claude_status", "claude_runs", "claude_wait", "claude_events", "claude_details", "claude_result", "claude_cancel", "claude_decide"})
+                    self.assertEqual(names, {"claude_content_status", "claude_content_read", "claude_models", "claude_environment", "claude_diagnostics", "claude_recovery", "claude_reconcile", "claude_saved_workflows", "claude_route", "claude_routing_policy", "claude_routing_set", "claude_workflow_context", "claude_workflow_enable", "claude_workflow_disable", "claude_doctor", "claude_cli_status", "claude_cli_update", "claude_start", "claude_status", "claude_runs", "claude_wait", "claude_events", "claude_details", "claude_result", "claude_cancel", "claude_decide", "claude_cleanup_review"})
                     async def call(name, args):
                         result = await client.call_tool(name, args)
                         self.assertFalse(result.is_error, str(result.content))
@@ -509,9 +520,9 @@ print(json.dumps({'type':'result','subtype':'success','session_id':s,'structured
                     self.assertFalse(models["model_request_sent"])
                     retired_identity = await client.call_tool("claude_models", {"cwd": str(repo), "identity_id": "darwin-arm64-2.1.278-deadbeef"})
                     self.assertTrue(retired_identity.is_error)
-                    for update in ({"action": "policy", "policy": "automatic", "channel": "latest", "auto_qualify": True},
+                    for update in ({"action": "policy"},
                                    {"action": "refresh"}, {"action": "acknowledge"},
-                                   {"action": "prepare", "candidate_path": "relative-claude"}, {"action": "validate"}):
+                                   {"action": "prepare"}, {"action": "validate"}):
                         retired = await call("claude_cli_update", update)
                         self.assertTrue(retired["retired"])
                         self.assertFalse(retired["changed"])
@@ -535,6 +546,7 @@ print(json.dumps({'type':'result','subtype':'success','session_id':s,'structured
                         "requirement_sources":[str(requirement)], "constraints":["No edits"], "acceptance":["Return evidence"],
                         "owned_files":[], "protected_files":[], "model":"sonnet", "effort":"low"}
                     start = await call("claude_start", {"packet": packet})
+                    self.assert_legacy_review_dispatch(start, listed)
                     self.assertNotIn("cli_maintenance", start)
                     run_id = start["run_id"]
                     cursor = 0; all_events = []; final = None

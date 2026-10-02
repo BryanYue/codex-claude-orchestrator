@@ -21,6 +21,12 @@ def declared_paths(raw: bytes, purpose: str) -> tuple[str, ...]:
         raise ValueError("unsupported code identity declaration")
     purposes = declaration.get("purposes")
     paths = purposes.get(purpose) if isinstance(purposes, dict) else None
+    seen = {purpose}
+    while isinstance(paths, str) and isinstance(purposes, dict):
+        if paths not in {"contract", "startup"} or paths in seen:
+            raise ValueError("Code identity purpose alias is unknown or cyclic")
+        seen.add(paths)
+        paths = purposes.get(paths)
     if not isinstance(paths, list) or not paths or any(not isinstance(path, str) for path in paths):
         raise ValueError("code identity paths must be a nonempty list of strings")
     if len(paths) != len(set(paths)):
@@ -38,10 +44,18 @@ def paths(root: Path, purpose: str) -> tuple[str, ...]:
     return declared_paths((Path(root) / MANIFEST_FILE).read_bytes(), purpose)
 
 
-def file_hashes(root: Path, purpose: str) -> dict[str, str]:
+def file_hashes(root: Path, purpose: str, *, errors: list[str] | None = None) -> dict[str, str]:
+    """Hash declared files; optional errors collect unreadable files for diagnostics."""
     root = Path(root)
-    return {relative: hashlib.sha256((root / relative).read_bytes()).hexdigest()
-            for relative in paths(root, purpose)}
+    files: dict[str, str] = {}
+    for relative in paths(root, purpose):
+        try:
+            files[relative] = hashlib.sha256((root / relative).read_bytes()).hexdigest()
+        except OSError as exc:
+            if errors is None:
+                raise
+            errors.append(f"{relative}: {type(exc).__name__}")
+    return files
 
 
 def digest(files: dict[str, str], purpose: str) -> str:

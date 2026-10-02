@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import stat
 import re
 from pathlib import Path
 from typing import Any, Mapping
@@ -106,8 +108,45 @@ def notification_headers(text: str) -> dict[str, str] | None:
         position = element.end()
 
 
-def _new_invocation(tool_use_id: str, line: int) -> dict[str, Any]:
-    return {"tool_use_id": tool_use_id, "tool_use_line": line,
+def _workflow_input_evidence(value: dict[str, Any]) -> dict[str, Any]:
+    """Preserve invocation identity without copying script contents or argument secrets.
+
+    A path digest observes bytes at parsing time, not proof of the bytes executed.
+    Relative paths cannot be resolved without an independently observed working directory.
+    """
+    evidence: dict[str, Any] = {"name": value.get("name") if isinstance(value.get("name"), str) else None,
+                                "script_path": value.get("scriptPath") if isinstance(value.get("scriptPath"), str) else None}
+    if "args" in value:
+        material = json.dumps(value["args"], sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()
+        evidence["args_sha256"] = hashlib.sha256(material).hexdigest()
+    inline = value.get("script")
+    if isinstance(inline, str):
+        evidence.update(script_sha256=hashlib.sha256(inline.encode()).hexdigest(), script_digest_source="inline_tool_input")
+    elif evidence["script_path"]:
+        path = Path(evidence["script_path"])
+        evidence["script_sha256"] = None
+        if not path.is_absolute():
+            evidence["script_digest_unavailable"] = "relative_path_without_execution_cwd"
+            return evidence
+        try:
+            descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+            with os.fdopen(descriptor, "rb") as stream:
+                info = os.fstat(stream.fileno())
+                if not stat.S_ISREG(info.st_mode) or info.st_size > 2 * 1024 * 1024:
+                    evidence["script_digest_unavailable"] = "not_a_regular_bounded_script"
+                else:
+                    content = stream.read(2 * 1024 * 1024 + 1)
+                    if len(content) > 2 * 1024 * 1024:
+                        evidence["script_digest_unavailable"] = "script_exceeds_size_limit"
+                    else:
+                        evidence.update(script_sha256=hashlib.sha256(content).hexdigest(), script_digest_source="file_at_parse_time")
+        except OSError as exc:
+            evidence["script_digest_unavailable"] = type(exc).__name__
+    return evidence
+
+
+def _new_invocation(tool_use_id: str, line: int, tool_input: dict[str, Any]) -> dict[str, Any]:
+    return {"tool_use_id": tool_use_id, "tool_use_line": line, "input": _workflow_input_evidence(tool_input),
             "acknowledgement": {"state": "missing", "stream_line": None},
             "task_id": None, "task_started_line": None, "notifications_before_acknowledgement": 0,
             "unbound_notifications": 0, "terminals": {source: [] for source in WORKFLOW_TERMINAL_SOURCES}}
@@ -146,7 +185,7 @@ def _workflow_invocation_evidence(index: int, record: dict[str, Any]) -> dict[st
         terminal = {"status": first["status"], "source": source, "stream_line": first["stream_line"],
                     "count": len(terminals), "conflict": conflict}
     return {"index": index, "tool_use_id": record["tool_use_id"], "tool_use_line": record["tool_use_line"],
-            "acknowledgement": record["acknowledgement"],
+            "acknowledgement": record["acknowledgement"], "input": record["input"],
             "task_id": record["task_id"] or (first["task_id"] if first else None),
             "task_started_line": record["task_started_line"], "terminal": terminal,
             "output_reference": ({"output_file": first["output_file"], "source": source}
@@ -302,7 +341,7 @@ def _observe_workflow_events(ctx: _StreamObservations, obj: dict[str, Any], even
                 if block.get("type") == "tool_use" and block.get("name") == "Workflow":
                     tool_id = block.get("id")
                     if isinstance(tool_id, str) and isinstance(block.get("input"), dict) and (ctx.expected_workflow == "*" or block["input"] == ctx.expected_input):
-                        ctx.invocations.setdefault(tool_id, _new_invocation(tool_id, line_number))
+                        ctx.invocations.setdefault(tool_id, _new_invocation(tool_id, line_number, block["input"]))
                     else:
                         ctx.diagnostics["other_workflow_tool_uses"] += 1
                 elif block.get("type") == "tool_result" and block.get("tool_use_id") in ctx.invocations:
@@ -377,7 +416,9 @@ def _summarize_workflow(ctx: _StreamObservations) -> None:
         completed = bool(evidence) and all(_completed(item) for item in evidence)
         last_completion = max((item["terminal"]["stream_line"] for item in evidence if _completed(item)), default=0)
         after_completion = [line for line in ctx.parent_result_lines if completed and line > last_completion]
-        ctx.metadata["workflow_name"] = ctx.expected_input["name"]
+        names = list(dict.fromkeys(item["input"]["name"] for item in evidence if item["input"]["name"]))
+        ctx.metadata["workflow_name"] = (names[0] if len(names) == 1 else None) if ctx.expected_workflow == "*" else ctx.expected_input["name"]
+        ctx.metadata["workflow_names"] = names
         ctx.metadata["workflow_invocations"] = evidence
         ctx.metadata["workflow_stream_diagnostics"] = {"other_workflow_tool_uses": ctx.diagnostics["other_workflow_tool_uses"],
                                                    "unrecognized_notification_statuses": ctx.diagnostics["unrecognized_notification_statuses"]}
@@ -392,3 +433,25 @@ def _summarize_workflow(ctx: _StreamObservations) -> None:
         # can be the Workflow report.
         ctx.metadata["workflow_final_after_completion"] = ctx.final_line is not None and ctx.final_line in after_completion
         ctx.metadata["workflow_interim_result_count"] = len(ctx.parent_result_lines) - len(after_completion)
+
+
+def provider_identity(lines) -> dict[str, Any]:
+    """Project live identity using the same event rules as terminal parsing."""
+    ctx = _StreamObservations("", None)
+    session = None
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        kind = event.get("type")
+        _observe_provider_identity(ctx, event, kind, event.get("session_id"))
+        if kind == "result" or (kind == "system" and event.get("subtype") in {"init", "system_init"}):
+            if isinstance(event.get("session_id"), str):
+                session = event["session_id"]
+    return {"session_id": session, "initialized_model": ctx.metadata.get("initialized_model"),
+            "actual_models": ctx.metadata["actual_models"],
+            "actual_model_source": "+".join(ctx.metadata["actual_model_sources"]) or None,
+            "provider_response_observed": ctx.metadata.get("provider_response_observed", False)}

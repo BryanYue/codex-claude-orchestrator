@@ -25,14 +25,16 @@ class IdentityManifestTests(unittest.TestCase):
         self.root = Path(self.temp.name) / "plugin"
         self.root.mkdir()
         self.declaration = json.loads((PLUGIN / identity_manifest.MANIFEST_FILE).read_bytes())
-        for relative in set().union(*self.declaration["purposes"].values()):
+        for relative in set().union(*(identity_manifest.declared_paths(json.dumps(self.declaration).encode(), purpose)
+                              for purpose in identity_manifest.PURPOSES)):
             target = self.root / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(PLUGIN / relative, target)
 
     def blobs(self):
         return {builder.PLUGIN_RELATIVE / relative: (self.root / relative).read_bytes()
-                for relative in set().union(*self.declaration["purposes"].values())}
+                for relative in set().union(*(identity_manifest.declared_paths(json.dumps(self.declaration).encode(), purpose)
+                              for purpose in identity_manifest.PURPOSES))}
 
     def contract(self):
         return identity_manifest.digest(identity_manifest.file_hashes(self.root, "contract"), "contract")
@@ -65,8 +67,7 @@ class IdentityManifestTests(unittest.TestCase):
         before_startup = startup_protocol.code_identity(self.root)["value"]
         relative = "scripts/new_dependency.py"
         (self.root / relative).write_bytes(b"# new dependency\n")
-        for paths in self.declaration["purposes"].values():
-            paths.append(relative)
+        self.declaration["purposes"]["contract"].append(relative)
         self.rewrite()
         after_contract = self.contract()
         after_startup = startup_protocol.code_identity(self.root)["value"]
@@ -80,7 +81,7 @@ class IdentityManifestTests(unittest.TestCase):
 
     def test_startup_only_dependency_stays_outside_contract_but_is_required_by_builder(self):
         relative = "scripts/startup_only.py"
-        self.declaration["purposes"]["startup"].append(relative)
+        self.declaration["purposes"]["startup"] = [*self.declaration["purposes"]["contract"], relative]
         self.rewrite()
         dependency = self.root / relative
         dependency.write_bytes(b"# first startup implementation\n")
@@ -119,6 +120,19 @@ class IdentityManifestTests(unittest.TestCase):
             declaration["purposes"]["contract"].append(bad)
             with self.assertRaises(ValueError):
                 identity_manifest.declared_paths(json.dumps(declaration).encode(), "contract")
+
+    def test_alias_uses_same_paths_and_rejects_cycles_and_unknown_targets(self):
+        raw = json.dumps(self.declaration).encode()
+        self.assertEqual(identity_manifest.declared_paths(raw, "startup"), identity_manifest.declared_paths(raw, "contract"))
+        for aliases in ({"contract": "startup", "startup": "contract"}, {"contract": "contract"},
+                        {"startup": "unrecognized", "contract": self.declaration["purposes"]["contract"]}):
+            raw = json.dumps({"schema_version": 1, "purposes": aliases}).encode()
+            with self.assertRaises(ValueError):
+                identity_manifest.declared_paths(raw, "startup")
+            blobs = self.blobs()
+            blobs[builder.CODE_IDENTITY_RELATIVE] = raw
+            with self.assertRaises(builder.BuildError):
+                builder.contract_digest(blobs)
 
     def test_imported_plugin_dependencies_are_declared_for_each_purpose(self):
         modules = {path.stem: path.relative_to(PLUGIN).as_posix()

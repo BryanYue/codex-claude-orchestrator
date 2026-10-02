@@ -26,32 +26,7 @@ BUDGET_FLAGS: Mapping[str, str] = {
     "max_budget_usd": "--max-budget-usd",
 }
 
-# Historical record of versions exercised by earlier releases.  It is read only
-# by the retained-store history code and never admits or rejects a local CLI.
-SUPPORTED_CLI_PROFILES: Mapping[str, Mapping[str, Any]] = {
-    "2.1.276": {
-        "tested": True,
-        "capabilities": {
-            "max_turns": "--max-turns",
-            "max_budget_usd": "--max-budget-usd",
-        },
-    },
-    "2.1.278": {
-        "tested": True,
-        "capabilities": {"max_budget_usd": "--max-budget-usd"},
-    },
-    "2.1.277": {
-        "tested": True,
-        "capabilities": {
-            "max_budget_usd": "--max-budget-usd",
-        },
-    },
-}
-
 GROUPS = frozenset({"core", "read_only", "write", "resume", "workflow"})
-for _profile in SUPPORTED_CLI_PROFILES.values():
-    _profile.setdefault("groups", sorted(GROUPS))
-    _profile.setdefault("source", "bundled_profile")
 
 
 # Bump only when the persisted dispatch/session protocol becomes incompatible.
@@ -93,8 +68,3 @@ def required_flags(groups: set[str] | frozenset[str], verify: bool = False) -> s
     if verify:
         flags |= VERIFY_FLAGS
     return flags
-
-
-def profile_for(version: str, profiles: Mapping[str, Mapping[str, Any]] | None = None) -> Mapping[str, Any] | None:
-    """Historical lookup used only by the retained-store records."""
-    return (SUPPORTED_CLI_PROFILES if profiles is None else profiles).get(version)

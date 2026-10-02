@@ -23,7 +23,8 @@ VERSION = "0.5.0"
 
 IDENTITY_DECLARATION = json.loads((ROOT.parent / bd.CODE_IDENTITY_RELATIVE).read_bytes())
 CONTRACT_SOURCES = {relative: f"# {relative}\n" for relative in
-                    sorted(set().union(*IDENTITY_DECLARATION["purposes"].values()))
+                    sorted(set().union(*(bd.identity_paths({bd.CODE_IDENTITY_RELATIVE: json.dumps(IDENTITY_DECLARATION).encode()}, purpose)
+                                        for purpose in ("contract", "startup"))))
                     if relative != "code-identity.json"}
 CONTRACT_SOURCES["code-identity.json"] = json.dumps(IDENTITY_DECLARATION)
 

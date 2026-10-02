@@ -7,8 +7,6 @@ reported as history and never influences dispatch.
 """
 from __future__ import annotations
 
-import fcntl
-import os
 from typing import Any
 
 import cli_store
@@ -22,39 +20,12 @@ RETIREMENT_MESSAGE = ("插件不再下载、安装、更新、回退、复制或
 _WORKER_RUNNING = {"held": True, "free": False, "absent": False}
 
 
-def _legacy_worker_observation(environ: dict[str, str] | None) -> str:
-    """Observe an older plugin's worker lock as absent, free, held or unreadable.
-
-    The probe opens an existing lock read-only and never creates it.  It takes
-    a shared lock so that concurrent status readers do not see each other as
-    the old exclusive worker.
-    """
-    path = cli_store.store_root(environ) / "updates" / "worker.lock"
-    try:
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-    except FileNotFoundError:
-        return "absent"
-    except OSError:
-        return "unreadable"
-    try:
-        try:
-            fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
-        except BlockingIOError:
-            return "held"
-        except OSError:
-            return "unreadable"
-        fcntl.flock(descriptor, fcntl.LOCK_UN)
-        return "free"
-    finally:
-        os.close(descriptor)
-
-
 def status(environ: dict[str, str] | None = None) -> dict[str, Any]:
     """Return local CLI discovery plus retired-maintenance history."""
     discovery = discover_external_claude(environ)
     path = discovery.get("path")
     legacy = cli_store.legacy_records(environ)
-    observation = _legacy_worker_observation(environ)
+    observation = cli_store.worker_lock_observation(cli_store.store_root(environ) / "updates" / "worker.lock")
     legacy["maintenance_worker_lock"] = observation
     # None means the lock exists but could not be observed, not "stopped".
     legacy["maintenance_worker_running"] = _WORKER_RUNNING.get(observation)

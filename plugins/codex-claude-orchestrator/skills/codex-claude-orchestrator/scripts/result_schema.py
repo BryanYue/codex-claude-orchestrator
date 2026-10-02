@@ -45,15 +45,28 @@ FINDING_SCHEMA: dict[str, Any] = {
         "category": {"enum": sorted(CATEGORIES)}, "confidence": {"enum": sorted(CONFIDENCES)},
         "summary": {"type": "string", "pattern": NONBLANK},
         "evidence": {"type": "array", "items": {"type": "string", "pattern": NONBLANK}},
+        "severity": {"enum": ["P0", "P1", "P2", "P3"]},
+        "location": {"type": "string", "pattern": NONBLANK},
+        "suggestion": {"type": "string", "pattern": NONBLANK},
     },
 }
 FINDING_SCHEMA["allOf"] = [{"if": {"properties": {"confidence": {"enum": ["reproduced", "code_confirmed"]}}},
                              "then": {"properties": {"evidence": {"minItems": 1}}}}]
 RESULT_SCHEMA["properties"]["findings"] = {"type": "array", "items": FINDING_SCHEMA}
 RESULT_SCHEMA["properties"]["coverage"] = {"type": "array", "items": {"type": "string", "pattern": NONBLANK}}
+RESULT_SCHEMA["properties"]["simplifications"] = {"type": "array", "items": {
+    "type": "object", "required": ["summary", "risk", "maintenance_cost", "suggestion"],
+    "properties": {key: {"type": "string", "pattern": NONBLANK}
+                   for key in ("summary", "risk", "maintenance_cost", "suggestion")}}}
 
 
 def validate_findings(value: dict[str, Any]) -> None:
+    if "simplifications" in value:
+        entries = value["simplifications"]
+        if not isinstance(entries, list) or not all(isinstance(item, dict) and all(
+                isinstance(item.get(key), str) and item[key].strip()
+                for key in ("summary", "risk", "maintenance_cost", "suggestion")) for item in entries):
+            raise BridgeError("simplifications require summary, risk, maintenance_cost and suggestion")
     if "coverage" in value and (not isinstance(value["coverage"], list)
             or not all(isinstance(x, str) and x.strip() for x in value["coverage"])):
         raise BridgeError("coverage must be an array of nonblank strings")
@@ -80,12 +93,20 @@ def validate_findings(value: dict[str, Any]) -> None:
             raise BridgeError("finding evidence must be an array of nonblank strings")
         if finding["confidence"] in {"reproduced", "code_confirmed"} and not evidence:
             raise BridgeError("confirmed finding requires evidence")
+        if "severity" in finding and finding["severity"] not in ("P0", "P1", "P2", "P3"):
+            raise BridgeError("finding severity must be P0, P1, P2 or P3")
+        for key in ("location", "suggestion"):
+            if key in finding and (not isinstance(finding[key], str) or not finding[key].strip()):
+                raise BridgeError(f"finding {key} must be nonblank")
 
 
 def finding_decisions(findings: list[dict[str, Any]], decisions: Any) -> list[dict[str, Any]]:
     """Keep every original finding and require reasons for changed conclusions."""
+    if not isinstance(findings, list) or not all(isinstance(item, dict) and isinstance(item.get("id"), str)
+                                              and item["id"].strip() for item in findings):
+        raise ValueError("stored legacy findings have no stable IDs; use returned/completed_by_codex with independent evidence")
     if not isinstance(decisions, list):
-        raise ValueError("finding_decisions must be an array")
+        raise ValueError("finding_decisions must be an array with one {finding_id, disposition, reason} per reported finding")
     known = {item["id"] for item in findings}
     seen = set()
     for item in decisions:

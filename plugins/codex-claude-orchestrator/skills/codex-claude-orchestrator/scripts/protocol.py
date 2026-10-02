@@ -2,7 +2,7 @@
 import hashlib
 from pathlib import Path, PurePosixPath
 import re
-import subprocess
+import trusted_git
 
 
 def validate_binding(packet):
@@ -18,7 +18,7 @@ def validate_binding(packet):
     if not isinstance(approval, str) or not approval.strip():
         raise ValueError("protocol_binding requires an approval_source; tools cannot invent approval")
     cwd = Path(packet["cwd"]).resolve()
-    root = subprocess.run(["git", "-C", str(cwd), "rev-parse", "--show-toplevel"], capture_output=True, text=True, check=True).stdout.strip()
+    root = trusted_git.run(cwd, "rev-parse", "--show-toplevel", text=True, check=True).stdout.strip()
     if Path(root).resolve() != cwd:
         raise ValueError("protocol_binding cwd must be the project root")
     paths = {}
@@ -45,7 +45,7 @@ def validate_binding(packet):
         if not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected):
             raise ValueError(f"Explicit {prefix}_sha256 is required")
         file = binding[prefix + "_path"]
-        baseline = subprocess.run(["git", "-C", str(cwd), "show", f"{base}:{file}"], capture_output=True, check=True).stdout
+        baseline = trusted_git.run(cwd, "show", f"{base}:{file}", check=True).stdout
         if hashlib.sha256(baseline).hexdigest() != expected:
             raise ValueError(f"{prefix} does not match the declared approved baseline/hash")
         if hashlib.sha256(paths[prefix + "_path"].read_bytes()).hexdigest() != expected:

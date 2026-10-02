@@ -24,15 +24,17 @@ MCP 缺失或启动失败时，先核对安装版本与实际错误。Git market
 
 ## 3. 派单保持原始范围
 
-按 bridge 的实际字段构造 packet，传用户原话与原始来源、目标、基线、约束、验收、cwd、模型/effort、运行预算与精确文件范围。来源可以是文件、任务消息或批准记录；派单摘要不能改写或缩窄原要求，相关决策与已否定方案随材料传递，不能只给测试名。
+packet 必填 task_id、revision、role、cwd、objective、requirement_sources、constraints、acceptance、owned_files、protected_files、model、effort；新审查另传 user_request 原话。baseline_commit 和 budget 可选。来源可以是文件、任务消息或批准记录；派单摘要不能改写或缩窄原要求，相关决策与已否定方案随材料传递，不能只给测试名。
 
 `review_scope=defects|quality|full` 默认 full；`user_request` 原样保留，objective 仅是摘要。完整审查核对正确性/安全、架构职责、复杂度/重复/死代码、测试、文档和提示词，并报告实际覆盖与未完成项。设计建议说明证据、权衡和适用条件，缺陷说明触发、实际/预期行为与责任层。允许某维度无发现，不要求凑问题或删除配额。结构化 findings 可辅助追溯，不能替代完整报告和来源核对。
 
-独立审查在可写副本中开展复现、测试和所需工具工作；必须确认原仓库的 OS 写保护实际生效，缺失则阻断依赖此保护的运行。不能以删除 remote、提示词禁令或事后快照代替。外部 MCP 默认关闭，联网、安装和外部副作用仍受用户授权/宿主权限约束。`review_mode=strict` 保留工具与精确来源边界；带 user_request 的新 MCP Git review 默认 isolated，缺原话的旧调用仍 strict。implementation 明确 owned_files，初次编辑要求干净候选，不能 stash/覆盖已有合法改动。
+独立审查在可写副本中开展复现、测试和所需工具工作；必须确认原仓库的 OS 写保护实际生效，缺失则阻断依赖此保护的运行。不能以删除 remote、提示词禁令或事后快照代替。外部 MCP 始终关闭，本版无继承开关，联网、安装和外部副作用仍受用户授权/宿主权限约束。`review_mode=strict` 保留工具与精确来源边界；带 user_request 的新 MCP Git review 默认 isolated，缺原话的旧调用仍 strict。implementation 明确 owned_files，初次编辑要求干净候选，不能 stash/覆盖已有合法改动。
+
+副本不复制ignored依赖；外部硬链接/链接和某些index状态会明确拒绝。嵌套macOS sandbox可能失败（如SwiftPM）；报告所有skip，必要时只在受保护副本里关闭内层构建沙箱。不要让后台进程脱离：停止证据只覆盖进程组及标记可见/已观察后代，不是主机级进程封闭。
 
 非 Git 资料使用 artifacts 与明确 input_files、requirement_sources，仅支持声明的 UTF-8 文本；不支持编辑、resume、正式 Git protocol_binding 或旧命名 Workflow。非 Git 源码先按 [source-snapshot.md](source-snapshot.md) 生成带来源、行号和哈希的文本快照；核验时回对原文件。Word/PDF/表格等先由 Codex 用相应工具准备资料，分别验收原生格式与文本审查。
 
-Runtime 自动给每轮独立 run-dir；同任务 task_id 保持、revision 递增。用 `claude_start` 传 packet、有界 timeout_seconds 和必要 resume_run_id；旧任务还须沿原 content_binding 与执行身份核对。按工作量给预算，不能缺预算 flag 时默默忽略。完整 JSON 按本轮 review_report_path 写到副本 `.codex-review/<run_id>.json`，用 result 的 review_report 读取；可选 codex-full-review 脚本不替代覆盖与完成证据。其他字段、默认值、副本生命周期与兼容入口以 bridge 为准。
+Runtime 自动给每轮独立 run-dir；同任务 task_id 保持、revision 递增。用 `claude_start` 传 packet、有界 timeout_seconds 和必要 resume_run_id；旧任务还须沿原 content_binding 与执行身份核对。按工作量给预算，不能缺预算 flag 时默默忽略。父会话按本轮 review_report_path 写完整 JSON（通常在副本 `.codex-review`，冲突时改用独立目录），用 result 的 review_report 读取；新Workflow走isolated review，旧workflow_review已弃用但兼容。省略时限时 isolated full 为3600秒，其余300秒；可传1..14400秒，并按成本设置 max_budget_usd。续跑省略mode/scope会继承旧包，不能改变原话。
 
 需要原生监督席时先读 [supervisor.md](supervisor.md)，传完整输入并立即接收真实 run_id；主代理保留裁决和共享记录写入。短任务直接管理 MCP。
 
@@ -50,9 +52,11 @@ start/status/wait/details/decide 常规用 compact=true，证据按需 result �
 
 逐项核对 finding 的原始来源、代码路径、行为、复现与覆盖；对可证实缺陷验证反例，对设计建议评估收益、代价和契约影响。保留原 finding 及接受、退回、合并或待确认的理由和实际证据，不删除核验失败项。搜索无命中不证明文件不存在，应核精确路径；无法安全核验则明确未确认。文档还须沿默认值、生成文件名与消费路径检查一致性。
 
-亲自执行必要检查或核对可信既有结果的版本身份，区分 Claude 自报、真实命令输出、源码、构建、模拟、真机/设备结果。缺席位/维度记未完成；某维度零发现可接受。工作区前后差异与开始前已有改动分开；缺快照记 unknown，变化也不能仅凭先后顺序归因 Claude。Git 快照不覆盖任意 ignored、中途写回和仓外副作用。
+isolated 的hook缺口、失败/未完成Workflow保留审计警告，不能代替内容核验；strict门禁不变。无效schema原文仍可读取。亲自执行必要检查或核对可信既有结果的版本身份，区分 Claude 自报、真实命令输出、源码、构建、模拟、真机/设备结果。缺席位/维度记未完成；某维度零发现可接受。工作区前后差异与开始前已有改动分开；缺快照记 unknown，变化也不能仅凭先后顺序归因 Claude。Git 快照不覆盖任意 ignored、中途写回和仓外副作用。
 
-可用 finding_decisions 记录逐项 accepted/downgraded/rejected；降级和拒绝须有 reason。仅对未被 superseded 的 reported run 调用 `claude_decide`，带原因与核验出处。原报告退回但 Codex 已补齐且验证完成时可 returned + completed_by_codex，记录真实 completion_summary；需修订用 revision_requested。其他失败/阻断/unknown 状态不写 decision、不变造回执：由 Codex 在原 PROGRESS 追加 run_id、原状态、独立完成者、实际补齐结果、原因、证据与未完成项。结果记录不自动合入或发布。
+有 findings 时，finding_decisions 必须覆盖每个 finding_id，disposition 为 accepted/downgraded/rejected；后两者必须有 reason。仅对未被 superseded 的 reported run 调用 `claude_decide`，带原因与核验出处。原报告退回但 Codex 已补齐且验证完成时可 returned + completed_by_codex，记录真实 completion_summary；需修订用 revision_requested。其他失败/阻断/unknown 状态不写 decision、不变造回执：由 Codex 在原 PROGRESS 追加 run_id、原状态、独立完成者、实际补齐结果、原因、证据与未完成项。结果记录不自动合入或发布。
+
+accepted或returned/completed_by_codex且确认停止后，可调用 claude_cleanup_review(run_id) 删除副本；保留报告、tracked patch/status和裁决，不归档全部untracked产物。待修订/unknown不清理。
 
 用量只读 usage_report：cli_session 是含子代理且可能含前轮的会话累计估算，main_agent_final 只含主代理最终回报；两者不加、累计结果不跨轮相加，缺项记未知。CLI 费用不是实际扣费或订阅剩余额度。
 

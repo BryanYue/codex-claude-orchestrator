@@ -29,7 +29,7 @@
 `workspace_kind` 默认为 `git`，保持原 packet 兼容。`baseline_commit` 可选；传入时为明确的完整 commit，当前 HEAD 必须一致，不能猜分支。此字段标识本轮执行输入，不能替代正式 oracle 的批准登记。所有 run 保存真实 HEAD/status/diff 身份。
 
 - `review_scope` 为 `defects`、`quality` 或 `full`，默认 full；它只定义覆盖，不改变权限。新协调派单必须传 `user_request` 保留原话，objective 是执行摘要。旧包缺原话可保留兼容，但不能把 objective 冒充用户原话。
-- `review_mode="isolated"` 在独立可写 clone 中运行，支持 Bash、Agent、Skill、Workflow 等审查工具；OS 写保护覆盖原仓库/相关 Git 目录及外部 requirement_sources。它不是网络、凭证或全文件系统隔离，外部 MCP 默认关闭。不支持所需 OS 保护的宿主会明确拒绝，可改用 strict。
+- `review_mode="isolated"` 在独立可写 clone 中运行，支持 Bash、Agent、Skill、Workflow 等审查工具；OS 写保护覆盖原仓库/相关 Git 目录及外部 requirement_sources。它不是网络、凭证或全文件系统隔离，外部 MCP 始终关闭，本版无继承开关。不支持所需 OS 保护的宿主会明确拒绝，可改用 strict。
 - `review_mode="strict"` 只提供读取/搜索，cwd 外只能精确读取/搜索 requirement_sources。旧原始 packet 省略模式保持 strict；带 user_request 的新 MCP Git review 默认 isolated；旧调用缺 user_request 时保持 strict 并记录 legacy_unspecified，显式 isolated 要求非空原话。范围 full 与模式 strict 可以同时使用。
 - `implement` 增加 Write/Edit，owned_files 必须是仓内精确相对文件路径，不能用目录/glob；此角色不提供 shell、代理、Workflow 或外部 MCP。
 - 兼容入口 `workflow_review` 是保存 Workflow 的狭义只读模式：owned_files 必须为空，不能带 correction；每次都 fresh，不能用 `--resume-from`。它不代表完整的 Dynamic Workflow Review，也不验收多席位策略或实施型 Workflow。
@@ -47,13 +47,19 @@
 
 ### 工作副本生命周期
 
-isolated 的 cwd 是 Runtime 管理的独立 clone；输入来自原仓当前工作树，包括受覆盖的 dirty/untracked 文件，refs/config 不与原仓共享。启动前核对输入和 OS 保护，结束后保存报告与副本变更供 Codex 核验。副本随 run 保留用于局部纠正/resume，returned 后也保留；只有任务已处置且停止事实明确时才按显式清理操作移除。unknown 时不清理仍可能写入的副本。不要推测 ignored 依赖自动复制，也不能把副本上的 commit/test 当作原仓修改或真实设备验收。
+isolated 的 cwd 是 Runtime 管理的独立 clone；输入来自原仓当前工作树，包括受覆盖的 dirty/untracked 文件，refs/config 不与原仓共享。启动前核对输入和 OS 保护，结束后保存报告与副本变更供 Codex 核验。副本随run保留用于纠正/resume。accepted或returned/completed_by_codex之后，可显式调用claude_cleanup_review；lane与registry锁内重新核对处置与停止证据后删除。returned/revision_requested不删除。保存review-copy.diff.patch和review-copy-status.json，不承诺完整归档untracked/binary复现产物。unknown 时不清理仍可能写入的副本。不要推测 ignored 依赖自动复制，也不能把副本上的 commit/test 当作原仓修改或真实设备验收。
 
 ### isolated 的完整报告与可选 Workflow
 
 本轮执行 packet 给出 `review_report_path`，固定为副本 `.codex-review/<run_id>.json`；Claude 写完整 structured JSON，Bridge 停止确认后采集到 run 的 `review-report.json`，保存字节数/sha256与采集状态。`claude_result(run_id, artifact="review_report")` 读取完整报告，父级 structured 另保留，不以简报覆盖完整 findings。文件缺失或校验失败是未交付；正常退出或合法父级结果不替代完整报告与真实执行/覆盖核验。
 
 `assets/review-workflow.js` 是可选 codex-full-review 脚本，放入独立副本供审查者使用；参数包含 user_request、review_scope、来源与本轮 report_path。isolated 不要求保存名称/hash 门禁，可自行选择 Agent/Workflow；Bridge 对已观察的每次 Workflow 调用核对完成及结束顺序；Agent 和其他检查的完成、覆盖充分性由 Codex 对完整报告与实际证据核验，不能把启动回执当完成，失败/未覆盖项保留。legacy workflow_review 的 inventory、精确绑定和私有交付要求见下节，不能将它们套到一般 isolated review。
+
+isolated 使用 CLI 默认工具集，保留 dontAsk，按已验证的内置工具名逐项许可；单独的 `*` 不是有效的全工具许可。原仓所有linked worktree、Git目录、运行状态与执行解释器路径受保护。临时构建目录中的内部硬链接可复制；保护范围外的别名仍拒绝。全局忽略路径和intent-to-add状态保留，注入的Workflow/报告目录从副本Git状态排除。嵌套sandbox-exec可能失败，需记录skip；不能据此移除外层保护。
+
+isolated hook覆盖缺口和失败/未完成Workflow是保留的审计事实；完整报告仍可交付。内置Workflow执行一次公共检查、五维审查、独立核验和合成，缺必需阶段则报告blocked。父会话独占最终文件写入。报告先保存原始字节与摘要再验证schema，无效报告仍能分页读取，阻断原因是review_report。findings可附severity/location/suggestion，simplifications列出summary/risk/maintenance_cost/suggestion。
+
+运行时追加进程标记与PID出生身份观察，能够处理保留标记的setsid后代；首次观察前主动移除标记或不可见的未识别进程超出其证明范围。unknown保留副本。Git观察统一禁用可执行回调并清除GIT环境，单次Git最多30秒；保护树扫描最多60秒，预检不保证信号立即中断。
 
 ### 普通资料目录
 
@@ -192,7 +198,7 @@ Bridge 从有效的 Runtime 状态目录启动；Claude 仍使用任务 cwd。Ru
 - `stream.jsonl`、`stderr`：实际 provider 输出和诊断；不把原始大日志全部塞回协调者上下文。
 - `workspace_before.json`、`workspace_after.json`：通用输入身份与 workspace_digest；Git 模式同时保留 `git_before.json`、`git_after.json`。`requirements.json` 保存要求内容身份。
 - `plugin-identity.json`：每轮 bridge 创建 run-dir 后立即冻结、之后不再改写的插件身份，由 `plugin_identity.py` 按自身文件位置（不是被审仓 cwd）解析。含插件 `plugin_version`、`bridge_contract_id`、来源 `source` 和 `code_digest`。`source.kind=git` 时给 HEAD revision，`state` 为 clean / dirty / unknown（范围是插件根目录，dirty 时附至多 20 个路径；git status 失败则 unknown，不推断）；`release_manifest`（ZIP 分发的 RELEASE-MANIFEST.json）只作来源说明：`provenance_only=true`、`verification=not_performed`、`state=unknown`，不说明当前文件等于当时构建的内容；既非 Git 也无 manifest 时为 `kind=unknown`、revision 为空。`code_digest` 是插件根下可分发后缀文件的路径 + 字节 SHA-256（`scope` 字段写明范围，含被 Git 忽略的同后缀文件），不能用 revision 代替。
-- `result.json`：provider 结束状态、实际 session/model、结构化内容、权限拒绝，以及同一份 `plugin_identity`。最终报告与 run 成败分开解析：失败、取消、超时的 run 只要有最终报告，仍保留 `structured`（或 `result_validation_error`），不会因此改变失败状态；`report_evidence` 给出 `state`（structured / validation_error / absent）、模型自述的 `claimed_status`、`run_status` 和 `accepted=false`。`permission_denials` 只保存实际被拒绝的条目（工具、tool_use_id、原因、路径类输入，长度有界），不嵌套整条 result、报告或 usage，原始事件仍在 `stream.jsonl`；还包含本 run `activity.jsonl` 中 PreToolUse hook 记录的拒绝（`source: bridge_pretooluse_hook`，含工具、tool_use_id、原因及是否出现在父级 stream）；Workflow 子代理的调用可能不进父级 stream，任何一条 hook 拒绝都会使 run 失败（`hook_denial_error`）。`hook_guard_coverage` 中，与 provider tool_use 的 id 和工具名都匹配的 allowed、denied 事件都算已审计，分别列出 `allowed_*`、`denied_*` 与 `missing_tool_use_ids`；未知 status 或工具名不符的事件不计。denied 不放宽 guard，仍使 run failed。结构化报告的形状规则是 summary 非空白、evidence/checks/unresolved 中没有空白项（同一规则也写进 `--json-schema`）；简短的“无发现”报告合法，内容是否充分仍由 Codex 判断。另记 `prompt_delivery`（提示词字节数、已写字节、complete/incomplete）、`result_selection`（最终报告的选取规则与被忽略的 result 计数），`workflow_review` 另有 `workflow_delivery`、`workflow_error_codes`；非兼容 Workflow 入口的交付证据按实际记录读取，不补造旧字段。
+- `result.json`：provider 结束状态、实际 session/model、结构化内容、权限拒绝，以及同一份 `plugin_identity`。最终报告与 run 成败分开解析：失败、取消、超时的 run 只要有最终报告，仍保留 `structured`（或 `result_validation_error`），不会因此改变失败状态；`report_evidence` 给出 `state`（structured / validation_error / absent）、模型自述的 `claimed_status`、`run_status` 和 `accepted=false`。`permission_denials` 只保存实际被拒绝的条目（工具、tool_use_id、原因、路径类输入，长度有界），不嵌套整条 result、报告或 usage，原始事件仍在 `stream.jsonl`；还包含本 run `activity.jsonl` 中 PreToolUse hook 记录的拒绝（`source: bridge_pretooluse_hook`，含工具、tool_use_id、原因及是否出现在父级 stream）；Workflow 子代理的调用可能不进父级 stream，strict/legacy模式任何一条hook拒绝都会使run失败；isolated仅保留审计警告（`hook_denial_error`）。`hook_guard_coverage` 中，与 provider tool_use 的 id 和工具名都匹配的 allowed、denied 事件都算已审计，分别列出 `allowed_*`、`denied_*` 与 `missing_tool_use_ids`；未知 status 或工具名不符的事件不计。strict中的denied仍使run failed；isolated不依赖可写日志作为OS保护证明。结构化报告的形状规则是 summary 非空白、evidence/checks/unresolved 中没有空白项（同一规则也写进 `--json-schema`）；简短的“无发现”报告合法，内容是否充分仍由 Codex 判断。另记 `prompt_delivery`（提示词字节数、已写字节、complete/incomplete）、`result_selection`（最终报告的选取规则与被忽略的 result 计数），`workflow_review` 另有 `workflow_delivery`、`workflow_error_codes`；非兼容 Workflow 入口的交付证据按实际记录读取，不补造旧字段。
 - `receipt.json`、`state.json`：运行结果，receipt 同样直接带 `plugin_identity`（预检 blocked、取消、unknown、bridge 失败回执也带；旧 run 没有该字段，读取方按缺失处理，冻结文件不可读时写 `status=unavailable` 而不掩盖原运行错误）。`reported` 需要主协调者核验，不是 accepted；`claude_decide` 仅适用于未被 superseded 的 `reported` run，其他终态由 Codex 在既有 PROGRESS 独立记录处置。
 
 structured 内容中的 `checks` 是 Claude 自报。isolated 可运行命令，须核对实际公开工具/输出与结果；strict/implement 没有 shell，构建/测试由 Codex 执行和登记。
@@ -221,7 +227,7 @@ bridge 在启动 Claude 之前，会先在系统临时目录的 `codex-claude-cw
 
 Git 快照覆盖 tracked 与非忽略的 untracked 文件；显式 owned/protected 文件另作内容核对。未列出的 ignored 文件和工作区外的副作用不在 Git 差异证据覆盖内，不能据此声称整个文件系统无变化。工具约束的效果与实际 Git/显式文件证据分开报告。
 
-strict review 与 implement 不调用 Workflow；兼容 workflow_review 只调用 hash 绑定的已保存只读脚本。isolated review 可以选择 Workflow，工具可用不证明实际调用或完成，也不自动验收某种多席策略。外部 MCP 默认关闭，插件不自动建 PR、发布或合并；完整审查验收见 runtime-design.md。
+strict review 与 implement 不调用 Workflow；兼容 workflow_review 只调用 hash 绑定的已保存只读脚本。isolated review 可以选择 Workflow，工具可用不证明实际调用或完成，也不自动验收某种多席策略。外部 MCP 始终关闭，本版无继承开关，插件不自动建 PR、发布或合并；完整审查验收见 runtime-design.md。
 
 ### 协调内容快照
 

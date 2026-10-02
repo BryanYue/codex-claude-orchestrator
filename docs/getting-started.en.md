@@ -6,7 +6,7 @@ This guide takes you through installation and a small read-only review. You do n
 
 ## Before you start
 
-Use a Mac and prepare the following. Historical Apple Silicon Mac verification is available; see the release record for actual 0.7.0 coverage.
+Use a Mac and prepare the following. Historical Apple Silicon Mac verification is available; see the release record for actual 0.7.1 coverage.
 
 | What you need | How to check |
 | --- | --- |
@@ -16,7 +16,7 @@ Use a Mac and prepare the following. Historical Apple Silicon Mac verification i
 
 The plugin needs Python 3.11 or later. During dependency preparation, uv locates or downloads the required environment. The first download can take some time.
 
-> **About versions:** This page targets `v0.7.0`, full build `0.7.0+codex.20261003090000`. The commands pin this release; source, distribution and real Claude verification are recorded separately. Existing `v0.5.0`, `v0.6.0`, `v0.6.1` and `v0.6.2` tags remain frozen. A fixed ref does not advance to another tag; use the [version-switching steps](git-marketplace.md#change-a-fixed-ref-or-migrate-from-zip).
+> **About versions:** This page targets `v0.7.1`, full build `0.7.1+codex.20261003035940`. The commands pin this release; source, distribution and real Claude verification are recorded separately. Existing `v0.5.0`, `v0.6.0`, `v0.6.1` and `v0.6.2` tags remain frozen. A fixed ref does not advance to another tag; use the [version-switching steps](git-marketplace.md#change-a-fixed-ref-or-migrate-from-zip).
 
 ## Install with help from Codex
 
@@ -25,7 +25,7 @@ Paste this request into an existing Codex conversation:
 ```text
 Help me install the Codex–Claude collaboration plugin:
 https://github.com/BryanYue/codex-claude-orchestrator
-Use the fixed v0.7.0 release through a Git marketplace.
+Use the fixed v0.7.1 release through a Git marketplace.
 
 First check that I have a Codex desktop app with plugin commands and uv.
 If codex is not on PATH, check for the CLI bundled with the desktop app.
@@ -55,7 +55,7 @@ codex plugin --help
 Then run these commands one at a time:
 
 ```bash
-codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v0.7.0
+codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v0.7.1
 codex plugin add codex-claude-orchestrator@codex-claude-team
 ```
 

@@ -1,6 +1,6 @@
 [project]
 name = "codex-claude-orchestrator"
-version = "0.7.0"
+version = "0.7.1"
 description = "Supervised Claude Code execution with MCP and local progress views"
 requires-python = ">=3.11"
 dependencies = ["mcp==2.2.0"]
@@ -15,7 +15,15 @@ dev = ["ruff==0.16.10", "mypy==2.4.0"]
 target-version = "py311"
 
 [tool.ruff.lint]
-select = ["F"]
+# Baseline f1cbe20 measured with Ruff 0.16.10; prevent increases beyond its maxima.
+select = ["F", "C901", "PLR0912", "PLR0915"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 59
+
+[tool.ruff.lint.pylint]
+max-branches = 59
+max-statements = 145
 
 [tool.mypy]
 python_version = "3.11"

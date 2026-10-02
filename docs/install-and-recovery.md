@@ -4,7 +4,7 @@ This covers the two install paths for `codex-claude-orchestrator` and the
 first-use preparation both share. See [git-marketplace.md](git-marketplace.md)
 for the Git-specific commands and identity, and [RELEASE-VERIFICATION.md](../RELEASE-VERIFICATION.md) for
 which of the steps below have actually been exercised for the current version.
-This documentation targets `v0.7.0`, build `0.7.0+codex.20261003090000`.
+This documentation targets `v0.7.1`, build `0.7.1+codex.20261003035940`.
 Source, distribution and reinstall evidence are recorded separately from older
 experiments; an upgrade needs a fresh MCP connection.
 
@@ -189,7 +189,7 @@ tools; do not fabricate startup records or delete markers. Historical unknown
 runs without sufficient evidence remain blocked, and changing connections does
 not resolve that separate uncertainty.
 
-## Review and guidance compatibility in 0.7.0
+## Review and guidance compatibility in 0.7.1
 
 A new Git review with the preserved original `user_request` defaults to an
 independent writable copy. OS protection restricts writes to the original

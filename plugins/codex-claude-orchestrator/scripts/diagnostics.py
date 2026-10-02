@@ -17,10 +17,7 @@ import startup_protocol
 import cli_validation
 from executable_locator import locate_claude
 
-try:
-    import cli_updates
-except ModuleNotFoundError:  # During an interrupted plugin upgrade, diagnostics remains read-only and usable.
-    cli_updates = None
+import cli_updates
 
 
 def _host_candidates() -> list[tuple[str, str]]:
@@ -115,8 +112,6 @@ def _validation_status(job_id: str | None) -> dict | None:
 
 def _maintenance_status() -> dict:
     """Read the local CLI status; version management itself is retired."""
-    if cli_updates is None:
-        return {"state": "unavailable", "reason": "local CLI status module is unavailable"}
     try:
         value = cli_updates.status()
         return value if isinstance(value, dict) else {"state": "unavailable", "reason": "local CLI status had an invalid shape"}

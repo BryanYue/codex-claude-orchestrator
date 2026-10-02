@@ -11,13 +11,13 @@ No open-source license has been selected.
 - Publisher: BryanYue.
 - Marketplace: `codex-claude-team`.
 - Plugin: `codex-claude-orchestrator` (display name: Codex–Claude 协作).
-- Fixed release ref: `v0.7.0`, build `0.7.0+codex.20261003090000`.
+- Fixed release ref: `v0.7.1`, build `0.7.1+codex.20261003035940`.
   Source, distribution, installed-cache and real-provider verification are
   recorded separately in the release verification record.
 - Release boundary: independent writable review with OS source-write protection,
   original request and review coverage, explicit finding adjudication, and bundled
   guidance. Older tags, including `v0.5.0`, `v0.6.0`, `v0.6.1` and `v0.6.2`, remain
-  immutable. Refreshing an older fixed ref does not install 0.7.0; use the explicit
+  immutable. Refreshing an older fixed ref does not install 0.7.1; use the explicit
   version-switching steps below.
 - The marketplace entry resolves `./plugins/codex-claude-orchestrator` relative
   to the fetched repository root. The Git market and ZIP catalog share the
@@ -44,7 +44,7 @@ need no token. An SSH URL still requires working SSH authentication;
 For a machine without an existing `codex-claude-team` marketplace:
 
 ```bash
-codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v0.7.0
+codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v0.7.1
 codex plugin add codex-claude-orchestrator@codex-claude-team
 codex plugin marketplace list --json
 codex plugin list --json
@@ -56,7 +56,7 @@ ref from these list outputs: compare `git -C /market/root rev-parse HEAD` with
 the selected published commit (or inspect the persisted marketplace ref
 read-only). A plugin entry may still say `source=local` because it points into
 the fetched Git snapshot; the marketplace source establishes its Git origin.
-The target base MCP version is 0.7.0; full plugin versions also contain a
+The target base MCP version is 0.7.1; full plugin versions also contain a
 cache-refresh suffix.
 
 Before opening a new Codex task, prepare the locked Python dependencies from

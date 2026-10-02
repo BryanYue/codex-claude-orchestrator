@@ -11,14 +11,12 @@ import sys
 import threading
 from urllib.parse import parse_qs, urlparse
 
-try:
-    import cli_updates
-except ModuleNotFoundError:  # A partially upgraded plugin still serves its immutable run evidence.
-    cli_updates = None
+import cli_updates
 
 ROOT = Path(__file__).resolve().parents[1]
 ARTIFACTS = {
-    "review_report": "review-report.json", "review_workspace": "review-workspace.json",
+    "review_report": "review-report.json", "review_copy_diff": "review-copy.diff.patch",
+    "review_copy_status": "review-copy-status.json", "review_cleanup": "review-cleanup.json", "review_workspace": "review-workspace.json",
     "packet": "packet.json", "result": "result.json", "receipt": "receipt.json",
     "environment": "environment.json", "decision": "decision.json", "decision_history": "decision-history.json",
     "git_before": "git_before.json", "git_after": "git_after.json", "diff": "diff.patch",
@@ -37,8 +35,6 @@ _WORKER_LOCK_STATES = frozenset({"absent", "free", "held", "unreadable"})
 
 def read_cli_maintenance() -> dict:
     """Return only the local CLI status read model; this endpoint never starts work."""
-    if cli_updates is None:
-        return {"state": "unavailable", "reason": "local CLI status module is unavailable"}
     try:
         value = cli_updates.status()
     except Exception as exc:
@@ -93,8 +89,9 @@ def read_artifact(runtime, run_id: str, name: str, *, index: int = 0, offset: in
             raise ValueError("review_report index must be 0")
         if not isinstance(report, dict):
             return {**answer, "available": False, "state": "not_recorded"}
-        if report.get("status") != "delivered":
+        if report.get("status") not in {"delivered", "invalid"}:
             return {**answer, "available": False, "state": "not_collected"}
+        answer.update(validation_status=report["status"], validation_error=report.get("reason"))
         recorded = {"path": report.get("path"), "size_bytes": report.get("bytes"), "sha256": report.get("sha256")}
         return delivery.read_captured_page(Path(snapshot["run_dir"]), recorded,
                                           expected_path=ARTIFACTS[name], answer=answer, offset=offset,

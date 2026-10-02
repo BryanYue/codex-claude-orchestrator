@@ -223,13 +223,15 @@ def select(cwd: str, task_kind: str, explicit_executor: str | None = None,
         raise RoutingError("features must be an object")
     flags = dict(features or {})
     booleans = {"scope_defined", "independent", "context_in_codex", "requires_external_tools", "claude_available", "latency_sensitive"}
-    if set(flags) - booleans - {"required_tools"}:
+    if set(flags) - booleans - {"required_tools", "review_mode"}:
         raise RoutingError("unknown task feature")
     if any(not isinstance(flags[k], bool) for k in booleans & flags.keys()):
         raise RoutingError("task feature flags must be booleans")
     required = flags.get("required_tools", [])
     if not isinstance(required, list) or not all(isinstance(x, str) for x in required):
         raise RoutingError("required_tools must be a list of tool names")
+    if "review_mode" in flags and (not isinstance(flags["review_mode"], str) or flags["review_mode"] not in {"strict", "isolated"}):
+        raise RoutingError("review_mode must be strict or isolated")
     state = get_policy(cwd)
     policy = state["policy"]
     scores = _scores(policy, task_kind)
@@ -268,6 +270,10 @@ def select(cwd: str, task_kind: str, explicit_executor: str | None = None,
         issues.append("普通资料文件夹目前只支持明确文件清单的只读审校")
     if workspace_kind == "artifacts" and explicit_executor == "claude_workflow":
         issues.append("保存 Workflow 目前要求 Git 工作区")
+    review_mode = flags.get("review_mode", "isolated" if workspace_kind == "git" else "strict")
+    isolated_review = workspace_kind == "git" and task_kind in {"review", "document_review"} and review_mode == "isolated"
+    if workspace_kind == "artifacts" and review_mode == "isolated":
+        issues.append("普通资料文件夹目前只支持 strict 审校")
     allowed = {"Read", "Glob", "Grep"}
     if explicit_executor == "claude_workflow":
         allowed.add("Workflow")
@@ -275,7 +281,10 @@ def select(cwd: str, task_kind: str, explicit_executor: str | None = None,
             issues.append("保存 Workflow 目前仅支持显式只读审查")
     if task_kind in {"implementation", "small_change"} and workspace_kind == "git":
         allowed |= {"Edit", "Write"}
-    if flags.get("requires_external_tools") or set(required) - allowed:
+    # Isolated reviews expose the CLI's default built-ins, including tools added
+    # by newer CLI releases. External MCP remains disabled at dispatch.
+    missing_tools = {name for name in required if name.startswith("mcp__")} if isolated_review else set(required) - allowed
+    if flags.get("requires_external_tools") or missing_tools:
         issues.append("任务需要当前 Claude 执行席未提供的工具，应由 Codex 使用对应能力处理")
     if flags.get("claude_available") is False:
         issues.append("当前 Claude 环境不可用，先完成环境检查中的下一步")
@@ -291,7 +300,7 @@ def select(cwd: str, task_kind: str, explicit_executor: str | None = None,
                 scores[executor] += bonus
             factors.append(explanation)
     if explicit_executor is not None:
-        executor = explicit_executor
+        executor = "claude" if explicit_executor == "claude_workflow" and isolated_review else explicit_executor
         source = "manual_override"
         rationale = "本次按你的明确指定选择执行者，项目默认偏好保持不变。"
     elif policy["mode"] == "manual":
@@ -330,6 +339,13 @@ def select(cwd: str, task_kind: str, explicit_executor: str | None = None,
         "execution_authorized": False,
         "needs_workflow_name": executor == "claude_workflow",
     }
+    if task_kind in {"review", "document_review"}:
+        result["suggested_packet"] = {"role": "review", "review_mode": review_mode}
+    if explicit_executor == "claude_workflow" and isolated_review:
+        result["suggested_workflow"] = {"tool": "Workflow", "selection": "provider", "inventory_binding_required": False}
+        result["deprecated_role"] = "workflow_review"
+    elif executor == "claude_workflow":
+        result["deprecated_role"] = "workflow_review"
     if issues:
         result["summary"] = "路由已完成，但存在派单阻断条件；尚未启动 Claude。"
     return result

@@ -17,6 +17,7 @@ import subprocess
 import stat
 import time
 import uuid
+import trusted_git
 from pathlib import Path
 from typing import Any
 
@@ -75,9 +76,7 @@ def code_digest(root: Path) -> dict[str, Any]:
 
 
 def _git(root: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
-    environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
-    environment["LC_ALL"] = "C"
-    return subprocess.run(["git", "-C", str(root), *args], capture_output=True, timeout=20, env=environment)
+    return trusted_git.run(root, *args, timeout=20)
 
 
 def _status_paths(raw: bytes) -> list[str]:

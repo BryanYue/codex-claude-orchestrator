@@ -1,4 +1,4 @@
-# Codex–Claude Collaboration · 0.7.0
+# Codex–Claude Collaboration · 0.7.1
 
 [简体中文](README.md) · **English**
 
@@ -34,7 +34,7 @@ Small tasks can stay with Codex. You can also choose who handles a particular ta
 | Follow the work | A shared workbench shows tasks, execution rounds, reports and verification results. |
 | Continue or correct a task | Add instructions in the same conversation; Codex checks existing progress before proceeding. |
 
-This page targets **v0.7.0**. Reviews preserve the original request and can reproduce issues and run tests in an independent writable copy, with OS protection against writes to the source repository. Strict read-only mode remains available. Guidance ships with the plugin; historical reports and task bindings remain intact. See the [changelog](CHANGELOG.md) and [verification record](RELEASE-VERIFICATION.md) for changes, actual checks and outstanding acceptance.
+This page targets **v0.7.1**. Reviews preserve the original request and can reproduce issues and run tests in an independent writable copy, with OS protection against writes to the source repository. Strict read-only mode remains available. Guidance ships with the plugin; historical reports and task bindings remain intact. See the [changelog](CHANGELOG.md) and [verification record](RELEASE-VERIFICATION.md) for changes, actual checks and outstanding acceptance.
 
 ## Get started
 
@@ -44,20 +44,20 @@ This page targets **v0.7.0**. Reviews preserve the original request and can repr
 - **Claude Code**, installed locally with working authentication and available usage. The plugin uses your local Claude Code directly and never downloads, updates or switches its version; you upgrade it the official way. [Install and sign in](https://code.claude.com/docs/en/quickstart)
 - **uv**, which prepares the plugin's runtime environment. [Installation guide](https://docs.astral.sh/uv/getting-started/installation/)
 
-The plugin targets macOS. Earlier releases have **Apple Silicon Mac** verification records; 0.7.0 coverage is recorded separately. Writable isolated review requires working macOS OS write protection and fails explicitly when unavailable; strict review is an alternative. Intel Macs have not been separately verified.
+The plugin targets macOS. Earlier releases have **Apple Silicon Mac** verification records; 0.7.1 coverage is recorded separately. Writable isolated review requires working macOS OS write protection and fails explicitly when unavailable; strict review is an alternative. Intel Macs have not been separately verified.
 
 ### 2. Install the plugin
 
 Run these commands in your terminal, one at a time:
 
 ```bash
-codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v0.7.0
+codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v0.7.1
 codex plugin add codex-claude-orchestrator@codex-claude-team
 ```
 
 The first adds the plugin source; the second installs the plugin. The repository is public, so no GitHub invitation or sign-in is needed.
 
-> **About versions:** This page targets `v0.7.0`, full build `0.7.0+codex.20261003090000`. The commands pin this release; source, distribution and real Claude verification are recorded separately. Existing `v0.5.0`, `v0.6.0`, `v0.6.1` and `v0.6.2` tags remain frozen. A fixed ref does not advance to another tag; use the [version-switching steps](docs/git-marketplace.md#change-a-fixed-ref-or-migrate-from-zip).
+> **About versions:** This page targets `v0.7.1`, full build `0.7.1+codex.20261003035940`. The commands pin this release; source, distribution and real Claude verification are recorded separately. Existing `v0.5.0`, `v0.6.0`, `v0.6.1` `v0.6.2`, and `v0.7.0` tags remain frozen. A fixed ref does not advance to another tag; use the [version-switching steps](docs/git-marketplace.md#change-a-fixed-ref-or-migrate-from-zip).
 
 **On first installation, prepare the dependencies before opening a new Codex task.** If you prefer help with the terminal, see `codex: command not found`, or have an older local installation, follow the [step-by-step guide](docs/getting-started.en.md). It also includes an installation request you can paste into Codex.
 

@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -18,6 +19,26 @@ class EventIndexTests(unittest.TestCase):
 
     def tearDown(self):
         self.temp.cleanup()
+
+    def test_child_log_links_never_redirect_supervisor_write(self):
+        self.run.mkdir()
+        victim = self.run.parent / "victim"
+        victim.write_bytes(b"original source")
+        log = self.run / "activity.jsonl"
+        for kind in ("symlink", "hardlink", "fifo"):
+            with self.subTest(kind=kind):
+                if kind == "symlink":
+                    log.symlink_to(victim)
+                elif kind == "hardlink":
+                    os.link(victim, log)
+                else:
+                    os.mkfifo(log)
+                try:
+                    with self.assertRaises(OSError):
+                        events.append(self.run, "decision", "do not redirect")
+                    self.assertEqual(victim.read_bytes(), b"original source")
+                finally:
+                    log.unlink()
 
     def test_meaningful_activity_survives_heartbeats_and_legacy_index_read_only(self):
         milestone = events.append(self.run, "tool", "tool path permitted", tool="Read", file="README.md")

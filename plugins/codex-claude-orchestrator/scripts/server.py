@@ -5,6 +5,7 @@ import argparse
 import asyncio
 from contextlib import asynccontextmanager
 import json
+import math
 import os
 from pathlib import Path
 import sys
@@ -55,7 +56,7 @@ async def lifespan(_):
 
 
 mcp = MCPServer(
-    "claude-orchestrator", version="0.7.0", lifespan=lifespan,
+    "claude-orchestrator", version="0.7.1", lifespan=lifespan,
     instructions="Use the bundled codex-claude-orchestrator skill and claude_content_read for coordination. Fresh tasks use guidance shipped with this plugin; resumed tasks retain their original verified binding. Preserve the user's original request and sources. Git reviews with user_request default to isolated writable copies with OS source-write protection; old packets retain strict mode. External MCP is disabled. Reported results require independent Codex verification and per-finding decisions. Wait on the same run_id and reconcile unknown processes before another run.",
 )
 READ = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
@@ -117,6 +118,10 @@ async def decorate(snapshot, operation="execution_status", compact=False):
         result["user_summary"] = f"执行记录 {snapshot.get('run_id', '')}：{outcome}。"
     if snapshot.get("superseded_by"):
         result["user_summary"] += " 本轮已有后续轮，仅作历史证据。"
+    if snapshot.get("role") == "review" and snapshot.get("request_provenance") == "legacy_unspecified":
+        warning = "兼容旧审查包：未提供 user_request 原话，request_provenance=legacy_unspecified；使用 review_mode=strict，只读工具审查。请核对本轮范围与用户原始要求。"
+        result["warnings"] = [warning]
+        result["user_summary"] += " " + warning
     try:
         result["details_url"] = viewer.url(snapshot.get("run_id", ""))
     except (AttributeError, OSError, RuntimeError, ValueError):
@@ -184,7 +189,7 @@ async def claude_routing_set(cwd: str, mode: str | None = None, codex_weight: in
 @mcp.tool(title="选择任务执行者（不启动 Claude）", annotations=READ)
 @expected_errors
 async def claude_route(cwd: str, task_kind: str, explicit_executor: str | None = None, features: dict | None = None) -> dict:
-    """Select using preference plus concrete features: scope_defined, independent, context_in_codex, requires_external_tools, claude_available, latency_sensitive (booleans), required_tools (names). Kinds include review, implementation, small_change, architecture, clarification, document_review, research, data_analysis. Explicit choice is preserved even if dispatch_status=blocked; never silently substitute or grant permission. Artifacts support read-only reviews only; Workflow remains explicit."""
+    """Select using preference plus concrete features: scope_defined, independent, context_in_codex, requires_external_tools, claude_available, latency_sensitive (booleans), required_tools (names), review_mode (strict|isolated). Kinds include review, implementation, small_change, architecture, clarification, document_review, research, data_analysis. Git reviews default to isolated with all CLI built-ins, including Bash/Agent/Workflow/WebSearch; external MCP is disabled. Explicit claude_workflow selects this review path with suggested_workflow; inventory-bound workflow_review is deprecated but compatible in strict mode. Artifacts support strict reviews only. Selection never grants execution permission."""
     return await asyncio.to_thread(routing.select, cwd, task_kind, explicit_executor, features)
 
 
@@ -240,16 +245,12 @@ async def claude_cli_status(cwd: str, job_id: str | None = None) -> dict:
 
 @mcp.tool(annotations=WRITE)
 @expected_errors
-async def claude_cli_update(action: str, candidate_path: str | None = None, identity_id: str | None = None,
-                            job_id: str | None = None, model: str = "sonnet", groups: list[str] | None = None,
-                            activate_on_success: bool = True, policy: str | None = None,
-                            notice_id: str | None = None, channel: str | None = None,
-                            auto_qualify: bool | None = None) -> dict:
+async def claude_cli_update(action: str, job_id: str | None = None) -> dict:
     """Retired Claude CLI version management. Every action except cancel returns an explanation and changes nothing: the plugin no longer prepares, downloads, validates, activates, rolls back, refreshes or switches CLI versions, and policy/notice settings have no effect. New runs always use the user's local Claude CLI; to upgrade it, the user upgrades their own installation. cancel with job_id only requests cancellation of a validation job recorded by an earlier release."""
     if action not in {"prepare", "validate", "activate", "rollback", "cancel", "refresh", "policy", "acknowledge"}:
         raise ValueError("action must be prepare, validate, activate, rollback, cancel, refresh, policy or acknowledge")
     if action == "cancel":
-        if candidate_path is not None or identity_id is not None or not isinstance(job_id, str) or not job_id:
+        if not isinstance(job_id, str) or not job_id:
             raise ValueError("cancel requires job_id only")
         return await asyncio.to_thread(cli_validation.cancel, job_id)
     return await asyncio.to_thread(cli_updates.retired_action, action)
@@ -271,8 +272,10 @@ async def claude_doctor(cwd: str, verify: bool = False, model: str = "sonnet") -
 @mcp.tool(annotations=READ)
 @expected_errors
 async def claude_saved_workflows(cwd: str) -> dict:
-    """List effective saved Claude Workflows with name/path/sha256 for an explicit Workflow request. Never executes scripts or imports historical session scripts. Supported dispatch is read-only role=workflow_review, fresh only, with exact workflow identity and optional JSON args; this is not a full Dynamic Workflow Review implementation."""
-    return {"workflows": await asyncio.to_thread(named_workflow.inventory, cwd), "supported_role": "workflow_review", "resume_supported": False}
+    """List effective saved Claude Workflows with name/path/sha256. For new Git reviews use role=review, review_mode=isolated and let Claude invoke Workflow in the writable copy. Legacy inventory-bound role=workflow_review is deprecated, retained for fresh strict read-only dispatch with exact identity and optional JSON args. This lookup executes no scripts or historical session imports."""
+    return {"workflows": await asyncio.to_thread(named_workflow.inventory, cwd), "supported_role": "review",
+            "suggested_review_mode": "isolated", "legacy_role": "workflow_review", "legacy_role_deprecated": True,
+            "resume_supported": True, "legacy_resume_supported": False}
 
 
 @mcp.tool(title="查看协调内容状态（不启动 Claude）", annotations=READ)
@@ -297,9 +300,10 @@ async def claude_content_read(path: str | None = None, digest: str | None = None
 
 @mcp.tool(title="创建 Claude 执行任务", annotations=WRITE)
 @expected_errors
-async def claude_start(packet: dict, timeout_seconds: float = 300, resume_run_id: str | None = None, compact: bool = False, expected_content_digest: str | None = None) -> dict:
-    """Start an authorized review or file-scoped implementation. Preserve exact user_request separately from objective. New Git reviews with user_request default to review_mode=isolated: writable independent copy, OS protection for original declared sources, external MCP disabled. review_scope=defects|quality|full (default full); strict preserves the earlier read-only tools. Required packet fields: task_id, revision, role, cwd, objective, requirement_sources, constraints, acceptance, owned_files, protected_files, model, effort. Legacy workflow_review requires inventory-bound workflow={name,path,sha256,args?}, fresh only. artifacts review requires non-Git cwd and explicit input_files; it stays strict. For Git ordinary roles resume_run_id names an exact prior completed run; keep user_request, review_scope and review_mode unchanged. Changed CLI identity requires a fresh revision. Optional budget limits turns/cost; timeout_seconds is the execution deadline (1..14400 seconds), independent of wait timeout. Fresh tasks use bundled guidance; expected_content_digest detects drift, resumed tasks retain their original verified content binding. Returns promptly; wait on this run_id and verify the full report before deciding."""
-    if not 1 <= timeout_seconds <= 14400:
+async def claude_start(packet: dict, timeout_seconds: float | None = None, resume_run_id: str | None = None, compact: bool = False, expected_content_digest: str | None = None) -> dict:
+    """Start an authorized review or file-scoped implementation. Preserve exact user_request separately from objective. New Git reviews with user_request default to review_mode=isolated: writable independent copy, OS protection for original declared sources, external MCP disabled. review_scope=defects|quality|full (default full); strict preserves the earlier read-only tools. Required packet fields: task_id, revision, role, cwd, objective, requirement_sources, constraints, acceptance, owned_files, protected_files, model, effort. Legacy workflow_review is deprecated and requires inventory-bound workflow={name,path,sha256,args?}, fresh only; new Workflow reviews use isolated role=review. artifacts review requires non-Git cwd and explicit input_files; it stays strict. For Git ordinary roles resume_run_id names an exact prior completed run; keep user_request and review_scope unchanged; omitted review_mode inherits the frozen prior packet before validation. Changed CLI identity requires a fresh revision. Optional budget limits turns/cost; timeout_seconds is the execution deadline (1..14400 seconds), independent of wait timeout; omitted/null uses 3600 seconds for isolated full review and 300 seconds otherwise. Fresh reviews lacking user_request retain strict legacy compatibility with a conspicuous provenance warning. Fresh tasks use bundled guidance; expected_content_digest detects drift, resumed tasks retain their original verified content binding. Returns promptly; wait on this run_id and verify the full report before deciding."""
+    if timeout_seconds is not None and (isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float))
+                                        or not math.isfinite(timeout_seconds) or not 1 <= timeout_seconds <= 14400):
         raise ValueError("timeout_seconds must be between 1 and 14400")
     if not isinstance(packet, dict):
         raise ValueError("packet must be an object")
@@ -391,7 +395,7 @@ async def claude_details(run_id: str, compact: bool = False) -> dict:
 @expected_errors
 async def claude_result(run_id: str, artifact: str = "result", index: int = 0, offset: int = 0,
                         limit: int = workflow_delivery.DEFAULT_PAGE_BYTES) -> dict:
-    """Inspect recorded evidence: result, receipt, packet, diff, environment, decision, decision_history, git_before, git_after, workspace_before, workspace_after, reconciliation or content_binding (the coordination content identity pinned for this run). result.usage_report separates the CLI session cumulative estimate (modelUsage/total_cost_usd, includes subagents) from the main agent's final usage. Diff is the recorded working-tree comparison, not proof of accepted work. For isolated review, artifact='review_report' returns the captured complete JSON in hash-checked UTF-8 byte pages. For legacy workflow_review, artifact='workflow_report' (exact string result or explicitly labelled object/array JSON representation) or 'workflow_envelope' (whole captured output file) returns invocation `index` in UTF-8-safe byte pages from `offset` (limit 4..262144 bytes); follow next_offset_bytes until end_of_artifact and check total_bytes/sha256. This full report is separate from the parent summary and is not accepted until Codex verifies it."""
+    """Inspect recorded evidence: result, receipt, packet, diff, environment, decision, decision_history, git_before, git_after, workspace_before, workspace_after, reconciliation or content_binding (the coordination content identity pinned for this run). result.usage_report separates the CLI session cumulative estimate (modelUsage/total_cost_usd, includes subagents) from the main agent's final usage. Diff is the recorded working-tree comparison, not proof of accepted work. For isolated review, artifact='review_report' returns the captured complete report, including invalid-schema raw content with validation diagnostics, in hash-checked UTF-8 byte pages. review_copy_diff/review_copy_status show copy changes; review_cleanup records explicit disposal. For legacy workflow_review, artifact='workflow_report' (exact string result or explicitly labelled object/array JSON representation) or 'workflow_envelope' (whole captured output file) returns invocation `index` in UTF-8-safe byte pages from `offset` (limit 4..262144 bytes); follow next_offset_bytes until end_of_artifact and check total_bytes/sha256. This full report is separate from the parent summary and is not accepted until Codex verifies it."""
     return await asyncio.to_thread(read_artifact, require_runtime(), run_id, artifact, index=index, offset=offset, limit=limit)
 
 
@@ -423,11 +427,18 @@ async def claude_reconcile(run_id: str, reason: str, evidence: list[str], expect
 async def claude_decide(run_id: str, decision: str, reason: str, evidence: list[str],
                         resolution: str | None = None, completion_summary: str | None = None, compact: bool = False,
                         finding_decisions: list[dict] | None = None) -> dict:
-    """Record independent Codex verification only for a non-superseded reported run. Other states are ineligible: preserve the original run and record independent task completion and evidence in the existing PROGRESS instead. This is not automatic validation. accepted accepts the Claude report. returned defaults to revision_requested; only after Codex actually completes and verifies the task use resolution='completed_by_codex' with completion_summary and evidence. The original report stays returned. compact=True omits repeated report/history bodies."""
+    """Record independent Codex verification only for a non-superseded reported run. Other states are ineligible: preserve the original run and record independent task completion and evidence in the existing PROGRESS instead. This is not automatic validation. accepted accepts the Claude report. returned defaults to revision_requested; only after Codex actually completes and verifies the task use resolution='completed_by_codex' with completion_summary and evidence. The original report stays returned. When the report has findings, finding_decisions is required for every original finding: {finding_id, disposition: accepted|downgraded|rejected, reason}; downgraded/rejected require a nonblank reason. compact=True omits repeated report/history bodies."""
     if not reason.strip() or not evidence or decision not in {"accepted", "returned"}:
         raise ValueError("Use accepted/returned with a reason and actual evidence references")
     snapshot = await asyncio.to_thread(require_runtime().record_decision, run_id, decision, reason, evidence, resolution, completion_summary, finding_decisions)
     return await decorate(snapshot, "coordinator_decision", compact=compact)
+
+
+@mcp.tool(annotations=WRITE)
+@expected_errors
+async def claude_cleanup_review(run_id: str) -> dict:
+    """Explicitly delete the writable review copy after accepted or returned/completed_by_codex. Retains captured reports, source snapshots, copy patch/status and decision history. Refuses unknown, unaccepted, superseded or live runs; a removed copy cannot resume. Legacy copies without detached-process evidence require manual disposal."""
+    return await asyncio.to_thread(require_runtime().cleanup_review, run_id)
 
 
 def main():

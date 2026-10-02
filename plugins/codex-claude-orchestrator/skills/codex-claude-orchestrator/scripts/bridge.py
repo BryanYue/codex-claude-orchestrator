@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Small supervised bridge for the Claude CLI.
 
-This is an invocation boundary, not an OS sandbox.  It deliberately has no
+Strict tasks use tool guards; isolated reviews add OS source-write protection.
+The bridge has no
 daemon, database, background retry, Codex handoff, or automatic workflow.
 """
 from __future__ import annotations
@@ -32,12 +33,14 @@ from executable_locator import RETIRED_SELECTION_SOURCES, locate_claude, cli_env
 import content_store
 import plugin_identity
 import startup_protocol
+import trusted_git
 from shared_io import dump_json as dump, load_json as load, sha256_file, read_regular
 
 from events import append as append_activity
 import usage as usage_scope
 import workflow_delivery
 from run_process import ProcessStream
+from process_family import Family, ENVIRONMENT_KEY as FAMILY_ENVIRONMENT_KEY
 import review_workspace
 from stream_parser import workflow_input, parse_stream, denial_entries as denial_entries
 from compatibility import BUDGET_FLAGS, REQUIRED_FLAGS, GROUPS, bridge_contract_id, flag_advertised, required_flags, required_groups
@@ -47,6 +50,15 @@ from workspace import WorkspaceError, artifact_snapshot, artifact_snapshot_diffe
 WRITE_TOOLS = ("Edit", "Write")
 READ_TOOLS = ("Read", "Glob", "Grep")
 DISALLOWED = ("Bash", "Agent", "Task", "TeamCreate", "NotebookEdit", "Skill", "Workflow")
+# CLI permission rules match tool names, not a standalone wildcard. Keep
+# availability at `default`; dontAsk explicitly permits the advertised built-ins.
+ISOLATED_ALLOWED_TOOLS = (
+    "Agent", "Task", "Bash", "CronCreate", "CronDelete", "CronList", "DesignSync", "Edit", "EnterWorktree", "ExitWorktree",
+    "ListAgents", "LSP", "Monitor", "NotebookEdit", "PushNotification", "Read", "Glob", "Grep", "RemoteTrigger",
+    "ReportFindings", "ScheduleWakeup", "SendMessage", "ShareOnboardingGuide", "Skill", "StructuredOutput", "TaskStop",
+    "TaskOutput", "ToolSearch", "WebFetch", "WebSearch", "Workflow", "Write", "TodoWrite", "TeamCreate", "TeamDelete",
+    "TaskCreate", "TaskGet", "TaskList", "TaskUpdate", "AskUserQuestion", "EnterPlanMode", "ExitPlanMode",
+)
 PRINT_BG_WAIT_CEILING = "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"
 TERMINATION_GRACE_SECONDS = 3
 
@@ -233,8 +245,7 @@ def validate_packet(packet: Any, *, frozen_workflow: bool = False) -> dict[str, 
     if workspace_kind == "artifacts":
         if packet["role"] != "review":
             raise BridgeError("artifacts workspace supports review only; implement, resume and workflow are unsupported")
-        git_probe = subprocess.run(["git", "-C", str(cwd), "rev-parse", "--is-inside-work-tree"],
-                                   text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        git_probe = trusted_git.run(cwd, "rev-parse", "--is-inside-work-tree", text=True)
         if git_probe.returncode == 0 and git_probe.stdout.strip() == "true":
             raise BridgeError("artifacts workspace must be a non-Git directory; use workspace_kind=git for a repository or worktree")
         if packet.get("baseline_commit") is not None:
@@ -279,7 +290,7 @@ def validate_packet(packet: Any, *, frozen_workflow: bool = False) -> dict[str, 
 
 
 def git_bytes(cwd: Path, *args: str) -> bytes:
-    p = subprocess.run(["git", "-C", str(cwd), *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    p = trusted_git.run(cwd, *args)
     if p.returncode:
         raise BridgeError(f"git {' '.join(args)} failed: {p.stderr.decode('utf-8', 'replace').strip()}")
     return p.stdout
@@ -298,8 +309,7 @@ def git_head(cwd: Path) -> str | None:
     the persisted snapshot rather than a fabricated SHA.
     """
     git(cwd, "rev-parse", "--is-inside-work-tree")
-    p = subprocess.run(["git", "-C", str(cwd), "rev-parse", "--verify", "-q", "HEAD"],
-                       text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    p = trusted_git.run(cwd, "rev-parse", "--verify", "-q", "HEAD", text=True)
     if p.returncode == 1:
         return None
     if p.returncode:
@@ -308,7 +318,7 @@ def git_head(cwd: Path) -> str | None:
 
 
 def git_status_entries(cwd: Path) -> list[tuple[str, str, str | None]]:
-    p = subprocess.run(["git", "-C", str(cwd), "status", "--porcelain=v1", "-z", "-uall"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    p = trusted_git.run(cwd, "status", "--porcelain=v1", "-z", "-uall")
     if p.returncode:
         raise BridgeError(f"git status failed: {p.stderr.decode(errors='replace').strip()}")
     fields = p.stdout.split(b"\0")
@@ -388,12 +398,12 @@ def git_snapshot(cwd: Path, packet: dict[str, Any], *, worktree_root: Path | Non
             hashes[relative_original] = content_digest(located(relative_original, original))
     # Keep legacy universal-newline hashing for existing UTF-8 snapshots while
     # accepting other encodings. File hashes below still cover exact bytes.
-    tracked_diff = git_bytes(observer, "diff", "--no-ext-diff") + git_bytes(observer, "diff", "--cached", "--no-ext-diff")
+    tracked_diff = git_bytes(observer, "diff", "--no-ext-diff", "--no-textconv") + git_bytes(observer, "diff", "--cached", "--no-ext-diff", "--no-textconv")
     tracked_diff = tracked_diff.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
     guarded = {path: content_digest(located(path, prefix + path))
                for path in packet.get("owned_files", []) + packet.get("protected_files", [])}
     normalized = [{"xy": xy, "path": path, "original": original} for xy, path, original in entries]
-    material = tracked_diff + json.dumps(normalized, ensure_ascii=False, sort_keys=True).encode() + json.dumps(hashes, ensure_ascii=False, sort_keys=True).encode()
+    material = tracked_diff + json.dumps(normalized, ensure_ascii=False, sort_keys=True).encode("utf-8", "surrogateescape") + json.dumps(hashes, ensure_ascii=False, sort_keys=True).encode("utf-8", "surrogateescape")
     snapshot = {"head": head, "status_entries": normalized, "diff_hash": hashlib.sha256(material).hexdigest(), "dirty_content_hashes": hashes,
                 "guarded_content_hashes": guarded, "ignored_files_not_enumerated": True}
     if prefix:
@@ -663,7 +673,7 @@ def preflight(packet: dict[str, Any], resume: Path | None) -> tuple[dict[str, An
             dirty_paths = [entry["path"] for entry in before["status_entries"]]
             raise BridgeError(f"first implement run requires a clean workspace; changed paths: {dirty_paths[:20]}")
         for owned in packet["owned_files"]:
-            ignored = subprocess.run(["git", "-C", str(cwd), "check-ignore", "-q", "--", owned]).returncode == 0
+            ignored = trusted_git.run(cwd, "check-ignore", "-q", "--", owned).returncode == 0
             if ignored:
                 raise BridgeError(f"owned file is ignored and cannot be supervised: {owned}")
     if resume is not None:
@@ -1061,23 +1071,29 @@ def load_execution_workspace(run_dir: Path) -> dict:
 def capture_review_report(run_dir: Path, packet: dict, meta: dict) -> dict:
     path = Path(packet["review_report_path"])
     try:
+        workspace = load_execution_workspace(run_dir)
+        path.relative_to(Path(workspace["workspace_root"]))
         if path.is_symlink() or path.parent.is_symlink():
             raise BridgeError("review report must be a regular file inside its copy")
         data = read_regular(path, 4 * 1024 * 1024)
-        structured = result_payload({"structured_output": json.loads(data)})
         (run_dir / "review-report.json").write_bytes(data)
-        return {"status": "delivered", "structured": structured, "path": "review-report.json", "bytes": len(data),
-                "sha256": hashlib.sha256(data).hexdigest(), "workflow_invocations": meta.get("workflow_tool_use_count", 0),
-                "note": "complete review report captured from the writable copy; semantic acceptance remains independent"}
     except (OSError, ValueError, BridgeError) as exc:
         return {"status": "not_collected", "reason": str(exc)}
+    record = {"status": "delivered", "path": "review-report.json", "bytes": len(data),
+              "sha256": hashlib.sha256(data).hexdigest(), "workflow_invocations": meta.get("workflow_tool_use_count", 0),
+              "note": "raw report captured from the writable copy; semantic acceptance remains independent"}
+    try:
+        record["structured"] = result_payload({"structured_output": json.loads(data)})
+    except (ValueError, BridgeError) as exc:
+        record.update(status="invalid", reason=str(exc))
+    return record
 
 
 def scope_contract(packet: dict[str, Any]) -> dict[str, Any]:
     """State the file and Workflow boundary the hook enforces, derived from the validated packet.
 
-    It is guidance only: the PreToolUse hook remains the enforcement, and a
-    denied call still fails the run.
+    Strict tasks enforce this with PreToolUse; isolated hooks are audit only.
+    The isolated OS profile protects the source independently of hook coverage.
     """
     cwd = Path(packet["cwd"])
     if packet.get("review_mode") == "isolated":
@@ -1133,7 +1149,10 @@ def prompt(packet: dict[str, Any]) -> str:
         instruction += (" Work inside the independent writable copy. Tests and temporary edits are allowed; "
                         "original repository and requirement sources are OS write-protected. Do not publish changes. "
                         "Use Workflow/Agent when useful and wait for every invocation to finish; report failed or incomplete checks. "
-                        "Save the complete structured review JSON (including findings, coverage, checks and unresolved items) to "
+                        "Do not daemonize or detach processes. Nested macOS sandbox-exec may fail (for example SwiftPM); "
+                        "report every skipped test, and use a supported no-inner-sandbox option only within this protected copy. "
+                        "You are the sole final report writer: Workflow returns JSON; independently inspect it and save the complete "
+                        "structured review JSON (including findings, coverage, checks and unresolved items) to "
                         + str(packet.get("review_report_path")) + " before your final response. Never drop unverified findings.")
     evidence_rules = (
         "Ground findings in inspected source and distinguish confirmed facts from hypotheses. "
@@ -1144,7 +1163,7 @@ def prompt(packet: dict[str, Any]) -> str:
     )
     return json.dumps({"user_request": packet.get("user_request"), "packet": packet, "scope": scope_contract(packet), "instruction": instruction,
                        "review": {"scope": packet.get("review_scope", "full"), "dimensions": (["correctness", "failure_recovery", "tests"] if packet.get("review_scope") == "defects" else ["architecture", "maintainability", "documentation", "prompts", "simplification"] if packet.get("review_scope") == "quality" else ["correctness", "failure_recovery", "tests", "security", "architecture", "maintainability", "documentation", "prompts", "simplification"]), "rule": "Report coverage and unresolved checks. Findings may be empty; classify confidence, cite evidence, do not invent runtime triggers for design judgments."},
-                       "evidence_rules": evidence_rules}, ensure_ascii=False)
+                       "report_schema": RESULT_SCHEMA, "evidence_rules": evidence_rules}, ensure_ascii=True)
 
 
 def process_group_absent(group_id: int) -> bool:
@@ -1878,6 +1897,8 @@ class _RunContext:
         self.lane: str | None = None
         self.lock: Any = None
         self.proc: subprocess.Popen[bytes] | None = None
+        self.family: Family | None = None
+        self.family_evidence: dict[str, Any] | None = None
         self.stream: Any = None
         self.err: Any = None
         self.selector: selectors.BaseSelector | None = None
@@ -1954,10 +1975,10 @@ def _run(args: argparse.Namespace) -> int:
         outcome = _initialize_run(ctx)
         if outcome is not None:
             return outcome
-        _prepare_execution_workspace(ctx)
         outcome = _environment_preflight(ctx)
         if outcome is not None:
             return outcome
+        _prepare_execution_workspace(ctx)
         _prepare_provider_command(ctx)
         outcome = _verify_provider_dispatch(ctx)
         if outcome is not None:
@@ -1984,6 +2005,8 @@ def _run(args: argparse.Namespace) -> int:
     except KeyboardInterrupt:
         if ctx.proc is not None:
             cleanup_error = terminate_group(ctx.proc)
+            family_error = _finish_process_family(ctx)
+            cleanup_error = cleanup_error or family_error
             if cleanup_error:
                 return record_unconfirmed_cleanup(ctx.run_dir, ctx.packet, "KeyboardInterrupt", cleanup_error, lane=ctx.lane)
             launch_intent_update(ctx.args, "stopped")
@@ -1995,6 +2018,8 @@ def _run(args: argparse.Namespace) -> int:
     except Exception as exc:
         if ctx.proc is not None:
             cleanup_error = terminate_group(ctx.proc)
+            family_error = _finish_process_family(ctx)
+            cleanup_error = cleanup_error or family_error
             if cleanup_error:
                 return record_unconfirmed_cleanup(ctx.run_dir, ctx.packet, "bridge exception cleanup", cleanup_error, exc, lane=ctx.lane)
             launch_intent_update(ctx.args, "stopped")
@@ -2006,6 +2031,8 @@ def _run(args: argparse.Namespace) -> int:
         print(f"bridge failed: {exc}", file=sys.stderr, flush=True)
         return 1
     finally:
+        if ctx.family is not None and ctx.proc is not None and ctx.family_evidence is None:
+            _finish_process_family(ctx)
         # Exception and unconfirmed-cleanup paths can return before collection.
         # Release this bridge's handles without implying that the child stopped.
         if ctx.selector is not None:
@@ -2074,7 +2101,7 @@ def _prepare_execution_workspace(ctx: _RunContext) -> None:
             ctx.review = review_workspace.prepare_review_workspace(ctx.packet["cwd"], ctx.run_dir, ctx.packet["requirement_sources"])
         bundled_workflow = review_workspace.install_bundled_workflow(ctx.review)
         ctx.execution_packet["cwd"] = ctx.review["cwd"]
-        report_path = Path(ctx.review["workspace_root"]) / ".codex-review" / f"{ctx.run_dir.name}.json"
+        report_path = Path(ctx.review.get("artifact_directory", str(Path(ctx.review["workspace_root"]) / ".codex-review"))) / f"{ctx.run_dir.name}.json"
         report_path.parent.mkdir(exist_ok=True)
         if report_path.exists() or report_path.is_symlink():
             raise BridgeError("review report path already exists")
@@ -2151,13 +2178,16 @@ def _prepare_provider_command(ctx: _RunContext) -> None:
         allowed_tools = READ_TOOLS + (f"Workflow({ctx.packet['workflow']['name']})",)
         disallowed_tools = tuple(tool for tool in DISALLOWED if tool != "Workflow") + WRITE_TOOLS
     if ctx.isolated:
-        ctx.tools = READ_TOOLS + WRITE_TOOLS + ("Bash", "Agent", "Task", "Skill", "Workflow", "NotebookEdit")
-        allowed_tools = ctx.tools
+        ctx.tools = ("default",)
+        allowed_tools = ISOLATED_ALLOWED_TOOLS
         disallowed_tools = ()
     ctx.command = [ctx.environment["cli"]["path"], "-p", "--model", ctx.packet["model"], "--effort", ctx.packet["effort"],
                "--output-format", "stream-json", "--verbose", "--json-schema", json.dumps(schema), "--permission-mode", "dontAsk",
                "--tools", ",".join(ctx.tools), "--allowedTools", ",".join(allowed_tools), "--disallowedTools", ",".join(disallowed_tools),
                "--settings", str(ctx.run_dir / "settings.json"), "--strict-mcp-config", "--mcp-config", str(ctx.run_dir / "mcp.json")]
+    if ctx.isolated:
+        index = ctx.command.index("--disallowedTools")
+        del ctx.command[index:index + 2]
     for key, value in ctx.packet["budget"].items():
         ctx.command += [ctx.capabilities[key]["flag"], str(value)]
     if ctx.packet["role"] != "workflow_review" and not ctx.isolated:
@@ -2166,6 +2196,7 @@ def _prepare_provider_command(ctx: _RunContext) -> None:
     dump(ctx.run_dir / "command.json", {"argv": ctx.command, "initial_session_id": ctx.session, "resume_session_id": ctx.resume_session,
                                     "cli_descriptor": ctx.environment["cli_descriptor"]})
     ctx.child_env = cli_environment(ctx.environment["cli"])
+    ctx.child_env = {key: value for key, value in ctx.child_env.items() if not key.startswith("CODEX_BRIDGE_")}
     ctx.child_env["PYTHONDONTWRITEBYTECODE"] = "1"
     ctx.policy_evidence = hook_policy_preflight(Path(ctx.execution_cwd), ctx.child_env)
     self_test_id = "bridge-self-test-" + uuid.uuid4().hex
@@ -2202,34 +2233,22 @@ def _verify_provider_dispatch(ctx: _RunContext) -> int | None:
     if ctx.isolated:
         ctx.workflow_wait_ceiling_ms = print_background_wait_ceiling_ms(ctx.args.timeout)
         ctx.child_env[PRINT_BG_WAIT_CEILING] = str(ctx.workflow_wait_ceiling_ms)
-        protected = [ctx.run_dir / name for name in (
-            "packet.json", "settings.json", "mcp.json", "receipt.json", "state.json", "result.json",
-            "review-workspace-link.json", "command.json", "requirements.json", "workspace_before.json",
-            "workspace_after.json", "git_before.json", "git_after.json", "cli-selection.json", "child.json",
-            "content-binding.json", "plugin-identity.json", "decision.json", "decision-history.json",
-            "stream.jsonl", "review-report.json", "diff.patch", "environment.json", "hook-guard-preflight.json")]
+        protected = [ctx.run_dir]
         if ctx.resume is not None:
-            prior_runs = load(ctx.run_dir / "review-workspace-link.json")["prior_run_dirs"]
-            copy_root = Path(ctx.review["workspace_root"])
-            for prior in prior_runs:
-                # Retain writable reviewer work, but freeze every earlier evidence file.
-                protected.extend(path for path in Path(prior).iterdir() if path != copy_root)
+            protected.extend(Path(prior) for prior in load(ctx.run_dir / "review-workspace-link.json")["prior_run_dirs"])
         plugin_root = startup_protocol.plugin_root(Path(__file__).resolve())
-        protected.extend(plugin_root / name for name in ("scripts", "skills", "assets", ".codex-plugin",
-                                                          "code-identity.json", "pyproject.toml", "uv.lock", ".mcp.json"))
+        protected.extend([plugin_root, Path(sys.prefix).resolve(), Path(sys.base_prefix).resolve(),
+                          Path(sys.executable).resolve(), Path(ctx.command[0]).resolve()])
         from lane_lock import coordination_root, legacy_lock_path, marker_roots
         protected.extend([coordination_root(), legacy_lock_path(ctx.lane).parent, *marker_roots()])
         lifecycle_path = os.environ.get("CODEX_BRIDGE_LIFECYCLE_FILE")
         if lifecycle_path:
-            lifecycle = Path(lifecycle_path).resolve()
-            protected.append(lifecycle)
-            # Only Runtime supplies this path; provider descendants cannot alter
-            # admission, recovery, original packets or the coordinator's decisions.
-            state_root = lifecycle.parent.parent
-            protected.extend(state_root / name for name in (
-                "registry.json", "registry.lock", "packets", "bridge-receipts", "recovery-receipts",
-                "cancel-requests", "content"))
-        ctx.command = review_workspace.protected_command(ctx.command, ctx.review, extra_protected=protected)
+            # Protect all historical runs, CLI/venv state, and future control
+            # artifacts without maintaining a second filename inventory.
+            protected.append(Path(lifecycle_path).resolve().parent.parent)
+        ctx.command = review_workspace.protected_command(
+            ctx.command, ctx.review, extra_protected=protected,
+            writable_exceptions=[Path(ctx.review["workspace_root"]), (ctx.run_dir / "activity.jsonl").resolve(), (ctx.run_dir / "stderr").resolve()])
         dump(ctx.run_dir / "command.json", {"argv": ctx.command, "initial_session_id": ctx.session, "resume_session_id": ctx.resume_session,
                                         "cli_descriptor": ctx.environment["cli_descriptor"], "execution_cwd": ctx.execution_cwd})
     # The hook command re-executes bridge.py from disk on every tool call.
@@ -2252,6 +2271,9 @@ def _verify_provider_dispatch(ctx: _RunContext) -> int | None:
         ctx.workflow_root = workflow_delivery.create_root()
         dump(ctx.run_dir / "workflow-temp-root.json", ctx.workflow_root)
         ctx.child_env[workflow_delivery.TMPDIR_ENV] = ctx.workflow_root["path"]
+    if ctx.isolated:
+        ctx.family = Family()
+        ctx.child_env.update(ctx.family.environment)
     ctx.payload = memoryview(prompt(ctx.execution_packet).encode("utf-8"))
 
 
@@ -2266,20 +2288,26 @@ def _supervise_provider(ctx: _RunContext) -> int | None:
     lifecycle_update(ctx.args, phase="executing", child_started=True, child_pid=ctx.proc.pid,
                      child_process_group=ctx.proc.pid, child_identity=None)
     dump(ctx.run_dir / "child.json", {"pid": ctx.proc.pid, "process_group": ctx.proc.pid, "started_at": child_started_at,
-                                   "expected_session_id": ctx.resume_session or ctx.session, "identity": None})
+                                   "expected_session_id": ctx.resume_session or ctx.session, "identity": None,
+                                   "family_marker": ctx.child_env.get(FAMILY_ENVIRONMENT_KEY)})
     assert ctx.proc.stdin and ctx.proc.stdout
     child_identity = capture_process_identity(ctx.proc.pid, ctx.resume_session or ctx.session)
     lifecycle_update(ctx.args, child_identity=child_identity)
     dump(ctx.run_dir / "child.json", {"pid": ctx.proc.pid, "process_group": ctx.proc.pid, "started_at": child_started_at,
-                                   "expected_session_id": ctx.resume_session or ctx.session, "identity": child_identity})
+                                   "expected_session_id": ctx.resume_session or ctx.session, "identity": child_identity,
+                                   "family_marker": ctx.child_env.get(FAMILY_ENVIRONMENT_KEY)})
     activity(ctx.run_dir, "executing", "Claude child started", status="executing")
     transport = ProcessStream(ctx.proc, ctx.stream, ctx.payload, ctx.run_dir, ctx.packet["role"] == "workflow_review" or ctx.packet.get("review_mode") == "isolated")
     ctx.selector = transport.selector
     ctx.prompt_delivery = transport.delivery
     ctx.cancelled = ctx.timed_out = interrupted = False
     cleanup_error: str | None = None
+    next_family_observation = 0.0
     try:
         while ctx.proc.poll() is None:
+            if ctx.family is not None and time.monotonic() >= next_family_observation:
+                ctx.family.observe()
+                next_family_observation = time.monotonic() + .5
             transport.drain(.15)
             if cancellation_requested(ctx.args, ctx.run_dir):
                 ctx.cancelled = True; cleanup_error = terminate_group(ctx.proc); break
@@ -2305,6 +2333,9 @@ def _supervise_provider(ctx: _RunContext) -> int | None:
         if cleanup_error:
             return record_unconfirmed_cleanup(ctx.run_dir, ctx.packet, "normal child exit left a live process group", cleanup_error,
                                               lane=ctx.lane)
+    family_error = _finish_process_family(ctx)
+    if family_error:
+        return record_unconfirmed_cleanup(ctx.run_dir, ctx.packet, "detached provider cleanup", family_error, lane=ctx.lane)
     activity(ctx.run_dir, "collecting", "collecting final provider output", status="collecting")
     eof_deadline = time.monotonic() + 3
     while not transport.eof and time.monotonic() < eof_deadline:
@@ -2319,6 +2350,16 @@ def _supervise_provider(ctx: _RunContext) -> int | None:
     launch_intent_update(ctx.args, "stopped")
     ctx.stream.close(); ctx.err.close()
 
+
+
+def _finish_process_family(ctx: _RunContext) -> str | None:
+    if ctx.family is None:
+        return None
+    ctx.family_evidence = ctx.family.finish()
+    dump(ctx.run_dir / "process-family.json", ctx.family_evidence)
+    if ctx.family_evidence["state"] != "stopped":
+        return "detached process identities could not be confirmed stopped"
+    return None
 
 def _collect_provider_evidence(ctx: _RunContext) -> None:
     """Collect stream/hook/workflow facts and the final original-workspace observation."""
@@ -2348,18 +2389,26 @@ def _collect_provider_evidence(ctx: _RunContext) -> None:
     if ctx.packet["workspace_kind"] == "git":
         dump(ctx.run_dir / "git_after.json", ctx.after)
         if ctx.before["head"] is None:
-            diff_bytes = git_bytes(Path(ctx.packet["cwd"]), "diff", "--no-ext-diff") + git_bytes(Path(ctx.packet["cwd"]), "diff", "--cached", "--no-ext-diff")
+            diff_bytes = git_bytes(Path(ctx.packet["cwd"]), "diff", "--no-ext-diff", "--no-textconv") + git_bytes(Path(ctx.packet["cwd"]), "diff", "--cached", "--no-ext-diff", "--no-textconv")
             diff_header = "# Workspace diff has no HEAD baseline; untracked paths are listed in git_after.json.\n"
         else:
-            diff_bytes = git_bytes(Path(ctx.packet["cwd"]), "diff", "--no-ext-diff", "HEAD")
+            diff_bytes = git_bytes(Path(ctx.packet["cwd"]), "diff", "--no-ext-diff", "--no-textconv", "HEAD")
             diff_header = "# Workspace diff relative to HEAD; this may include changes that predated this run.\n"
         (ctx.run_dir / "diff.patch").write_bytes(diff_header.encode("utf-8") + diff_bytes)
+    if ctx.isolated:
+        execution = load_execution_workspace(ctx.run_dir)
+        copy_root = Path(execution["workspace_root"])
+        (ctx.run_dir / "review-copy.diff.patch").write_bytes(git_bytes(copy_root, "diff", "--no-ext-diff", "--no-textconv", "HEAD"))
+        dump(ctx.run_dir / "review-copy-status.json", {"entries": git_status_entries(copy_root),
+             "note": "copy changes relative to HEAD include preexisting edits; untracked contents are retained in the copy until explicit disposal"})
     ctx.requirements_after = {source: sha256_file(Path(source)) for source in ctx.packet["requirement_sources"]}
 
 
 def _classify_provider_result(ctx: _RunContext) -> None:
     """Keep the raw report as evidence, then classify transport and execution conditions."""
     ctx.final_status = "failed"; ctx.structured: dict[str, Any] | None = None
+    if ctx.isolated and ctx.coverage["status"] != "complete":
+        ctx.meta["hook_audit_warning"] = "tool-use audit coverage is incomplete; isolated source protection is enforced by the OS"
     ctx.subtype = ctx.provider.get("subtype") if ctx.provider else None
     # The report is kept as evidence whatever the run outcome; parsing it
     # never decides success, which stays with the checks below.
@@ -2383,7 +2432,7 @@ def _classify_provider_result(ctx: _RunContext) -> None:
     elif ctx.residual_process_group:
         ctx.meta["process_group_error"] = "direct Claude child exited while same-group descendants remained; descendants were stopped"
         ctx.final_status = "failed"
-    elif ctx.coverage["status"] != "complete":
+    elif ctx.coverage["status"] != "complete" and not ctx.isolated:
         ctx.meta["hook_guard_error"] = "one or more provider tool uses lack matching PreToolUse guard evidence"
         ctx.final_status = "failed"
     elif ctx.unexpected_tools:
@@ -2433,12 +2482,14 @@ def _apply_workflow_report_evidence(ctx: _RunContext) -> None:
         if ctx.review_report["status"] != "delivered" and ctx.final_status == "completed":
             ctx.final_status = "blocked"
             ctx.workflow_evidence_blocked = True
-        if ctx.meta.get("workflow_tool_use_count", 0) and not (ctx.meta.get("workflow_tool_result_success")
-                and ctx.meta.get("workflow_completion_observed") and ctx.meta.get("workflow_final_after_completion")):
-            ctx.meta["workflow_error"] = "not every observed Workflow completed before the final report"
-            if ctx.final_status == "completed":
-                ctx.final_status = "blocked"
-                ctx.workflow_evidence_blocked = True
+        invocations = ctx.meta.get("workflow_invocations", [])
+        unfinished = [item for item in invocations
+                      if item["acknowledgement"]["state"] != "failed"
+                      and (item.get("terminal") or {}).get("status") not in {"completed", "failed", "stopped", "cancelled"}]
+        if unfinished:
+            ctx.meta["workflow_warning"] = "Workflow completion was not observed; retained as incomplete review coverage"
+        elif invocations and not ctx.meta.get("workflow_completion_observed"):
+            ctx.meta["workflow_warning"] = "one or more Workflow attempts failed or stopped; retain their diagnostics when evaluating the report"
 
 
 def _check_source_invariants(ctx: _RunContext) -> None:
@@ -2479,7 +2530,7 @@ def _persist_provider_result(ctx: _RunContext) -> int:
     if cancellation_requested(ctx.args, ctx.run_dir) and ctx.final_status in {"completed", "blocked"}:
         ctx.final_status = "cancelled"
     # A Workflow evidence gap is the bridge's finding, not an executor refusal.
-    blocked_by = ("workflow_evidence" if ctx.workflow_evidence_blocked else "executor") if ctx.final_status == "blocked" else None
+    blocked_by = (("review_report" if ctx.isolated else "workflow_evidence") if ctx.workflow_evidence_blocked else "executor") if ctx.final_status == "blocked" else None
     result = {"workspace_kind": ctx.packet["workspace_kind"], "workspace_manifest": {"before": "workspace_before.json", "after": "workspace_after.json"},
               "cli_identity": ctx.environment["cli_descriptor"],
               "content_binding": content_store.binding_summary(ctx.content_binding),
@@ -2504,9 +2555,10 @@ def _persist_provider_result(ctx: _RunContext) -> int:
               "result_validation_error": ctx.meta.get("result_validation_error"), "session_error": ctx.meta.get("session_error"),
               "hook_guard_preflight": ctx.policy_evidence, "hook_guard_coverage": ctx.coverage,
               "rejected_formatter_tool_uses": ctx.meta.get("rejected_formatter_tool_uses", {}),
+              "hook_audit_warning": ctx.meta.get("hook_audit_warning"), "workflow_warning": ctx.meta.get("workflow_warning"),
               "hook_guard_error": ctx.meta.get("hook_guard_error"), "hook_denial_error": ctx.meta.get("hook_denial_error"),
               "tool_policy_error": ctx.meta.get("tool_policy_error"),
-              "process_group_error": ctx.meta.get("process_group_error"),
+              "process_group_error": ctx.meta.get("process_group_error"), "process_family": ctx.family_evidence,
               "system_init_session_id": ctx.meta.get("system_init_session_id"), "final_session_id": ctx.meta.get("final_session_id"),
               "workflow_name": ctx.meta.get("workflow_name"), "workflow_tool_use_observed": ctx.meta.get("workflow_tool_use_observed"),
               "workflow_tool_result_success": ctx.meta.get("workflow_tool_result_success"),
@@ -2519,6 +2571,7 @@ def _persist_provider_result(ctx: _RunContext) -> int:
               "workflow_background_wait_ceiling_ms": ctx.workflow_wait_ceiling_ms,
               "workflow_error": ctx.meta.get("workflow_error"), "workflow_error_codes": ctx.meta.get("workflow_error_codes"),
               "workflow_delivery": ctx.workflow_record, "review_report": ctx.review_report,
+              "workflow_invocations": ctx.meta.get("workflow_invocations", []), "workflow_names": ctx.meta.get("workflow_names", []),
               "review_mode": ctx.packet.get("review_mode", "strict"), "review_scope": ctx.packet.get("review_scope", "full"),
               "review_workspace": ctx.review, "request_provenance": ctx.packet.get("request_provenance")}
     result["report_evidence"] = {

@@ -5,6 +5,7 @@ import fcntl
 import json
 import os
 import secrets
+import stat
 import time
 from collections import OrderedDict
 from pathlib import Path
@@ -30,6 +31,17 @@ def _clean(value: Any, limit: int = 480) -> str:
 
 def _events_path(run_dir: Path) -> Path:
     return run_dir / EVENTS_NAME
+
+
+def _open_events(path: Path, *, append: bool = False):
+    """Never let a child-controlled log redirect a supervisor read or write."""
+    flags = os.O_RDWR | os.O_APPEND | os.O_CREAT if append else os.O_RDONLY
+    fd = os.open(path, flags | os.O_NONBLOCK | os.O_NOFOLLOW, 0o600)
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        os.close(fd)
+        raise OSError("activity log must be a regular file with one link")
+    return os.fdopen(fd, "a+b" if append else "rb")
 
 
 def _index_path(run_dir: Path) -> Path:
@@ -95,13 +107,20 @@ def _write_index(run_dir: Path, value: dict[str, Any]) -> None:
     temporary = target.with_name(f".{target.name}.{secrets.token_hex(6)}.tmp")
     try:
         with temporary.open("w", encoding="utf-8") as stream:
-            json.dump(value, stream, ensure_ascii=False, separators=(",", ":"))
+            json.dump(value, stream, ensure_ascii=True, separators=(",", ":"))
             stream.write("\n")
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, target)
+    except PermissionError:
+        # Isolated hooks can append audit events but cannot replace trusted
+        # sibling artifacts. The supervisor rebuilds this optional cache.
+        pass
     finally:
-        temporary.unlink(missing_ok=True)
+        try:
+            temporary.unlink(missing_ok=True)
+        except PermissionError:
+            pass
 
 
 def _copy_index(value: dict[str, Any]) -> dict[str, Any]:
@@ -178,7 +197,7 @@ def append(run_dir: Path, kind: str, summary: str, *, tool: str | None = None,
     """
     run_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     path = _events_path(run_dir)
-    with path.open("a+b") as handle:
+    with _open_events(path, append=True) as handle:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
         state = _state_for_handle(run_dir, handle, repair_partial=True)
         sequence = state["last_seq"] + 1
@@ -196,7 +215,7 @@ def append(run_dir: Path, kind: str, summary: str, *, tool: str | None = None,
             event["tool_use_id"] = _clean(tool_use_id, 160)
         handle.seek(0, os.SEEK_END)
         start = handle.tell()
-        handle.write((json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8"))
+        handle.write((json.dumps(event, ensure_ascii=True, separators=(",", ":")) + "\n").encode("utf-8"))
         handle.flush()
         os.fsync(handle.fileno())
         state["count"] += 1
@@ -216,7 +235,7 @@ def _current_state(run_dir: Path) -> dict[str, Any] | None:
     path = _events_path(run_dir)
     if not path.exists():
         return None
-    with path.open("rb") as handle:
+    with _open_events(path) as handle:
         fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
         stat = os.fstat(handle.fileno())
         try:
@@ -248,7 +267,7 @@ def read(run_dir: Path, after: int = 0, limit: int = 100) -> tuple[list[dict[str
     path = _events_path(run_dir)
     if not path.exists():
         return [], after, False
-    with path.open("rb") as handle:
+    with _open_events(path) as handle:
         fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
         state = _state_for_handle(run_dir, handle, repair_partial=False)
         if after >= state["last_seq"]:

@@ -159,6 +159,8 @@ def require_marketplace_identity(blobs: dict[Path, bytes]) -> None:
 
 def identity_paths(blobs: dict[Path, bytes], purpose: str) -> tuple[str, ...]:
     """Read the committed declaration, never import the target installation."""
+    if purpose not in {"contract", "startup"}:
+        raise BuildError("Unknown code identity purpose")
     try:
         declaration = json.loads(required_bytes(blobs, CODE_IDENTITY_RELATIVE))
     except (ValueError, UnicodeError) as exc:
@@ -167,6 +169,12 @@ def identity_paths(blobs: dict[Path, bytes], purpose: str) -> tuple[str, ...]:
         raise BuildError("Unsupported code identity declaration")
     purposes = declaration.get("purposes")
     paths = purposes.get(purpose) if isinstance(purposes, dict) else None
+    seen = {purpose}
+    while isinstance(paths, str) and isinstance(purposes, dict):
+        if paths not in {"contract", "startup"} or paths in seen:
+            raise BuildError("Code identity purpose alias is unknown or cyclic")
+        seen.add(paths)
+        paths = purposes.get(paths)
     if (not isinstance(paths, list) or not paths
             or any(not isinstance(path, str) for path in paths) or len(paths) != len(set(paths))):
         raise BuildError("Code identity paths must be a nonempty unique list of strings")

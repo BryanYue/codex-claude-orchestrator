@@ -6,6 +6,7 @@ activate, execute, rewrite or delete them.
 """
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -150,3 +151,24 @@ def legacy_records(environ: dict[str, str] | None = None) -> dict[str, Any]:
                                  "excludes": ["download_partials", "run_evidence"],
                                  "automatic_cleanup": False}
     return result
+
+
+def worker_lock_observation(path: Path) -> str:
+    """Observe an existing worker lock through a shared read-only descriptor."""
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except FileNotFoundError:
+        return "absent"
+    except OSError:
+        return "unreadable"
+    try:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return "held"
+        except OSError:
+            return "unreadable"
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        return "free"
+    finally:
+        os.close(descriptor)

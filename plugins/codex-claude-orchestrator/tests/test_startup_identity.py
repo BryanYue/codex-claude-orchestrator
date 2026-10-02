@@ -61,7 +61,7 @@ def git(*args):
 
 
 def copy_code(target: Path) -> Path:
-    for relative in startup_protocol.CODE_FILES:
+    for relative in startup_protocol.identity_manifest.paths(PLUGIN, "startup"):
         destination = target / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(PLUGIN / relative, destination)
@@ -75,7 +75,7 @@ class CodeIdentityTests(unittest.TestCase):
         self.root = Path(self.temp.name)
 
     def test_every_listed_module_exists_in_the_plugin(self):
-        missing = [relative for relative in startup_protocol.CODE_FILES if not (PLUGIN / relative).is_file()]
+        missing = [relative for relative in startup_protocol.identity_manifest.paths(PLUGIN, "startup") if not (PLUGIN / relative).is_file()]
         self.assertEqual(missing, [])
         self.assertIsInstance(startup_protocol.code_identity(PLUGIN)["value"], str)
 

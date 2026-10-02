@@ -13,15 +13,12 @@ import time
 from pathlib import Path
 from typing import Any
 
-try:
-    from . import bridge
-    from .events import append, latest, latest_meaningful, read, statistics
-except ImportError:  # executed from the scripts directory by the MCP server
-    import bridge  # type: ignore
-    from events import append, latest, latest_meaningful, read, statistics  # type: ignore
+import bridge
+from events import append, latest, latest_meaningful, read, statistics
 import content_store  # bridge placed the plugin scripts directory on sys.path
 import startup_protocol
 from result_schema import finding_decisions as validate_finding_decisions
+from stream_parser import provider_identity
 
 # Must be taken while this module is being imported; see loaded_identity().
 _LOADED_CODE = startup_protocol.loaded_identity(startup_protocol.plugin_root(Path(bridge.__file__).resolve()))
@@ -557,10 +554,18 @@ class Runtime:
             raise ValueError("invalid run_id")
         return self.runs_root / run_id
 
-    def start(self, packet: dict, timeout: float = 300, resume_run_id: str | None = None, expected_content_digest: str | None = None) -> dict:
-        if not isinstance(timeout, (int, float)) or timeout <= 0:
-            raise ValueError("timeout must be positive")
+    def start(self, packet: dict, timeout: float | None = None, resume_run_id: str | None = None, expected_content_digest: str | None = None) -> dict:
+        packet = dict(packet)
+        if resume_run_id:
+            previous_packet = self._read_json(self._run_dir(resume_run_id) / "packet.json") or {}
+            for key in ("review_mode", "review_scope"):
+                if key not in packet and key in previous_packet:
+                    packet[key] = previous_packet[key]
         normalized = bridge.validate_packet(packet)
+        if timeout is None:
+            timeout = 3600 if normalized.get("review_mode") == "isolated" and normalized.get("review_scope") == "full" else 300
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 1 <= timeout <= 14400:
+            raise ValueError("timeout must be 1..14400 seconds")
         lane_identity = bridge.lane_identity(Path(normalized["cwd"]), normalized["workspace_kind"])
         with self._guard:
             if self._closing:
@@ -682,7 +687,7 @@ class Runtime:
                        code_identity: dict[str, Any], timeout: float, resume_run_id: str | None) -> tuple[list[str], Path]:
         """Persist immutable launch bindings and register intent before any bridge exists."""
         packet_path = self.packets_root / f"{run_id}.json"
-        packet_path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        bridge.dump(packet_path, normalized)
         packet_sha256 = self._file_sha256(packet_path)
         cli_path = self.packets_root / f"{run_id}.cli.json"
         bridge.dump(cli_path, cli_descriptor)
@@ -706,6 +711,8 @@ class Runtime:
                   "last_activity_at": None, "model": normalized["model"], "session_id": None, "summary": "bridge starting",
                   "requested_model": normalized["model"], "effort": normalized["effort"],
                   "objective": normalized["objective"], "role": normalized["role"],
+                  "review_mode": normalized.get("review_mode"), "review_scope": normalized.get("review_scope"),
+                  "request_provenance": normalized.get("request_provenance"), "timeout_seconds": timeout,
                   "scope": {"cwd": normalized["cwd"], "owned_files": normalized["owned_files"],
                             "input_files": normalized.get("input_files", [])},
                   "decision": None, "previous_run_id": previous.get("run_id") if previous else None, "run_dir": str(run_dir),
@@ -720,7 +727,7 @@ class Runtime:
                   "bridge_code_identity": code_identity["value"], "bridge_script": str(bridge_script),
                   "bridge_spawn_cwd": str(self.state_root),
                   "changed_files": None, "workspace_changes": workspace_changes(None, None),
-                  "environment": {"isolation": "bridge hook constraints only; no OS sandbox claim"}}
+                  "environment": {"isolation": "isolated OS source-write protection pending dispatch" if normalized.get("review_mode") == "isolated" else "strict tool guards; no OS sandbox"}}
         record["events_count"] = 0
         def register(data):
             data.setdefault("runs", {})[run_id] = record
@@ -983,7 +990,7 @@ class Runtime:
         safe_environment = {"status": environment.get("status"), "cli_version": (environment.get("cli") or {}).get("version"),
                             "auth_status": (environment.get("auth") or {}).get("status"),
                             "cli_identity": environment.get("cli_descriptor"),
-                            "isolation": "bridge hook constraints only; no OS sandbox claim"}
+                            "isolation": "OS source/control-write protection; credentials/network not isolated" if result.get("review_workspace") else "strict tool guards; no OS sandbox"}
         def observation(rec):
             current_status = rec.get("status")
             if current_status in FINAL:
@@ -1053,49 +1060,7 @@ class Runtime:
         except OSError:
             return {"session_id": None, "initialized_model": None, "actual_models": [],
                     "actual_model_source": None, "provider_response_observed": False}
-        session = initialized_model = None
-        actual_models: list[str] = []
-        sources: list[str] = []
-        provider_response_observed = False
-        for line in lines:
-            try:
-                item = json.loads(line)
-            except ValueError:
-                continue
-            if not isinstance(item, dict):
-                continue
-            if item.get("type") == "system" and item.get("subtype") == "init":
-                if isinstance(item.get("session_id"), str):
-                    session = item["session_id"]
-                if isinstance(item.get("model"), str):
-                    initialized_model = item["model"]
-            elif item.get("type") == "assistant":
-                provider_response_observed = True
-                message = item.get("message")
-                model = message.get("model") if isinstance(message, dict) else None
-                if not isinstance(model, str):
-                    model = item.get("model") if isinstance(item.get("model"), str) else None
-                if model and model not in actual_models:
-                    actual_models.append(model)
-                if model and "assistant_message" not in sources:
-                    sources.append("assistant_message")
-            elif item.get("type") == "result":
-                provider_response_observed = True
-                if isinstance(item.get("session_id"), str):
-                    session = item["session_id"]
-                model_usage = item.get("modelUsage")
-                if isinstance(model_usage, dict):
-                    usage_model_observed = False
-                    for model in model_usage:
-                        if isinstance(model, str) and model:
-                            usage_model_observed = True
-                            if model not in actual_models:
-                                actual_models.append(model)
-                    if usage_model_observed and "result_model_usage" not in sources:
-                        sources.append("result_model_usage")
-        return {"session_id": session, "initialized_model": initialized_model, "actual_models": actual_models,
-                "actual_model_source": "+".join(sources) or None,
-                "provider_response_observed": provider_response_observed}
+        return provider_identity(lines)
 
     @staticmethod
     def _read_json(path: Path):
@@ -1104,7 +1069,7 @@ class Runtime:
 
     @staticmethod
     def _digest(value: Any) -> str:
-        material = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        material = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8", "surrogateescape")
         return hashlib.sha256(material).hexdigest()
 
     @staticmethod
@@ -1574,7 +1539,13 @@ class Runtime:
             reported = self._read_json(run_dir / "result.json") or {}
             findings = (reported.get("structured") or {}).get("findings", [])
             if findings or finding_decisions is not None:
-                value["finding_decisions"] = validate_finding_decisions(findings, finding_decisions)
+                try:
+                    value["finding_decisions"] = validate_finding_decisions(findings, finding_decisions)
+                except ValueError as exc:
+                    if rec.get("review_mode") is not None or resolution != "completed_by_codex":
+                        raise
+                    value["legacy_findings_unparsed"] = findings
+                    value["finding_decisions_unavailable"] = str(exc)
             history = list(rec.get("decision_history") or [])
             current = rec.get("decision")
             if isinstance(current, dict) and (not history or history[-1] != current):
@@ -1586,6 +1557,50 @@ class Runtime:
         self._update(write_if_current)
         append(run_dir, "decision", "Codex completed the task; original report returned" if resolution == "completed_by_codex" else "coordinator decision recorded", status=decision)
         return self.snapshot(run_id)
+
+    def cleanup_review(self, run_id: str) -> dict:
+        """Dispose a reviewed copy under both lane and registry ownership."""
+        run_dir = self._run_dir(run_id)
+        record = self.snapshot(run_id)
+        lane = record.get("lane_identity") or bridge.lane_identity(Path(record["cwd"]))
+        outcome = {}
+        def dispose_current(data):
+            current = data.get("runs", {}).get(run_id, {})
+            decision = current.get("decision") or {}
+            disposition = "accepted" if decision.get("decision") == "accepted" else decision.get("resolution")
+            if current.get("status") != "reported" or current.get("superseded_by") or disposition not in {"accepted", "completed_by_codex"}:
+                raise RuntimeError("cleanup requires a non-superseded accepted or completed_by_codex review; returned/unknown copies are retained")
+            previous = self._read_json(run_dir / "review-cleanup.json")
+            if previous and previous.get("state") == "removed":
+                outcome.update(previous)
+                return _NO_REGISTRY_CHANGE
+            if not self._trusted_terminal(current):
+                raise RuntimeError("cleanup cannot confirm the bound bridge/provider stopped")
+            workspace = bridge.load_execution_workspace(run_dir)
+            from process_family import Family
+            child = self._read_json(run_dir / "child.json") or {}
+            marker = child.get("family_marker")
+            if not marker:
+                raise RuntimeError("legacy copy has no detached-process observation; retain it for manual disposal")
+            observed = Family(marker=marker).observe()
+            if observed.get("live_count") or observed.get("state") == "unknown":
+                raise RuntimeError("cleanup found a live or unconfirmed detached review process")
+            removed = bridge.review_workspace.cleanup_review_workspace(
+                Path(workspace["metadata_path"]).parent, terminal=True, explicit=True, status=disposition)
+            outcome.update(state="removed" if removed else "retained", workspace_root=workspace["workspace_root"],
+                           recorded_at=time.time(), process_observation=observed,
+                           retained=["original report", "copy patch/status", "source snapshots", "decision history"])
+            bridge.dump(run_dir / "review-cleanup.json", outcome)
+            current["review_cleanup"] = outcome
+        with self._guard:
+            handle = self._lane_lock(lane)
+            try:
+                # Re-read disposition under the cross-process registry lock and
+                # hold it through deletion: a concurrent return cannot lose its copy.
+                self._update(dispose_current)
+            finally:
+                self._release_lane(lane, handle)
+        return outcome
 
     def close(self) -> None:
         self._closing = True

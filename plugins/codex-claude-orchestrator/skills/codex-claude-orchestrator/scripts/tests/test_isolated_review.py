@@ -1,8 +1,12 @@
 """Exercise rich review through the real Bridge with a deterministic local CLI."""
 import json
 import os
+import signal
 import sys
 import time
+import threading
+import subprocess
+from pathlib import Path
 import unittest
 from unittest import mock
 
@@ -36,7 +40,7 @@ def use(name,ident,input_):
     if mode!='missing_hook':
         checked=subprocess.run(['/bin/sh','-c',hook],input=json.dumps({'tool_name':name,'tool_input':input_,'tool_use_id':ident}),text=True,capture_output=True)
         assert checked.returncode==0,(checked.stdout,checked.stderr)
-    emit({'type':'user','content':[{'type':'tool_result','tool_use_id':ident,'is_error':False,'content':'fixture tool completed'}]})
+    emit({'type':'user','content':[{'type':'tool_result','tool_use_id':ident,'is_error':ident=='workflow-failed','content':'fixture tool completed'}]})
 emit({'type':'system','subtype':'init','model':'fixture-model'})
 use('Bash','bash-1',{'command':'test writable copy and protected source'})
 source=pathlib.Path(packet['requirement_sources'][0])
@@ -46,18 +50,31 @@ if option('--resume'):
     link=json.loads((pathlib.Path(option('--settings')).parent/'review-workspace-link.json').read_text())
     protected += [pathlib.Path(folder)/name for folder in link['prior_run_dirs'] for name in ('result.json','packet.json','review-report.json','receipt.json')]
 protected += [pathlib.Path(option('--settings')).parent/name for name in ('stream.jsonl','review-report.json','diff.patch')]
-lifecycle=os.environ.get('CODEX_BRIDGE_LIFECYCLE_FILE')
-if lifecycle:
-    state_root=pathlib.Path(lifecycle).parent.parent
-    protected += [state_root/'registry.json', state_root/'packets'/'forged.json', state_root/'recovery-receipts'/'forged.json']
+assert not any(name.startswith('CODEX_BRIDGE_') for name in os.environ), 'bridge control environment leaked'
+state_root=os.environ.get('SOURCE_STATE_ROOT')
+if state_root:
+    state_root=pathlib.Path(state_root)
+    protected += [state_root/'registry.json', state_root/'packets'/'forged.json', state_root/'recovery-receipts'/'forged.json', state_root/'runs'/'other-run'/'result.json', state_root/'venvs'/'forged.py', state_root/'bridge-logs'/'forged.log']
     for parent in ('recovery-receipts',):
         try: (state_root/parent).mkdir(exist_ok=True)
         except PermissionError: pass
-    for target in protected[-3:]:
+    for target in protected[-6:]:
         try: target.write_text('{"decision":"accepted"}')
         except (PermissionError,FileNotFoundError): pass
         else: raise AssertionError('Runtime control write allowed: '+str(target))
-    protected=protected[:-3]
+    protected=protected[:-6]
+    lifecycle=state_root/'bridge-receipts'/(pathlib.Path(option('--settings')).parent.name+'.json')
+    assert lifecycle.is_file(), 'Runtime lifecycle fixture missing'
+    try:
+        with lifecycle.open('r+b'): pass
+    except PermissionError: pass
+    else: raise AssertionError('lifecycle write access allowed')
+for target in json.loads(os.environ.get('SOURCE_GUARD_TARGETS','[]')):
+    # Opening for update probes permission without corrupting executing code if a guard regresses.
+    try:
+        with pathlib.Path(target).open('r+b'): pass
+    except PermissionError: pass
+    else: raise AssertionError('executing code or lane control write access allowed: '+target)
 for target in protected:
     try: target.write_text('CORRUPTED')
     except PermissionError: pass
@@ -66,10 +83,20 @@ pathlib.Path('base.txt').write_text('reviewer edit in copy')
 if option('--resume'):
     assert pathlib.Path('retained.txt').read_text()=='previous copy'
 else: pathlib.Path('retained.txt').write_text('previous copy')
-if mode in ('workflow','incomplete_workflow'):
+if mode in ('workflow','incomplete_workflow','workflow_retry'):
+    if mode=='workflow_retry': use('Workflow','workflow-failed',{'scriptPath':'/generated/bad-review.js'})
     use('Workflow','workflow-1',{'scriptPath':'/generated/inline-review.js'})
     emit({'type':'system','subtype':'task_started','tool_use_id':'workflow-1','task_id':'task-w','task_type':'local_workflow'})
-    if mode=='workflow': emit({'type':'system','subtype':'task_notification','tool_use_id':'workflow-1','task_id':'task-w','status':'completed'})
+    if mode in ('workflow','workflow_retry'): emit({'type':'system','subtype':'task_notification','tool_use_id':'workflow-1','task_id':'task-w','status':'completed'})
+if mode=='external_source_change':
+    import time
+    pathlib.Path(os.environ['SOURCE_CHANGE_READY']).write_text('ready')
+    deadline=time.monotonic()+5
+    while not pathlib.Path(os.environ['SOURCE_CHANGE_DONE']).exists() and time.monotonic()<deadline: time.sleep(.01)
+if mode=='signal_wait':
+    import time
+    pathlib.Path(os.environ['SOURCE_SIGNAL_READY']).write_text('ready')
+    time.sleep(30)
 full={'status':'completed','summary':'complete review','evidence':['base.txt:1'],'checks':['source writes denied; copy write succeeded'],
       'unresolved':[],'coverage':['correctness','architecture'],'findings':[{'id':'F1','category':'design','confidence':'code_confirmed','summary':'Inspect the responsibility boundary','evidence':['base.txt:1']}]}
 if mode=='fifo': os.mkfifo(report)
@@ -79,8 +106,9 @@ emit({'type':'result','subtype':'success','is_error':False,'structured_output':p
 ''')
         self.enterContext(mock.patch.dict(os.environ, {"SOURCE_REPO": str(self.fixture.repo.resolve())}))
 
-    def run_review(self, mode="normal", name="isolated", resume=None):
+    def run_review(self, mode="normal", name="isolated", resume=None, extra=None):
         packet = {**self.fixture.packet(revision=json.loads((resume / "packet.json").read_text())["revision"] + 1 if resume else 1), "user_request": "原话：整体审查，保留所有发现。", "review_mode": "isolated"}
+        packet.update(extra or {})
         if resume:
             packet["correction"] = {"kind": "local", "finding_id": "F1", "reason": "verify source again", "attempt": 1}
         with mock.patch.dict(os.environ, {"ISOLATED_MODE": mode}):
@@ -100,36 +128,146 @@ emit({'type':'result','subtype':'success','is_error':False,'structured_output':p
         self.assertEqual(result["review_report"]["status"], "delivered")
         self.assertEqual(json.loads((run / "workspace_before.json").read_text()), json.loads((run / "workspace_after.json").read_text()))
         argv = json.loads((run / "command.json").read_text())["argv"]
-        self.assertIn("Agent", argv[argv.index("--tools") + 1])
+        self.assertEqual("default", argv[argv.index("--tools") + 1])
+        for tool in ("Bash", "Agent", "Workflow", "Skill", "WebFetch", "WebSearch", "Write"):
+            self.assertIn(tool, argv[argv.index("--allowedTools") + 1].split(","))
+        self.assertEqual(argv[argv.index("--permission-mode") + 1], "dontAsk")
+        self.assertNotIn("--disallowedTools", argv)
+        self.assertIn("reviewer edit in copy", (run / "review-copy.diff.patch").read_text())
         self.assertIn("--strict-mcp-config", argv)
 
     def test_runtime_state_cannot_be_forged_by_review_tools(self):
         sys.path.insert(0, str(fixtures.BRIDGE.parent))
         import runtime
+        import lane_lock
         coordinator = runtime.Runtime(self.root / "state")
         try:
             packet = {**self.fixture.packet(), "user_request": "原话：完整审查", "review_mode": "isolated"}
-            created = coordinator.start(packet, timeout=15)
+            lane = runtime.bridge.lane_identity(self.fixture.repo)
+            controls = [lane_lock.durable_lock_path(lane), lane_lock.legacy_lock_path(lane)]
+            for root in lane_lock.marker_roots():
+                marker = root / ("write-probe-" + self.root.name)
+                marker.write_text("probe")
+                self.addCleanup(marker.unlink, missing_ok=True)
+                controls.append(marker)
+            with mock.patch.dict(os.environ, {"SOURCE_STATE_ROOT": str(coordinator.state_root),
+                 "SOURCE_GUARD_TARGETS": json.dumps([str(path) for path in [fixtures.BRIDGE,
+                     fixtures.BRIDGE.parents[3] / "scripts/shared_io.py", Path(sys.executable).resolve(), *controls]])}):
+                created = coordinator.start(packet)
+                self.assertEqual(created["timeout_seconds"], 3600)
             deadline = time.monotonic() + 20
             while time.monotonic() < deadline:
                 snapshot = coordinator.snapshot(created["run_id"])
-                if snapshot["status"] not in {"starting", "running", "cancelling"}:
+                if snapshot["status"] not in runtime.ACTIVE:
                     break
                 time.sleep(.05)
             self.assertEqual(snapshot["status"], "reported", snapshot)
             self.assertFalse(snapshot.get("decision"))
             self.assertEqual(snapshot["result"]["structured"]["findings"][0]["id"], "F1")
             self.assertFalse((coordinator.packets_root / "forged.json").exists())
+            deadline = time.monotonic() + 3
+            while created["run_id"] in coordinator._workers and time.monotonic() < deadline:
+                time.sleep(.02)
+            with self.assertRaisesRegex(RuntimeError, "accepted"):
+                coordinator.cleanup_review(created["run_id"])
+            run_dir = Path(snapshot["run_dir"])
+            report_bytes = (run_dir / "review-report.json").read_bytes()
+            coordinator.record_decision(created["run_id"], "accepted", "fixture verified", ["source protection and captured report"],
+                                        finding_decisions=[{"finding_id": "F1", "disposition": "accepted"}])
+            removed = coordinator.cleanup_review(created["run_id"])
+            self.assertEqual(removed["state"], "removed")
+            self.assertFalse(Path(removed["workspace_root"]).exists())
+            self.assertEqual((run_dir / "review-report.json").read_bytes(), report_bytes)
+            self.assertEqual(coordinator.cleanup_review(created["run_id"]), removed)
         finally:
             coordinator.close()
 
-    def test_workflow_completion_required_but_saved_identity_not_required(self):
-        for mode, expected in (("workflow", "reported"), ("incomplete_workflow", "blocked")):
+    def test_sigterm_reaps_provider_under_actual_os_wrapper(self):
+        sys.path.insert(0, str(fixtures.BRIDGE.parent))
+        import bridge
+        packet = {**self.fixture.packet(), "user_request": "test isolated shutdown", "review_mode": "isolated"}
+        packet_path = self.root / "signal-packet.json"
+        packet_path.write_text(json.dumps(packet))
+        run = self.root / "signal-run"
+        ready = self.root / "signal-ready"
+        child = None
+        with mock.patch.dict(os.environ, {"ISOLATED_MODE": "signal_wait", "SOURCE_SIGNAL_READY": str(ready)}):
+            proc = subprocess.Popen([sys.executable, str(fixtures.BRIDGE), "run", "--packet", str(packet_path),
+                                     "--run-dir", str(run), "--timeout", "30"],
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            deadline = time.monotonic() + 10
+            while not ready.exists() and proc.poll() is None and time.monotonic() < deadline:
+                time.sleep(.02)
+            self.assertTrue(ready.exists(), "provider never reached protected execution")
+            child = json.loads((run / "child.json").read_text())["pid"]
+            self.assertEqual(json.loads((run / "command.json").read_text())["argv"][0], "/usr/bin/sandbox-exec")
+            proc.send_signal(signal.SIGTERM)
+            out, err = proc.communicate(timeout=15)
+            self.assertEqual(proc.returncode, 1, out + err)
+            self.assertEqual(json.loads((run / "receipt.json").read_text())["status"], "cancelled")
+            self.assertEqual(json.loads((run / "process-family.json").read_text())["state"], "stopped")
+            with self.assertRaises(ProcessLookupError):
+                os.killpg(child, 0)
+            self.assertFalse(bridge.unknown_markers(bridge.lane_identity(self.fixture.repo)))
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+            proc.communicate(timeout=5)
+            if child is not None:
+                try:
+                    os.killpg(child, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
+    def test_workflow_attempts_are_audited_without_discarding_delivered_report(self):
+        for mode, expected in (("workflow", "reported"), ("incomplete_workflow", "reported")):
             with self.subTest(mode=mode):
                 _, run, result = self.run_review(mode, mode)
                 self.assertEqual(json.loads((run / "receipt.json").read_text())["status"], expected)
                 self.assertEqual(result["workflow_tool_use_count"], 1)
-                self.assertEqual(result["workflow_completion_observed"], expected == "reported")
+                self.assertEqual(result["workflow_completion_observed"], mode == "workflow")
+                if mode == "incomplete_workflow":
+                    self.assertIn("not observed", result["workflow_warning"])
+
+    def test_failed_workflow_retry_keeps_both_attempts_and_report(self):
+        _, run, result = self.run_review("workflow_retry")
+        self.assertEqual(json.loads((run / "receipt.json").read_text())["status"], "reported")
+        self.assertEqual(result["workflow_tool_use_count"], 2)
+        self.assertIn("failed", result["workflow_warning"])
+        self.assertEqual(result["review_report"]["status"], "delivered")
+
+    def test_source_mutation_by_another_actor_still_fails_after_valid_report(self):
+        ready, done = self.root / "ready", self.root / "done"
+        def change_source():
+            deadline = time.monotonic() + 8
+            while not ready.exists() and time.monotonic() < deadline:
+                time.sleep(.01)
+            if ready.exists():
+                (self.fixture.repo / "base.txt").write_text("concurrent source edit")
+                done.write_text("changed")
+        worker = threading.Thread(target=change_source)
+        worker.start()
+        try:
+            with mock.patch.dict(os.environ, {"SOURCE_CHANGE_READY": str(ready), "SOURCE_CHANGE_DONE": str(done)}):
+                _, run, result = self.run_review("external_source_change")
+            self.assertEqual(json.loads((run / "receipt.json").read_text())["status"], "failed")
+            self.assertEqual(result["review_report"]["status"], "delivered")
+            self.assertIn("workspace", result["invariant_error"])
+        finally:
+            worker.join(10)
+
+    def test_subdirectory_and_gbk_input_roundtrip(self):
+        nested = self.fixture.repo / "nested"
+        nested.mkdir()
+        gbk = nested / "sample.txt"
+        gbk.write_bytes("原文".encode("gbk"))
+        subprocess.run(["git", "-C", str(self.fixture.repo), "add", "nested"], check=True)
+        subprocess.run(["git", "-C", str(self.fixture.repo), "commit", "-qm", "nested GBK"], check=True)
+        gbk.write_bytes("新文本".encode("gbk"))
+        got, _, result = self.run_review(extra={"cwd": str(nested)})
+        self.assertEqual(got.returncode, 0)
+        self.assertEqual((Path(result["review_workspace"]["cwd"]) / "sample.txt").read_bytes(), gbk.read_bytes())
 
     def test_missing_and_fifo_reports_block_without_hanging(self):
         for mode in ("missing_report", "fifo"):
@@ -138,9 +276,10 @@ emit({'type':'result','subtype':'success','is_error':False,'structured_output':p
                 self.assertEqual(json.loads((run / "receipt.json").read_text())["status"], "blocked")
                 self.assertEqual(result["review_report"]["status"], "not_collected")
 
-    def test_missing_hook_remains_failure_even_with_a_valid_report(self):
+    def test_missing_isolated_hook_is_audit_warning_with_valid_report(self):
         _, run, result = self.run_review("missing_hook")
-        self.assertEqual(json.loads((run / "receipt.json").read_text())["status"], "failed")
+        self.assertEqual(json.loads((run / "receipt.json").read_text())["status"], "reported")
+        self.assertIn("incomplete", result["hook_audit_warning"])
         self.assertEqual(result["review_report"]["status"], "delivered")
         self.assertFalse(result["report_evidence"]["accepted"])
 
