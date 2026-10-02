@@ -30,7 +30,7 @@ DIRTY_SAMPLE_LIMIT = 20
 # tools/build_distribution.py packages the same set; its drift test compares the two digests.
 OMIT_DIR_NAMES = frozenset({".venv", "__pycache__", ".uv-cache", ".git", "dist",
                             ".pytest_cache", "coverage", ".mypy_cache", ".ruff_cache"})
-ALLOWED_SUFFIXES = frozenset({".md", ".json", ".py", ".lock", ".toml", ".yaml", ".yml", ".sh", ".html", ".command", ".png"})
+ALLOWED_SUFFIXES = frozenset({".md", ".json", ".py", ".lock", ".toml", ".yaml", ".yml", ".sh", ".html", ".command", ".png", ".js"})
 ALLOWED_BARE_NAMES = frozenset({".gitignore"})
 CODE_DIGEST_SCOPE = ("files under the plugin root with distributable suffixes, taken from the working tree now "
                      "(path + file-byte SHA-256; excludes caches, .venv, dist and .git; ignored files with those "

@@ -13,22 +13,19 @@ still prove the bridge process group stopped and hold the lane exclusively.
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import time
 from pathlib import Path
 from typing import Any
 
+import identity_manifest
+
 STARTUP_PROTOCOL_VERSION = 1
 PRE_SPAWN_PHASE = "runtime_pre_spawn"
 NONCE_ARGUMENT = "--startup-nonce"
-_SKILL_SCRIPTS = "skills/codex-claude-orchestrator/scripts"
-# Executable modules the bridge and Runtime import.  Reference guides and
-# manifests are versioned content, so a guide-only update keeps the identity.
-CODE_FILES = tuple(f"{_SKILL_SCRIPTS}/{name}" for name in (
-    "bridge.py", "runtime.py", "compatibility.py", "events.py", "workspace.py", "usage.py",
-    "named_workflow.py", "protocol.py", "workflow_delivery.py")) + tuple(f"scripts/{name}" for name in (
-    "executable_locator.py", "content_store.py", "plugin_identity.py", "startup_protocol.py"))
+
+# Current installation declaration, retained for callers copying the code set.
+CODE_FILES = identity_manifest.paths(Path(__file__).resolve().parents[1], "startup")
 _LOADED: dict[str, dict[str, Any]] = {}
 
 
@@ -45,16 +42,19 @@ def code_identity(root: Path) -> dict[str, Any]:
     root = Path(root)
     files: dict[str, str | None] = {}
     errors: list[str] = []
-    for relative in CODE_FILES:
+    try:
+        names = identity_manifest.paths(root, "startup")
+    except (OSError, ValueError) as exc:
+        names = ()
+        errors.append(f"{identity_manifest.MANIFEST_FILE}: {type(exc).__name__}: {exc}")
+    for relative in names:
         try:
             files[relative] = hashlib.sha256((root / relative).read_bytes()).hexdigest()
         except OSError as exc:
             files[relative] = None
             errors.append(f"{relative}: {type(exc).__name__}")
-    value = None
-    if not errors:
-        material = json.dumps(sorted(files.items()), separators=(",", ":")).encode()
-        value = hashlib.sha256(material).hexdigest()
+    value = None if errors else identity_manifest.digest(files, "startup")
+
     identity: dict[str, Any] = {"protocol_version": STARTUP_PROTOCOL_VERSION, "algorithm": "sha256",
                                 "value": value, "files": files, "root": str(root)}
     if errors:

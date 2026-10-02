@@ -103,6 +103,19 @@ print(json.dumps({'type':'result','subtype':'success','session_id':s,'structured
         self.assertEqual(result["status"], "reported")
         self.assertEqual(self.runtime.snapshot(self.run_id)["status"], "unknown")
 
+    def test_non_utf8_dirty_repository_can_be_observed_and_reconciled(self):
+        (self.repo / "base.txt").write_bytes("中文旧内容\n".encode("gbk"))
+        subprocess.run(["git", "-C", str(self.repo), "commit", "-qam", "GBK baseline"], check=True)
+        (self.repo / "base.txt").write_bytes("中文新内容\n".encode("gbk"))
+        inspection = self.runtime.inspect_recovery(self.run_id)
+        self.assertTrue(inspection["eligible"], inspection)
+        self.assertEqual(inspection["workspace"]["state"], "observed")
+        result = self.runtime.reconcile(self.run_id, "processes stopped", ["GBK workspace inspected"],
+                                        inspection["workspace"]["digest"])
+        self.assertEqual(result["status"], "unknown")
+        self.assertEqual(result["reconciliation"]["outcome"], "confirmed_stopped")
+        self.assertFalse(self.marker.exists())
+
     def test_reconcile_refuses_missing_process_identity(self):
         (self.run / "child.json").write_text(json.dumps({}))
         inspection = self.runtime.inspect_recovery(self.run_id)
@@ -229,8 +242,14 @@ print(json.dumps({'type':'result','subtype':'success','session_id':s,'structured
                      "child_started": False, "terminal": True, "reason": "fixture validation failure"}
         path = self.runtime._lifecycle_path(run_id); path.parent.mkdir(parents=True); path.write_text(json.dumps(lifecycle))
         # _write_bound_record replaced the registry, so setUp's run no longer
-        # exists; drop its marker rather than letting this one overwrite it.
-        self.marker.unlink()
+        # exists; drop both fixture-owned mirrors. Recovery must not delete
+        # an unrelated run's legacy mirror merely because it shares this lane.
+        lane = bridge.lane_identity(self.repo)
+        prior = [(marker, value) for marker, value in bridge.unknown_markers(lane)
+                 if isinstance(value, dict) and value.get("run_id") == self.run_id]
+        self.assertEqual({marker.parent for marker, _ in prior}, set(bridge.unknown_marker_roots()))
+        for marker, _ in prior:
+            marker.unlink()
         self.runtime._mark_unknown_lane(str(self.repo), run_id, "fixture stale marker")
 
         restarted = Runtime(self.root / "state")

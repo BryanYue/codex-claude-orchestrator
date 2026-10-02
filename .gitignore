@@ -7,3 +7,9 @@ dist/
 .pytest_cache/
 *.egg-info/
 coverage/
+
+.mypy_cache/
+.ruff_cache/
+# Private task evidence and the locally supplied independent review plan.
+docs/tasks/2026-10-03-independent-review/
+docs/plans/2026-10-02-review-workflow-improvement-plan.md

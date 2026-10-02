@@ -299,10 +299,32 @@ print(json.dumps({'type':'result','subtype':'success','session_id':s,'modelUsage
         try:
             with patch.object(self.runtime, "cancel"), \
                  patch.object(self.runtime, "_update", side_effect=terminal_before_close_mutation), \
-                 patch("runtime.time.monotonic", side_effect=[0.0, 9.0]):
+                 patch("runtime.time.monotonic", side_effect=[0.0, 60.0]):
                 self.runtime.close()
             self.assertEqual(self.runtime._registry()["runs"][run_id]["status"], "reported")
             self.assertFalse(self.runtime._unknown_marker(str(self.repo)).exists())
+        finally:
+            self.runtime._workers.pop(run_id, None)
+            self.runtime._closing = False
+
+    def test_close_waits_for_cleanup_that_finishes_after_eight_seconds(self):
+        run_id = "run-slow_cleanup"
+        self.runtime._workers[run_id] = (mock.Mock(), mock.Mock())
+        now = [0.0]
+
+        def advance(seconds):
+            now[0] += seconds
+            if now[0] >= 9.5:
+                self.runtime._workers.pop(run_id, None)
+
+        try:
+            with patch.object(self.runtime, "cancel"), \
+                 patch.object(self.runtime, "_mark_unknown_lane") as unknown, \
+                 patch("runtime.time.monotonic", side_effect=lambda: now[0]), \
+                 patch("runtime.time.sleep", side_effect=advance):
+                self.runtime.close()
+            self.assertFalse(self.runtime._workers)
+            unknown.assert_not_called()
         finally:
             self.runtime._workers.pop(run_id, None)
             self.runtime._closing = False
@@ -595,6 +617,14 @@ print(json.dumps({'type':'result','subtype':'success','session_id':s,'modelUsage
         lane = bridge.lane_identity(self.repo)
         return [value for _, value in bridge.unknown_markers(lane) if isinstance(value, dict) and value.get("run_id") == run_id]
 
+    def assert_dual_own_markers(self, run_id):
+        lane = bridge.lane_identity(self.repo)
+        markers = [(path, value) for path, value in bridge.unknown_markers(lane)
+                   if isinstance(value, dict) and value.get("run_id") == run_id]
+        roots = set(bridge.unknown_marker_roots())
+        self.assertEqual(len(markers), len(roots), "both markers that could not be unlinked still block")
+        self.assertEqual({path.parent for path, _ in markers}, roots)
+
     def failing_cleanup(self, *, leave_marker=True):
         """A transient unlink fault; optionally this run's own marker is what could not be removed."""
         def fail(cwd, run_id):
@@ -644,7 +674,7 @@ print(json.dumps({'type':'result','subtype':'success','session_id':s,'modelUsage
                 run_id = self.settle_with_failed_cleanup(revision, status=status)
                 record = self.runtime._registry()["runs"][run_id]
                 self.assertEqual((record["status"], record["admission_cleanup"]["state"]), (status, "pending"))
-                self.assertEqual(len(self.own_markers(run_id)), 1, "the marker that could not be unlinked still blocks")
+                self.assert_dual_own_markers(run_id)
                 revision += 1
                 next_run = self.runtime.start(self.packet(revision=revision))["run_id"]
                 self.assertEqual(self.own_markers(run_id), [])
@@ -718,7 +748,7 @@ print(json.dumps({'type':'result','subtype':'success','session_id':s,'modelUsage
                     with patch.object(Runtime, "_process_presence", return_value=live), \
                             self.assertRaisesRegex(RuntimeError, "unknown prior supervised run"):
                         self.runtime.start(self.packet(revision=2))
-                self.assertEqual(len(self.own_markers(run_id)), 1)
+                self.assert_dual_own_markers(run_id)
                 cleanup = self.runtime._registry()["runs"][run_id]["admission_cleanup"]
                 self.assertEqual(cleanup["state"], "pending")
                 self.assertIn("proof", cleanup["error"])

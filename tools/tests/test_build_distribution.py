@@ -21,20 +21,11 @@ import build_distribution as bd  # noqa: E402
 
 VERSION = "0.5.0"
 
-CONTRACT_SOURCES = {
-    "skills/codex-claude-orchestrator/scripts/bridge.py": "# bridge\n",
-    "skills/codex-claude-orchestrator/scripts/runtime.py": "# runtime\n",
-    "skills/codex-claude-orchestrator/scripts/workspace.py": "# workspace\n",
-    "skills/codex-claude-orchestrator/scripts/events.py": "# events\n",
-    "skills/codex-claude-orchestrator/scripts/named_workflow.py": "# named_workflow\n",
-    "skills/codex-claude-orchestrator/scripts/compatibility.py": "# compatibility\n",
-    "scripts/cli_validation.py": "# cli_validation\n",
-    "scripts/cli_store.py": "# cli_store\n",
-    "scripts/content_store.py": "# content_store\n",
-    "scripts/plugin_identity.py": "# plugin_identity\n",
-    "skills/codex-claude-orchestrator/scripts/usage.py": "# usage\n",
-    "skills/codex-claude-orchestrator/scripts/workflow_delivery.py": "# workflow_delivery\n",
-}
+IDENTITY_DECLARATION = json.loads((ROOT.parent / bd.CODE_IDENTITY_RELATIVE).read_bytes())
+CONTRACT_SOURCES = {relative: f"# {relative}\n" for relative in
+                    sorted(set().union(*IDENTITY_DECLARATION["purposes"].values()))
+                    if relative != "code-identity.json"}
+CONTRACT_SOURCES["code-identity.json"] = json.dumps(IDENTITY_DECLARATION)
 
 
 def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess:
@@ -143,7 +134,7 @@ class BuildDistributionTests(unittest.TestCase):
         content = base64.b64decode(
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8"
             "/x8AAwMCAO+aX1cAAAAASUVORK5CYII=")
-        (repo.root / relative).parent.mkdir()
+        (repo.root / relative).parent.mkdir(exist_ok=True)
         (repo.root / relative).write_bytes(content)
         repo.commit()
 

@@ -11,7 +11,7 @@
 | delta.md / 协议版本与 sha / 批准基线 | requirement_sources 包含明确原始约束；正式模式的 packet 携带 protocol_binding。MCP/bridge 核对批准基线中的协议和 delta 内容身份；授权来源仍由主代理核验，不能由工具生成批准 |
 | dispatch.md | 主代理按证据选 lane / 模型 / owned_files / gate / 上限，变更记录原因；不减少 delta 必需覆盖 |
 | PROGRESS / DECISIONS / DEBT / findings.jsonl / final.md | 主代理为唯一记录写入者，沿用任务现有目录；添加 run_id/run_dir 和裁决证据，不能另造 Claude 专属正式状态 |
-| 波次闸 / review / oracle 保护 | 按原文 lane 类型和项目约定执行。Claude 此桥没有 shell，构建/测试由 Codex 运行；普通单席 review 不能替代要求的完整审查或保护层 |
+| 波次闸 / review / oracle 保护 | 按原文 lane 类型和项目约定执行。strict/implement 的构建与测试由 Codex 运行；isolated review 可在副本中运行命令，但真实检查与协议闸仍由 Codex 核验；普通单席 review 不能替代要求的完整审查或保护层 |
 | 一轮自修后的裁决 | finding 身份贯穿 revision，主代理另派/回退/park；仅暂停依赖新决定的工作 |
 | 收官 | 对照原句、职责、不变量与事实 owner，完成适用闸和单源性审计；不能只看工具 success |
 
@@ -40,4 +40,4 @@
 
 ## 能力边界
 
-本插件提供执行约束、真实事件、版本身份和结果证据。v2.9 所要求的正式 oracle 清单登记、实际 OS sandbox、各项目构建/下游/设备闸，由对应项目和运行宿主提供。缺失必需保护时停止依赖它的执行，不把项目 enable、hook 或一次探针说成完整保护。不自动安装整套全局 hook，不自动合入、发布，不把所有任务强制升级为完整协议。
+本插件提供执行约束、真实事件、版本身份和结果证据。v2.9 所要求的正式 oracle 清单登记、完整 oracle OS sandbox、各项目构建/下游/设备闸，由对应项目和运行宿主提供。isolated review 对原仓及要求源的 OS 写保护不等于已部署完整协议保护。缺失必需保护时停止依赖它的执行，不把项目 enable、hook 或一次探针说成完整保护。不自动安装整套全局 hook，不自动合入、发布，不把所有任务强制升级为完整协议。

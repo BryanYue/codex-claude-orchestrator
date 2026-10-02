@@ -4,8 +4,9 @@ This covers the two install paths for `codex-claude-orchestrator` and the
 first-use preparation both share. See [git-marketplace.md](git-marketplace.md)
 for the Git-specific commands and identity, and [RELEASE-VERIFICATION.md](../RELEASE-VERIFICATION.md) for
 which of the steps below have actually been exercised for the current version.
-The current release is `v0.6.2`; the completed candidate and published-tag
-reinstall checks are recorded there separately from older experiments.
+This documentation targets `v0.7.0`, build `0.7.0+codex.20261003090000`.
+Source, distribution and reinstall evidence are recorded separately from older
+experiments; an upgrade needs a fresh MCP connection.
 
 ## Two install paths
 
@@ -113,6 +114,7 @@ order:
 | 0.6.1 diagnostics reports a startup code mismatch or unreadable plugin code | The loaded Runtime and current files cannot establish the same identity | Start a new MCP connection with the installed version; do not delete markers or repeatedly dispatch |
 | The old chat errors after a plugin source switch, while a fresh connection works | The original MCP process may still refer to the removed installation | Reconnect or restart the client, then check the actual loaded version; do not infer it from the install inventory |
 | A previous `unknown` still blocks dispatch after reconnecting | The old run has separate unresolved execution evidence | Inspect that run with the normal recovery tools; reconnecting alone cannot establish whether Claude started |
+| Isolated review reports OS protection unavailable | The required macOS source-write protection could not be established | Use strict read-only review, or resolve the specific host restriction; a clone alone is insufficient |
 | Delegation is blocked even though the plugin is installed | Claude readiness (steps 2–4) is separate from plugin registration (this doc's "Two install paths") | Re-check readiness with `claude_cli_status`/diagnostics, not just install success |
 
 ## Migrating from the local catalog to a Git source
@@ -186,3 +188,19 @@ removing that run's marker. Use the normal recovery inspection and reconciliatio
 tools; do not fabricate startup records or delete markers. Historical unknown
 runs without sufficient evidence remain blocked, and changing connections does
 not resolve that separate uncertainty.
+
+## Review and guidance compatibility in 0.7.0
+
+A new Git review with the preserved original `user_request` defaults to an
+independent writable copy. OS protection restricts writes to the original
+repository, Git metadata and external requirement sources. It is not a
+credential or network sandbox. External MCP is disabled. Legacy callers without
+an original request keep strict review; artifacts directories are always strict.
+Implementation still edits only declared files. Workflow availability does not
+prove invocation, completion or adequate coverage; Codex verifies those facts.
+
+Guidance is bundled with the plugin. Online content check/review/switch tools
+are retired; read/status remain. Old activation state does not select guidance
+for new runs, while immutable historical snapshots and original resume bindings
+remain verifiable. After an upgrade, inspect the original run before starting a
+new one; changed code or CLI identity can require a fresh revision.

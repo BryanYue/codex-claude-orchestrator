@@ -3,6 +3,7 @@ import argparse
 import importlib.util
 import json
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -96,6 +97,95 @@ print(json.dumps(result))
                                 text=True, capture_output=True, env=env)
         return result, run
 
+    def test_shutdown_signals_at_preflight_launch_and_collection_keep_cleanup_evidence(self):
+        module = load_bridge_module()
+        original_popen = subprocess.Popen
+        original_check = module.check_environment
+        original_cleanup = module.terminate_group
+        original_scope = module.scope_violations
+        lane = module.lane_identity(self.repo)
+        for phase in ("preflight", "launch", "collection", "unconfirmed"):
+            with self.subTest(phase=phase):
+                run = self.root / ("shutdown-" + phase)
+                packet_path = self.root / ("shutdown-" + phase + ".json")
+                packet_path.write_text(json.dumps(self.packet()))
+                args = argparse.Namespace(packet=str(packet_path), run_dir=str(run), timeout=3, resume_from=None)
+                children = []
+                saved = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGHUP)}
+
+                def checked(*a, **kw):
+                    answer = original_check(*a, **kw)
+                    if phase == "preflight":
+                        signal.raise_signal(signal.SIGTERM)
+                    return answer
+
+                def popen(command, *a, **kw):
+                    proc = original_popen(command, *a, **kw)
+                    if "--json-schema" in command:
+                        children.append(proc)
+                        if phase in {"launch", "unconfirmed"}:
+                            # A live child exists but _run has not assigned proc.
+                            signal.raise_signal(signal.SIGTERM)
+                    return proc
+
+                def cleanup(proc):
+                    signal.raise_signal(signal.SIGHUP)
+                    signal.raise_signal(signal.SIGTERM)
+                    error = original_cleanup(proc)
+                    self.assertIsNone(error)
+                    return "injected unconfirmed group stop" if phase == "unconfirmed" else None
+
+                def scope(*a, **kw):
+                    answer = original_scope(*a, **kw)
+                    if phase == "collection":
+                        signal.raise_signal(signal.SIGTERM)
+                    return answer
+
+                try:
+                    with mock.patch.object(module, "check_environment", side_effect=checked), \
+                         mock.patch.object(module.subprocess, "Popen", new=popen), \
+                         mock.patch.object(module, "terminate_group", side_effect=cleanup), \
+                         mock.patch.object(module, "scope_violations", side_effect=scope):
+                        module.run(args)
+                    expected = "unknown" if phase == "unconfirmed" else "cancelled"
+                    self.assertEqual(json.loads((run / "receipt.json").read_text())["status"], expected)
+                    self.assertEqual(json.loads((run / "state.json").read_text())["status"], expected)
+                    self.assertEqual(bool(children), phase != "preflight")
+                    for proc in children:
+                        self.assertIsNotNone(proc.poll())
+                        self.assertTrue(module.process_group_stopped(proc.pid))
+                    self.assertEqual(bool(module.unknown_markers(lane)), phase == "unconfirmed")
+                    for sig, handler in saved.items():
+                        self.assertEqual(signal.getsignal(sig), handler)
+                finally:
+                    for proc in children:
+                        if proc.poll() is None:
+                            original_cleanup(proc)
+                    for marker, value in module.unknown_markers(lane):
+                        if value.get("run_id") == run.name:
+                            marker.unlink(missing_ok=True)
+
+    def test_initialization_write_failure_keeps_packet_and_failed_receipt(self):
+        module = load_bridge_module()
+        packet_path = self.root / "initialization.json"
+        packet_path.write_text(json.dumps(self.packet()))
+        run = self.root / "initialization-run"
+        args = argparse.Namespace(packet=str(packet_path), run_dir=str(run), timeout=3, resume_from=None)
+        original_dump = module.dump
+
+        def dump(path, value):
+            if path.name == "cli-selection.json":
+                raise PermissionError("injected selection write failure")
+            return original_dump(path, value)
+
+        with mock.patch.object(module, "dump", side_effect=dump):
+            self.assertEqual(module.run(args), 1)
+        self.assertTrue((run / "packet.json").is_file())
+        self.assertFalse((run / "child.json").exists())
+        self.assertEqual(json.loads((run / "state.json").read_text())["status"], "failed")
+        self.assertEqual(json.loads((run / "receipt.json").read_text())["status"], "failed")
+        self.assertIn("injected selection write failure", (run / "error.json").read_text())
+
     def test_protected_aliases_and_reserved_control_directories_are_rejected(self):
         aliases = [("case", ["PrOtEcTeD.TxT"]),
                    ("unicode", ["cafe\u0301.txt"])]
@@ -175,7 +265,8 @@ print(json.dumps(result))
 
                 def popen(command, *args, **kwargs):
                     if isinstance(command, list) and "--json-schema" in command:
-                        at_launch["markers"] = [value for _, value in module.unknown_markers(lane)]
+                        at_launch["marker_paths"] = module.unknown_markers(lane)
+                        at_launch["markers"] = [value for _, value in at_launch["marker_paths"]]
                         at_launch["lifecycle"] = json.loads(lifecycle.read_text())
                         if outcome == "exec_failure":
                             raise FileNotFoundError(2, "fixture exec failure")
@@ -190,7 +281,8 @@ print(json.dumps(result))
 
                 # The claim is durable before any child can exist, and this
                 # run's own checks have already passed so it cannot self-reject.
-                self.assertEqual([value["run_id"] for value in at_launch["markers"]], [run_dir.name])
+                self.assertEqual([value["run_id"] for value in at_launch["markers"]], [run_dir.name] * 2)
+                self.assertEqual({path.parent for path, _ in at_launch["marker_paths"]}, set(module.unknown_marker_roots()))
                 claim = at_launch["markers"][0]
                 self.assertEqual((claim["lane_identity"], claim["cwd"]), (lane, str(self.repo.resolve())))
                 self.assertEqual(claim["launch_intent"]["run_dir"], str(run_dir))
@@ -199,11 +291,13 @@ print(json.dumps(result))
                                  ("launch_intent", None))
                 self.assertEqual(json.loads((run_dir / "receipt.json").read_text())["status"], receipt_status)
                 self.assertTrue(json.loads(lifecycle.read_text())["terminal"])
-                remaining = [value for _, value in module.unknown_markers(lane)]
+                remaining_paths = module.unknown_markers(lane)
+                remaining = [value for _, value in remaining_paths]
                 if released:
                     self.assertEqual(remaining, [])
                 else:
-                    self.assertEqual([value["run_id"] for value in remaining], [run_dir.name])
+                    self.assertEqual([value["run_id"] for value in remaining], [run_dir.name] * 2)
+                    self.assertEqual({path.parent for path, _ in remaining_paths}, set(module.unknown_marker_roots()))
                     self.assertEqual(remaining[0]["launch_intent"], claim["launch_intent"])
 
         got, _ = self.invoke(self.packet(), "after-uncertain-launch")

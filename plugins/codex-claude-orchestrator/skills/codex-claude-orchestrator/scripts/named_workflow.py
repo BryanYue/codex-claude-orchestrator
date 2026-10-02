@@ -237,7 +237,7 @@ def _no_symlink(path: Path, label: str) -> None:
 def _project_workflow_dirs(cwd: Path) -> list[Path]:
     root = _git_root(cwd)
     try:
-        relative = cwd.resolve().relative_to(root)
+        cwd.resolve().relative_to(root)
     except ValueError as exc:  # pragma: no cover - git root should contain cwd
         raise NamedWorkflowError("Git root does not contain cwd") from exc
     directories: list[Path] = []

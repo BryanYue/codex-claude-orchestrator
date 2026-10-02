@@ -106,19 +106,17 @@ def _is_git_root(path: Path) -> bool:
     return dot_git.exists() and not dot_git.is_symlink() and (dot_git.is_dir() or dot_git.is_file())
 
 
-def _find_git_root(start: Path) -> Path | None:
+def _find_repository_root(start: Path) -> Path | None:
+    """Return the nearest repository; nested repositories are ownership boundaries."""
     for candidate in (start, *start.parents):
         if _is_git_root(candidate):
             return candidate
     return None
 
 
-def _find_binding_root(start: Path) -> Path | None:
-    """Return the nearest repository; a nested repository is an ownership boundary."""
-    for candidate in (start, *start.parents):
-        if _is_git_root(candidate):
-            return candidate
-    return None
+# Existing internal entry names share the same ownership boundary semantics.
+_find_git_root = _find_repository_root
+_find_binding_root = _find_repository_root
 
 
 def _forbidden_root(root: Path) -> bool:
@@ -127,8 +125,7 @@ def _forbidden_root(root: Path) -> bool:
 
 
 def _project_root_from_directory(start: Path, *, exact: bool) -> Path:
-    git_root = _find_git_root(start)
-    root = git_root if exact else (_find_binding_root(start) or git_root)
+    root = _find_repository_root(start)
     if root is None:
         raise WorkflowError("cwd is not inside an existing Git project")
     if _forbidden_root(root):
@@ -345,7 +342,7 @@ def context(cwd: str) -> dict[str, Any]:
         result["check_error"] = _check_error_code(error)
         result["issues"].append(str(error))
         return _finish_summary(result)
-    root = _find_binding_root(resolved) or _find_git_root(resolved)
+    root = _find_repository_root(resolved)
     if root is None:
         result = _result_base(None, requested_cwd=requested, resolved_cwd=resolved)
         result["adoption_status"] = "unadopted"

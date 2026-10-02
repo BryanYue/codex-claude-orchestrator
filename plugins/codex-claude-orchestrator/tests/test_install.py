@@ -48,6 +48,73 @@ class InstallationTests(unittest.TestCase):
         (root / 'FILE-SHA256.json').write_text(json.dumps(hashes))
         return root, launcher
 
+    def test_failed_install_cleans_only_its_staging_and_preserves_old_catalog(self):
+        old = self.package('old', '0.3.0')
+        new, _ = self.package_with_zip_mode_launcher('new', '0.4.0', 'candidate')
+        entries = install.verify_package(new)
+        original_rename = Path.rename
+
+        def fail_stage_swap(path, target):
+            if path.name.startswith('catalog-stage-'):
+                raise OSError('injected swap failure')
+            return original_rename(path, target)
+
+        failures = (patch.object(install.shutil, 'copy2', side_effect=OSError('injected copy failure')),
+                    patch.object(Path, 'chmod', side_effect=OSError('injected chmod failure')),
+                    patch.object(Path, 'rename', new=fail_stage_swap))
+        for index, failure in enumerate(failures):
+            with self.subTest(index=index):
+                target = self.base / str(index) / 'catalog'
+                install.install_catalog(old, target, install.verify_package(old))
+                with failure, self.assertRaises(OSError):
+                    install.install_catalog(new, target, entries)
+                self.assertEqual(install.catalog_version(target), '0.3.0')
+                self.assertEqual(install.verify_package(target), install.verify_package(old))
+                self.assertEqual(list(target.parent.glob('catalog-stage-*')), [])
+
+    def test_failed_catalog_restore_copy_removes_partial_staging_but_keeps_backup(self):
+        old = self.package('old', '0.3.0')
+        new = self.package('new', '0.4.0')
+        target = self.base / 'managed/catalog'
+        install.install_catalog(old, target, install.verify_package(old))
+        backup = install.install_catalog(new, target, install.verify_package(new))
+
+        def partial_copy(source, destination, **kwargs):
+            destination.mkdir()
+            (destination / 'partial').write_text('partial copy')
+            raise OSError('injected restore copy failure')
+
+        with patch.object(install.shutil, 'copytree', side_effect=partial_copy):
+            result = install.restore_catalog_after_registration_failure(target, backup, '0.4.0')
+        self.assertEqual(result['catalog_rollback'], 'not_attempted')
+        self.assertEqual(list(target.parent.glob('catalog-restore-*')), [])
+        self.assertEqual(install.catalog_version(target), '0.4.0')
+        self.assertEqual(install.catalog_version(backup), '0.3.0')
+        self.assertEqual(install.verify_package(backup), install.verify_package(old))
+
+    def test_failed_swap_and_failed_rollback_keep_both_recoverable_copies(self):
+        old = self.package('old', '0.3.0')
+        new = self.package('new', '0.4.0')
+        target = self.base / 'managed/catalog'
+        install.install_catalog(old, target, install.verify_package(old))
+        entries = install.verify_package(new)
+        original_rename = Path.rename
+
+        def fail_swaps(path, destination):
+            if path.name.startswith(('catalog-stage-', 'catalog-previous-')):
+                raise OSError('injected swap and restore failure')
+            return original_rename(path, destination)
+
+        with patch.object(Path, 'rename', new=fail_swaps), self.assertRaises(OSError):
+            install.install_catalog(new, target, entries)
+        self.assertFalse(target.exists())
+        stages = list(target.parent.glob('catalog-stage-*'))
+        backups = list(target.parent.glob('catalog-previous-*'))
+        self.assertEqual(len(stages), 1)
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(install.verify_package(stages[0]), entries)
+        self.assertEqual(install.verify_package(backups[0]), install.verify_package(old))
+
     def test_upgrade_and_verified_rollback_preserve_previous_version(self):
         old = self.package('old', '0.3.0')
         new = self.package('new', '0.4.0')

@@ -1,16 +1,12 @@
 {
   "schema": "codex-claude-orchestrator.content/v1",
-  "content_version": "2026.10.02.4",
+  "content_version": "2026.10.03.1",
   "entry": "guide.md",
   "protocol_reference": "orchestration-protocol.md",
   "requires": {
     "content_api": 1,
     "capabilities": [
-      "check",
       "read",
-      "review",
-      "disable",
-      "rollback",
       "task_pin",
       "workflow_report_v1",
       "workflow_report_json_v1"
@@ -19,7 +15,7 @@
   "files": [
     {
       "path": "guide.md",
-      "sha256": "1f9be4dbb3acc18c40afc4e785f264d89481d0077909c6f26f865d4aee4d10ff"
+      "sha256": "5ea60176a8b9ca9f2e9b31605b3448a9f998a19b1b5d854222eeee63a210b39e"
     },
     {
       "path": "orchestration-protocol.md",
@@ -27,23 +23,23 @@
     },
     {
       "path": "protocol-integration.md",
-      "sha256": "e9e84717946ff8a92c534a56d6669c198c242e56ced9a20fdd81549c954fb514"
+      "sha256": "eb2a5d18b8571e7c3140aec36f5166111248d8ae31611b6d95e8fc0dcdc038cb"
     },
     {
       "path": "bridge.md",
-      "sha256": "793ffe21ab1464c5bb1d0813d613d2c04aa1482deb6c2c9cf23477bc4b2e3a7f"
+      "sha256": "6520227972746a1eb9b1f429f4abe1928cd97abf30c8f3cc7d6c9c84c92b010a"
     },
     {
       "path": "runtime-design.md",
-      "sha256": "fc3759c056d565ad55ec67a7c0465de15933f919f842cf9339e86f81d1e0fab0"
+      "sha256": "89ae0f4ef9fb1d8efc4ee46d50f4fa52edaafb75723e387a6f341a3f43903f0c"
     },
     {
       "path": "source-snapshot.md",
-      "sha256": "b7811bc0fb5dfd74d7df10480826ad2b46568e43afa8d5bacec8058718891a4c"
+      "sha256": "78bdd9cb41601badcfa6bb2cbc8b9ac59fb142af304ba738eda3f027585c7d3a"
     },
     {
       "path": "supervisor.md",
-      "sha256": "37ee2e9bd17257b0849db04a6ca29701bbb647ebd4b86d0fa1ba7bba1ce26b21"
+      "sha256": "246c3d44188fb10b04dbb326599bfb5dc32e479f6a174010418508508192cce6"
     }
   ]
 }

@@ -1,4 +1,4 @@
-# Codex–Claude Collaboration · 0.6.2
+# Codex–Claude Collaboration · 0.7.0
 
 [简体中文](README.md) · **English**
 
@@ -34,7 +34,7 @@ Small tasks can stay with Codex. You can also choose who handles a particular ta
 | Follow the work | A shared workbench shows tasks, execution rounds, reports and verification results. |
 | Continue or correct a task | Add instructions in the same conversation; Codex checks existing progress before proceeding. |
 
-The installation commands below select **v0.6.2**, full build `0.6.2+codex.20261002042337`. It includes the Workflow report delivery, recovery and task ordering repairs; earlier tags and packages remain frozen. See the [changelog](CHANGELOG.md) and [verification record](RELEASE-VERIFICATION.md) for changes and tested scope. Coordination guidance has a separate content version and takes effect only after Codex reviews it; it cannot upgrade plugin code.
+This page targets **v0.7.0**. Reviews preserve the original request and can reproduce issues and run tests in an independent writable copy, with OS protection against writes to the source repository. Strict read-only mode remains available. Guidance ships with the plugin; historical reports and task bindings remain intact. See the [changelog](CHANGELOG.md) and [verification record](RELEASE-VERIFICATION.md) for changes, actual checks and outstanding acceptance.
 
 ## Get started
 
@@ -44,20 +44,20 @@ The installation commands below select **v0.6.2**, full build `0.6.2+codex.20261
 - **Claude Code**, installed locally with working authentication and available usage. The plugin uses your local Claude Code directly and never downloads, updates or switches its version; you upgrade it the official way. [Install and sign in](https://code.claude.com/docs/en/quickstart)
 - **uv**, which prepares the plugin's runtime environment. [Installation guide](https://docs.astral.sh/uv/getting-started/installation/)
 
-This release has been checked on an **Apple Silicon Mac**. Intel Macs have not been separately verified; Windows and Linux are outside this release's support scope.
+The plugin targets macOS. Earlier releases have **Apple Silicon Mac** verification records; 0.7.0 coverage is recorded separately. Writable isolated review requires working macOS OS write protection and fails explicitly when unavailable; strict review is an alternative. Intel Macs have not been separately verified.
 
 ### 2. Install the plugin
 
 Run these commands in your terminal, one at a time:
 
 ```bash
-codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v0.6.2
+codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v0.7.0
 codex plugin add codex-claude-orchestrator@codex-claude-team
 ```
 
 The first adds the plugin source; the second installs the plugin. The repository is public, so no GitHub invitation or sign-in is needed.
 
-> **About versions:** `v0.6.2` fixes complete Workflow report delivery, supervision and recovery, and sorts demands by their latest execution start time. Existing `v0.5.0`, `v0.6.0` and `v0.6.1` tags remain unchanged. Use the [version-switching steps](docs/git-marketplace.md#change-a-fixed-ref-or-migrate-from-zip) to select `v0.6.2`; refreshing a fixed ref does not advance it to another tag.
+> **About versions:** This page targets `v0.7.0`, full build `0.7.0+codex.20261003090000`. The commands pin this release; source, distribution and real Claude verification are recorded separately. Existing `v0.5.0`, `v0.6.0`, `v0.6.1` and `v0.6.2` tags remain frozen. A fixed ref does not advance to another tag; use the [version-switching steps](docs/git-marketplace.md#change-a-fixed-ref-or-migrate-from-zip).
 
 **On first installation, prepare the dependencies before opening a new Codex task.** If you prefer help with the terminal, see `codex: command not found`, or have an older local installation, follow the [step-by-step guide](docs/getting-started.en.md). It also includes an installation request you can paste into Codex.
 
@@ -65,7 +65,7 @@ The first adds the plugin source; the second installs the plugin. The repository
 
 Open your project in Codex, start a new task and send this request. Replace the filename with a real file in your project:
 
-> Use the Codex–Claude collaboration plugin to have Claude review the installation steps in README.md for places a beginner might get stuck. Keep the review read-only, then check its suggestions yourself.
+> Use the Codex–Claude collaboration plugin to have Claude review the installation steps in README.md for places a beginner might get stuck. Use strict read-only mode, then check its suggestions yourself.
 
 This starts a real Claude request and uses your Claude allowance. You should see execution progress, Claude's report and Codex's assessment of the suggestions. **A returned report still needs verification before the work is considered complete.**
 
@@ -80,6 +80,10 @@ This optional setting saves collaboration rules in the project. After that, ordi
 **Review a plan before implementation**
 
 > Have Claude review docs/plan.md for gaps and unclear requirements. Check its findings and give me your assessment before making any code changes.
+
+**Review the complete implementation**
+
+> Have Claude review defects, architecture, complexity, tests, documentation and prompts. Preserve my original request, reproduce issues and run tests in an independent copy, then verify each finding and report what remains unchecked.
 
 **Implement an agreed scope**
 
@@ -117,11 +121,11 @@ Task instructions and files Claude is allowed to read are sent to the model serv
 
 **Will it change my whole project automatically?**
 
-Read-only reviews do not edit files. Implementation tasks have an explicit file scope, and Codex checks the result. The plugin does not automatically merge or publish code. You can try a single task without enabling the ongoing project workflow.
+Strict reviews only read and search. Isolated review can edit the copy, run commands and use Agent/Workflow; OS write protection covers the source repository and requirement files. This does not isolate credentials, network access or arbitrary external effects. External MCP is disabled by default. Implementation retains its explicit file scope, and Codex verifies reports and changes. The plugin does not automatically merge or publish.
 
 **Does the collaboration guide update online?**
 
-Starting in 0.6.0, Codex's collaboration guide (Markdown) can be downloaded from a fixed directory of this plugin's repository. It is checked once on first real use in each Codex session. New content is first safety-reviewed by Codex as untrusted material, and only then used for tasks started afterwards; running and resumed tasks keep their original version. You can ask Codex to disable the online content or roll back to the previously approved version at any time. When offline or when a check fails, the last approved version stays in use; before any content has been downloaded, the guide shipped with the plugin is used. This never updates the plugin code, tool permissions or your local Claude Code.
+From 0.7.0, guidance ships with each plugin version and new tasks use only bundled content. Online checking, review activation and switching are retired. Historical tasks retain their original guidance snapshots for reading and compatibility checks. An upgrade needs a new MCP connection; it does not replace running tasks.
 
 **What do the tokens and cost in the workbench mean?**
 

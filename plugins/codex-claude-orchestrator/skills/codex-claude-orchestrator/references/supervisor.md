@@ -4,9 +4,9 @@
 
 ## 派单
 
-主 Codex 发给一个监督席：本 Skill 绝对路径；任务目录与现有 PROGRESS；明确的 task/lane、cwd、revision；原始要求/批准 delta/适用协议；文件范围；约束与验收；运行上限；模型/effort；本轮 packet 或构造它所需的完整材料；主代理保留的并行核验工作。规则明确的监督默认采用宿主适用的轻量模型路由，不静默更换用户指定型号。
+主 Codex 发给一个监督席：本 Skill 绝对路径；任务目录与现有 PROGRESS；明确的 task/lane、cwd、revision；user_request 原话/原始来源/批准 delta/适用协议；review_scope、review_mode 与文件/资源范围；约束与验收；运行上限；模型/effort；本轮 packet 或构造它所需的完整材料；主代理保留的并行核验工作。规则明确的监督默认采用宿主适用的轻量模型路由，不静默更换用户指定型号。
 
-说明唯一权限归属：监督席可启动/观察/按要求取消 Claude 和回传证据；不直接改业务文件，不改项目 PROGRESS，不批准 accepted，不改变目标、oracle 或 file scope。Claude 是本轮唯一获派业务写入者。主代理负责共享记录和验收。
+说明唯一权限归属：监督席可启动/观察/按要求取消 Claude 和回传证据；不直接改业务文件，不改项目 PROGRESS，不批准 accepted，不改变目标、oracle 或 file scope。implementation 中 Claude 是本轮唯一获派业务写入者；isolated review 只在副本写入，原仓写入归属仍由主代理协调。主代理负责共享记录和验收。
 
 ## 执行
 

@@ -1,5 +1,4 @@
 """Exercise the actual stdio MCP boundary and the loopback access boundary."""
-import asyncio
 import json
 import os
 from pathlib import Path
@@ -135,6 +134,28 @@ class ViewerTests(unittest.TestCase):
         self.view.close()
         self.temp.cleanup()
 
+    def test_io_failure_returns_json_and_viewer_recovers(self):
+        request = Request(self.base + "api/snapshot?run_id=run-fixture", headers=self.headers)
+        with patch.object(self.records, "snapshot", side_effect=PermissionError("fixture unavailable")):
+            with self.assertRaises(HTTPError) as error:
+                urlopen(request, timeout=5)
+            self.assertEqual(error.exception.code, 500)
+            self.assertIn("PermissionError", json.load(error.exception)["error"])
+        with urlopen(request, timeout=5) as response:
+            self.assertEqual(json.load(response)["status"], "reported")
+        with self.assertRaises(HTTPError) as error:
+            urlopen(Request(self.base + "api/snapshot?run_id=missing", headers=self.headers), timeout=5)
+        self.assertEqual(error.exception.code, 400)
+
+    def test_homepage_io_failure_returns_http_error(self):
+        with patch.object(Path, "read_bytes", side_effect=PermissionError("fixture unavailable")):
+            with self.assertRaises(HTTPError) as error:
+                urlopen(self.base, timeout=5)
+            self.assertEqual(error.exception.code, 500)
+            self.assertIn("viewer page", json.load(error.exception)["error"])
+        with urlopen(self.base, timeout=5) as response:
+            self.assertEqual(response.status, 200)
+
     def test_capability_origin_host_and_read_only_boundary(self):
         with urlopen(self.base) as response:
             self.assertIn("text/html", response.headers["Content-Type"])
@@ -246,34 +267,20 @@ class ViewerTests(unittest.TestCase):
 
 
 class MCPTests(unittest.IsolatedAsyncioTestCase):
-    async def test_slow_maintenance_read_does_not_block_cancel_dispatch(self):
+    async def test_routine_status_and_cancellation_do_not_scan_maintenance_history(self):
         import server
-        import threading
-        entered, release, cancelled = threading.Event(), threading.Event(), threading.Event()
-        def slow_status():
-            entered.set()
-            release.wait(3)
-            return {"state": "up_to_date"}
         rt = Mock()
         rt.snapshot.return_value = {"run_id": "one", "status": "running"}
-        def cancel(*_):
-            cancelled.set()
-            return {"run_id": "one", "status": "cancelled"}
-        rt.cancel.side_effect = cancel
-        with patch.object(server, "runtime", rt), patch.object(server, "maintenance_status", slow_status), \
+        rt.cancel.return_value = {"run_id": "one", "status": "cancelled"}
+        with patch.object(server, "runtime", rt), \
+             patch.object(server, "maintenance_status", side_effect=AssertionError("unexpected historical scan")) as scan, \
              patch.object(server, "viewer", Mock(url=lambda *_: "http://127.0.0.1/fixture")):
-            status = asyncio.create_task(server.claude_status("one"))
-            stop = None
-            try:
-                self.assertTrue(await asyncio.to_thread(entered.wait, 1))
-                stop = asyncio.create_task(server.claude_cancel("one", "user requested stop"))
-                self.assertTrue(await asyncio.to_thread(cancelled.wait, 1), "maintenance blocked cancellation")
-                self.assertFalse(release.is_set())
-            finally:
-                release.set()
-                await status
-                if stop:
-                    await stop
+            status = await server.claude_status("one")
+            stopped = await server.claude_cancel("one", "user requested stop")
+            self.assertEqual(status["status"], "running")
+            self.assertEqual(stopped["status"], "cancelled")
+            rt.cancel.assert_called_once_with("one", "user requested stop")
+            scan.assert_not_called()
 
     async def test_inspection_alias_and_display_failure_never_duplicate_dispatch(self):
         import server
@@ -369,14 +376,13 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
             fake_runtime.start.side_effect = dispatch
             with patch.dict(os.environ, env), patch.object(server, "runtime", fake_runtime), \
                  patch.object(server, "viewer", Mock(url=lambda *args: "http://127.0.0.1/fixture")), \
-                 patch.object(server.cli_validation, "start", side_effect=AssertionError("dispatch must not qualify")):
+                 patch.object(server.cli_validation, "start", side_effect=AssertionError("dispatch must not qualify"), create=True):
                 created = await server.claude_start(packet)
                 self.assertEqual(created["run_id"], "fixture")
                 self.assertEqual(observed[0]["selection"]["path"], str(cli))
                 self.assertEqual(observed[0]["selection"]["source"], "CLAUDE_BIN")
                 self.assertNotIn("identity_id", observed[0])
-                self.assertEqual(created["cli_maintenance"]["policy"], "user_local_cli")
-                self.assertTrue(created["cli_maintenance"]["legacy_managed_state"]["present"])
+                self.assertNotIn("cli_maintenance", created)
                 await server.claude_start(packet, resume_run_id="old-pinned-run")
                 self.assertEqual(fake_runtime.start.call_args.kwargs["resume_run_id"], "old-pinned-run")
             self.assertEqual(sorted(path.name for path in store.iterdir()), ["selection.json", "update-policy.json"],
@@ -407,12 +413,12 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(report["claude"]["version_policy"], "diagnostic_only")
             self.assertNotIn("system", report["cli_management"])
             forbidden = AssertionError("retired version management must not run")
-            with patch.object(cli_store, "prepare", side_effect=forbidden), \
-                 patch.object(cli_store, "capture", side_effect=forbidden), \
-                 patch.object(cli_store, "activate_explicit", side_effect=forbidden), \
-                 patch.object(cli_store, "rollback_explicit", side_effect=forbidden), \
-                 patch.object(cli_store, "set_update_policy", side_effect=forbidden), \
-                 patch.object(server.cli_validation, "start", side_effect=forbidden):
+            with patch.object(cli_store, "prepare", side_effect=forbidden, create=True), \
+                 patch.object(cli_store, "capture", side_effect=forbidden, create=True), \
+                 patch.object(cli_store, "activate_explicit", side_effect=forbidden, create=True), \
+                 patch.object(cli_store, "rollback_explicit", side_effect=forbidden, create=True), \
+                 patch.object(cli_store, "set_update_policy", side_effect=forbidden, create=True), \
+                 patch.object(server.cli_validation, "start", side_effect=forbidden, create=True):
                 for action in ("prepare", "validate", "activate", "rollback", "refresh", "policy", "acknowledge"):
                     with self.subTest(action=action):
                         result = await server.claude_cli_update(action=action, policy="automatic", channel="latest",
@@ -436,8 +442,7 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
                 created = await server.claude_start(packet)
         self.assertEqual(rt.start.call_count, 1)
         self.assertEqual(created["run_id"], "created-run")
-        self.assertEqual(created["cli_maintenance"]["state"], "unavailable")
-        self.assertIn("TimeoutExpired", created["cli_maintenance"]["error"])
+        self.assertNotIn("cli_maintenance", created)
 
     async def test_actual_stdio_tools_doctor_run_events_result_and_decision(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -490,7 +495,7 @@ print(json.dumps({'type':'result','subtype':'success','session_id':s,'structured
                     for tool in listed:
                         if tool.name in {"claude_environment", "claude_diagnostics", "claude_recovery", "claude_cli_status"}:
                             self.assertTrue(tool.annotations.read_only_hint)
-                    self.assertEqual(names, {"claude_content_status", "claude_content_check", "claude_content_read", "claude_content_review", "claude_content_switch", "claude_models", "claude_environment", "claude_diagnostics", "claude_recovery", "claude_reconcile", "claude_saved_workflows", "claude_route", "claude_routing_policy", "claude_routing_set", "claude_workflow_context", "claude_workflow_enable", "claude_workflow_disable", "claude_doctor", "claude_cli_status", "claude_cli_update", "claude_start", "claude_status", "claude_runs", "claude_wait", "claude_events", "claude_details", "claude_result", "claude_cancel", "claude_decide"})
+                    self.assertEqual(names, {"claude_content_status", "claude_content_read", "claude_models", "claude_environment", "claude_diagnostics", "claude_recovery", "claude_reconcile", "claude_saved_workflows", "claude_route", "claude_routing_policy", "claude_routing_set", "claude_workflow_context", "claude_workflow_enable", "claude_workflow_disable", "claude_doctor", "claude_cli_status", "claude_cli_update", "claude_start", "claude_status", "claude_runs", "claude_wait", "claude_events", "claude_details", "claude_result", "claude_cancel", "claude_decide"})
                     async def call(name, args):
                         result = await client.call_tool(name, args)
                         self.assertFalse(result.is_error, str(result.content))
@@ -530,7 +535,7 @@ print(json.dumps({'type':'result','subtype':'success','session_id':s,'structured
                         "requirement_sources":[str(requirement)], "constraints":["No edits"], "acceptance":["Return evidence"],
                         "owned_files":[], "protected_files":[], "model":"sonnet", "effort":"low"}
                     start = await call("claude_start", {"packet": packet})
-                    self.assertEqual(start["cli_maintenance"]["policy"], "user_local_cli")
+                    self.assertNotIn("cli_maintenance", start)
                     run_id = start["run_id"]
                     cursor = 0; all_events = []; final = None
                     for _ in range(20):

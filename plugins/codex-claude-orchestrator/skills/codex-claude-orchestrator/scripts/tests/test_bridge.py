@@ -1,5 +1,6 @@
 import json
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -86,6 +87,7 @@ if mode == 'stubbornstdout':
     pathlib.Path(os.environ['CHILD_PID_FILE']).write_text(str(child.pid))
     time.sleep(.2)
 if mode == 'touch': pathlib.Path('outside.txt').write_text('outside')
+if mode == 'write_gbk': pathlib.Path('owned.txt').write_bytes(bytes.fromhex('d6d0cec420d0c2c4dac8dd0a'))
 if mode == 'protectedignored': pathlib.Path('protected.txt').write_text('tampered')
 if mode == 'touchdir': pathlib.Path('nested').mkdir(); pathlib.Path('nested/out.txt').write_text('outside')
 if mode == 'malformed': print('{bad')
@@ -122,6 +124,93 @@ else: print(json.dumps({'type':'result','subtype':'success','session_id':session
         if resume: cmd += ["--resume-from", str(resume)]
         got = subprocess.run(cmd, text=True, capture_output=True)
         return got, run
+
+    def test_non_utf8_tracked_diff_review_and_patch_preserve_bytes(self):
+        path = self.repo / "gbk.txt"
+        path.write_bytes("中文原文\n".encode("gbk"))
+        subprocess.run(["git", "-C", str(self.repo), "add", "gbk.txt"], check=True)
+        subprocess.run(["git", "-C", str(self.repo), "commit", "-qm", "GBK baseline"], check=True)
+        for staged in (False, True):
+            with self.subTest(staged=staged):
+                path.write_bytes("中文新内容\n".encode("gbk"))
+                if staged:
+                    subprocess.run(["git", "-C", str(self.repo), "add", "gbk.txt"], check=True)
+                got, run = self.invoke(self.packet(), "gbk-" + str(staged))
+                self.assertEqual(got.returncode, 0, got.stderr)
+                self.assertEqual(json.loads((run / "receipt.json").read_text())["status"], "reported")
+                self.assertEqual(json.loads((run / "git_before.json").read_text()),
+                                 json.loads((run / "git_after.json").read_text()))
+                expected = subprocess.check_output(["git", "-C", str(self.repo), "diff", "--no-ext-diff", "HEAD"])
+                self.assertEqual((run / "diff.patch").read_bytes().split(b"\n", 1)[1], expected)
+
+    def test_non_utf8_implement_finishes_after_provider_changes_owned_file(self):
+        path = self.repo / "owned.txt"
+        path.write_bytes("中文原文\n".encode("gbk"))
+        subprocess.run(["git", "-C", str(self.repo), "add", "owned.txt"], check=True)
+        subprocess.run(["git", "-C", str(self.repo), "commit", "-qm", "GBK baseline"], check=True)
+        with mock.patch.dict(os.environ, {"FAKE_MODE": "write_gbk"}):
+            got, run = self.invoke(self.packet(role="implement"), "gbk-implement")
+        self.assertEqual(got.returncode, 0, got.stderr)
+        self.assertEqual(json.loads((run / "receipt.json").read_text())["status"], "reported")
+        self.assertIn("中文 新内容\n".encode("gbk"), (run / "diff.patch").read_bytes())
+        before = json.loads((run / "git_before.json").read_text())
+        after = json.loads((run / "git_after.json").read_text())
+        self.assertNotEqual(before["guarded_content_hashes"]["owned.txt"], after["guarded_content_hashes"]["owned.txt"])
+
+    def test_utf8_snapshot_keeps_legacy_diff_hash_for_all_line_endings(self):
+        import hashlib
+        module = load_bridge_module()
+        packet = self.packet()
+        for ending in ("\n", "\r\n", "\r"):
+            with self.subTest(ending=repr(ending)):
+                (self.repo / "base.txt").write_bytes(("中文" + ending + "正常内容" + ending).encode("utf-8"))
+                snapshot = module.git_snapshot(self.repo, packet)
+                legacy_diff = "".join(subprocess.check_output(["git", "-C", str(self.repo), *args], text=True)
+                                      for args in (("diff", "--no-ext-diff"), ("diff", "--cached", "--no-ext-diff")))
+                legacy_material = (legacy_diff.encode() + json.dumps(snapshot["status_entries"], ensure_ascii=False, sort_keys=True).encode()
+                                   + json.dumps(snapshot["dirty_content_hashes"], ensure_ascii=False, sort_keys=True).encode())
+                self.assertEqual(snapshot["diff_hash"], hashlib.sha256(legacy_material).hexdigest())
+
+    def test_shutdown_signals_cancel_and_reap_the_provider_group(self):
+        module = load_bridge_module()
+        lane = module.lane_identity(self.repo)
+        for sig in (signal.SIGTERM, signal.SIGHUP):
+            with self.subTest(signal=sig):
+                packet_path = self.root / f"signal-{sig}.json"
+                packet_path.write_text(json.dumps(self.packet()))
+                run = self.root / f"signal-{sig}"
+                child = None
+                with mock.patch.dict(os.environ, {"FAKE_MODE": "no_read_sleep"}):
+                    proc = subprocess.Popen([sys.executable, str(BRIDGE), "run", "--packet", str(packet_path),
+                                             "--run-dir", str(run), "--timeout", "30"],
+                                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                try:
+                    deadline = time.monotonic() + 8
+                    while not (run / "child.json").exists() and proc.poll() is None and time.monotonic() < deadline:
+                        time.sleep(.02)
+                    self.assertTrue((run / "child.json").exists(), "provider never launched")
+                    child = json.loads((run / "child.json").read_text())["pid"]
+                    proc.send_signal(sig)
+                    out, err = proc.communicate(timeout=15)
+                    self.assertEqual(proc.returncode, 1, out + err)
+                    self.assertEqual(json.loads((run / "state.json").read_text())["status"], "cancelled")
+                    self.assertEqual(json.loads((run / "receipt.json").read_text())["status"], "cancelled")
+                    self.assertEqual(json.loads((run / "cancel.json").read_text())["signal"], sig)
+                    with self.assertRaises(ProcessLookupError):
+                        os.killpg(child, 0)
+                    self.assertFalse(module.unknown_markers(lane))
+                finally:
+                    if proc.poll() is None:
+                        proc.kill()
+                    proc.communicate(timeout=5)
+                    if child is not None:
+                        try:
+                            os.killpg(child, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                    for marker, value in module.unknown_markers(lane):
+                        if value.get("run_id") == run.name:
+                            marker.unlink(missing_ok=True)
 
     def doctor(self, *extra):
         got = subprocess.run([sys.executable, str(BRIDGE), 'doctor', '--cwd', str(self.repo), *extra],
@@ -569,7 +658,11 @@ else: print(json.dumps({'type':'result','subtype':'success','session_id':session
             self.assertEqual(json.loads(marker.read_text())["run_id"], run.name)
             if kind == "exception":
                 self.assertIn("injected collection failure", json.loads((run/"error.json").read_text())["original_error"])
-            marker.unlink()
+            markers = bridge.unknown_markers(bridge.lane_identity(self.repo))
+            self.assertEqual(len(markers), 2)
+            for path, value in markers:
+                self.assertEqual(value["run_id"], run.name)
+                path.unlink()
 
     def test_timeout_is_recorded(self):
         os.environ["FAKE_MODE"] = "sleep"

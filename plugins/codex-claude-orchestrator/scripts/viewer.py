@@ -18,6 +18,7 @@ except ModuleNotFoundError:  # A partially upgraded plugin still serves its immu
 
 ROOT = Path(__file__).resolve().parents[1]
 ARTIFACTS = {
+    "review_report": "review-report.json", "review_workspace": "review-workspace.json",
     "packet": "packet.json", "result": "result.json", "receipt": "receipt.json",
     "environment": "environment.json", "decision": "decision.json", "decision_history": "decision-history.json",
     "git_before": "git_before.json", "git_after": "git_after.json", "diff": "diff.patch",
@@ -81,6 +82,24 @@ def _workflow_delivery():
 
 
 def read_artifact(runtime, run_id: str, name: str, *, index: int = 0, offset: int = 0, limit: int | None = None) -> dict:
+    if name == "review_report":
+        snapshot = runtime.snapshot(run_id)
+        result = snapshot.get("result") if isinstance(snapshot.get("result"), dict) else {}
+        report = result.get("review_report")
+        answer = {"name": name, "content": None}
+        delivery = _workflow_delivery()
+        # Capture metadata binds this canonical run artifact; CLI paths are never followed.
+        if isinstance(index, bool) or not isinstance(index, int) or index != 0:
+            raise ValueError("review_report index must be 0")
+        if not isinstance(report, dict):
+            return {**answer, "available": False, "state": "not_recorded"}
+        if report.get("status") != "delivered":
+            return {**answer, "available": False, "state": "not_collected"}
+        recorded = {"path": report.get("path"), "size_bytes": report.get("bytes"), "sha256": report.get("sha256")}
+        return delivery.read_captured_page(Path(snapshot["run_dir"]), recorded,
+                                          expected_path=ARTIFACTS[name], answer=answer, offset=offset,
+                                          limit=delivery.DEFAULT_PAGE_BYTES if limit is None else limit,
+                                          representation="exact_json")
     if name in PAGED_ARTIFACTS:
         snapshot = runtime.snapshot(run_id)
         result = snapshot.get("result") if isinstance(snapshot.get("result"), dict) else {}
@@ -152,7 +171,11 @@ class Viewer:
                     return self.send(403, {"error": "Invalid origin"})
                 route = urlparse(self.path)
                 if route.path == "/":
-                    return self.send(200, (ROOT / "assets/dashboard.html").read_bytes(), "text/html; charset=utf-8")
+                    try:
+                        body = (ROOT / "assets/dashboard.html").read_bytes()
+                    except OSError:
+                        return self.send(500, {"error": "Unable to read the viewer page"})
+                    return self.send(200, body, "text/html; charset=utf-8")
                 if not _authorized(self.headers.get("Authorization"), viewer.token):
                     return self.send(401, {"error": "Reopen the details link supplied by Claude tools."})
                 q = parse_qs(route.query)
@@ -183,6 +206,8 @@ class Viewer:
                     return self.send(404, {"error": "Not found"})
                 except (ValueError, RuntimeError, KeyError, FileNotFoundError) as exc:
                     return self.send(400, {"error": str(exc)})
+                except OSError as exc:
+                    return self.send(500, {"error": f"{type(exc).__name__}: {exc}"})
 
             def do_POST(self):
                 self.send(405, {"error": "Read-only viewer; send execution instructions through Codex."})

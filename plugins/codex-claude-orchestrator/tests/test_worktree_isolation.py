@@ -86,6 +86,14 @@ class WorktreeLaneTests(unittest.TestCase):
             for path, _ in bridge.unknown_markers(lane):
                 path.unlink(missing_ok=True)
 
+    def assert_marker_owners(self, expected):
+        markers = bridge.unknown_markers(self.lane)
+        roots = set(bridge.unknown_marker_roots())
+        self.assertEqual(sorted(value["run_id"] for _, value in markers), sorted(expected * len(roots)))
+        for owner in expected:
+            self.assertEqual({path.parent for path, value in markers if value["run_id"] == owner}, roots)
+        return markers
+
     def packet(self, cwd: Path, task: str, revision: int = 1) -> dict:
         return {"task_id": task, "revision": revision, "role": "review", "cwd": str(cwd), "objective": "fixture",
                 "requirement_sources": [str(self.requirement)], "constraints": [], "acceptance": [],
@@ -190,8 +198,7 @@ class WorktreeLaneTests(unittest.TestCase):
         self.wait_until(lambda: bridge.process_group_stopped(bridge_pid), "killed bridge group did not disappear")
         self.assertFalse(bridge.process_group_stopped(child_group), "the child must outlive both crashes")
 
-        markers = bridge.unknown_markers(self.lane)
-        self.assertEqual([value.get("run_id") for _, value in markers], [run_id])
+        markers = self.assert_marker_owners([run_id])
         marker = markers[0][1]
         self.assertEqual((marker["lane_identity"], marker["cwd"]), (self.lane, str(self.child.resolve())))
         self.assertEqual(marker["launch_intent"]["run_dir"], str(state_a.resolve() / "runs" / run_id))
@@ -223,8 +230,7 @@ class WorktreeLaneTests(unittest.TestCase):
         live = restarted.inspect_recovery(run_id)
         self.assertFalse(live["eligible"], live)
         self.assertNotEqual(live["child"]["state"], "stopped")
-        escalated = bridge.unknown_markers(self.lane)
-        self.assertEqual([value.get("run_id") for _, value in escalated], [run_id])
+        escalated = self.assert_marker_owners([run_id])
         self.assertEqual(escalated[0][1]["state_root"], str(state_a.resolve()))
         with self.assertRaisesRegex(RuntimeError, "unknown prior"):
             state_b.start(self.packet(self.repo, "while-child-lives"))
@@ -296,11 +302,12 @@ class WorktreeLaneTests(unittest.TestCase):
 
     def test_inherited_and_standalone_bridge_locks_agree_on_the_worktree_lane(self):
         held = self.runtime._lane_lock(self.lane)
-        bridge.lane_lock_path(self.linked_lane).touch()
+        linked = bridge.lock_file(self.linked_lane, "linked fixture")
+        linked.close()
         try:
             with self.assertRaisesRegex(bridge.BridgeError, "active run"):
                 bridge.lock_file(bridge.lane_identity(self.child), "standalone")
-            with mock.patch.dict(os.environ, {"CODEX_CLAUDE_LANE_FD": str(held.fileno())}):
+            with mock.patch.dict(os.environ, held.inherited_environment()):
                 inherited = bridge.lock_file(bridge.lane_identity(self.child), "inherited")
                 inherited.close()
                 with self.assertRaisesRegex(bridge.BridgeError, "does not match"):
@@ -350,11 +357,9 @@ class WorktreeLaneTests(unittest.TestCase):
     def test_reconcile_clears_only_its_own_marker_in_a_shared_lane(self):
         self.unknown_fixture(self.runtime, self.child, "run-child_one")
         self.unknown_fixture(self.runtime, self.sibling, "run-sibling_two")
-        owners = sorted(value["run_id"] for _, value in bridge.unknown_markers(self.lane))
-        self.assertEqual(owners, ["run-child_one", "run-sibling_two"], "second marker must not replace the first")
+        self.assert_marker_owners(["run-child_one", "run-sibling_two"])
         self.reconcile(self.runtime, "run-child_one")
-        remaining = [value["run_id"] for _, value in bridge.unknown_markers(self.lane)]
-        self.assertEqual(remaining, ["run-sibling_two"])
+        self.assert_marker_owners(["run-sibling_two"])
         with self.assertRaisesRegex(RuntimeError, "unknown"):
             self.runtime.start(self.packet(self.repo, "still-blocked"))
         self.reconcile(self.runtime, "run-sibling_two")
@@ -368,7 +373,7 @@ class WorktreeLaneTests(unittest.TestCase):
         digest = self.runtime.snapshot("run-child_one")["reconciliation"]["workspace_digest"]
         with self.assertRaisesRegex(RuntimeError, "belongs to another"):
             self.runtime.reconcile("run-child_one", "retry", ["fixture"], digest)
-        self.assertEqual([value["run_id"] for _, value in bridge.unknown_markers(self.lane)], ["run-foreign"])
+        self.assert_marker_owners(["run-foreign"])
 
     def test_legacy_exact_cwd_marker_from_subdirectory_still_blocks_its_worktree(self):
         legacy_key = hashlib.sha256(str(self.child.resolve()).encode()).hexdigest()
@@ -403,8 +408,7 @@ class WorktreeLaneTests(unittest.TestCase):
         restarted = Runtime(state_a)
         self.addCleanup(restarted.close)
         self.assertEqual(restarted._registry()["runs"][run_id]["status"], "unknown")
-        markers = bridge.unknown_markers(self.lane)
-        self.assertEqual([value["run_id"] for _, value in markers], [run_id])
+        markers = self.assert_marker_owners([run_id])
         self.assertIsNone(markers[0][1]["lane_identity"], "an unresolved cwd must not claim a worktree lane")
         self.assertEqual(bridge.unknown_markers(self.linked_lane), [])
 
@@ -517,7 +521,7 @@ class WorktreeLaneTests(unittest.TestCase):
         fresh = self.runtime.inspect_recovery(run_id)
         with self.assertRaisesRegex(RuntimeError, "belongs to another"):
             self.runtime.reconcile(run_id, "foreign", ["fixture"], fresh["workspace"]["digest"])
-        self.assertEqual([value["run_id"] for _, value in bridge.unknown_markers(self.lane)], ["run-foreign"])
+        self.assert_marker_owners(["run-foreign"])
         self.assertIsNone(self.runtime._registry()["runs"][run_id].get("reconciliation"))
 
         (self.runtime.runs_root / run_id / "child.json").write_text(

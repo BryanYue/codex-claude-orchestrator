@@ -726,7 +726,9 @@ function taskDisplay(runs){
   return {runs:sorted,current,title,project:projectName(rep.cwd),cwd:rep.cwd,rep,latestStart:latestStartOf(sorted)};
 }
 
+function connectionLabel(){return ['online','recovered'].includes(conn.status)?'已连接':conn.status==='offline'?conn.failureLabel:conn.status==='token_invalid'?'凭证失效':'连接中';}
 function renderConnection(){
+  $('drawerConnection').textContent=connectionLabel();
   const pill=$('connection');
   pill.classList.remove('offline','token-invalid');
   if(conn.status==='offline'){pill.classList.add('offline');pill.textContent=conn.failureLabel+' · 显示 '+(conn.lastCriticalSyncAt?new Date(conn.lastCriticalSyncAt).toLocaleTimeString('zh-CN',{hour12:false}):'--')+' 的记录';}
@@ -989,7 +991,22 @@ function denialText(item){
   if(tool||reason)return [tool,target,reason].filter(Boolean).map(first).join(' · ');
   return boundedJson(item);
 }
-function workflowPageKey(runId,index){return runId+'\u0000'+index;}
+function workflowPageKey(runId,index,name='workflow_report'){return runId+'\u0000'+name+'\u0000'+index;}
+function renderReviewReport(box,view,focusKey){
+  const report=view.result?.review_report;
+  if(!report||typeof report!=='object')return;
+  const section=el('div',undefined,'workflow-report');
+  section.append(el('h3','完整审查报告'));
+  if(report.status!=='delivered'){section.append(el('p','完整报告未收集；父级摘要不能代替它。','meta'));box.append(section);return;}
+  section.append(el('p',`${report.bytes} 字节 · SHA-256 ${String(report.sha256||'').slice(0,12)}… · 内容仍需 Codex 核验。`,'meta'));
+  const page=st.workflowPages.get(workflowPageKey(view.run_id,0,'review_report'));
+  if(page?.text)section.append(el('div',page.text,'artifact'));
+  if(page?.error)section.append(el('p',page.error,'meta'));
+  let button=null;
+  if(page&&page.next===null)section.append(el('p',`已载入全文 ${page.total} 字节；每页均由本机服务按记录的 SHA-256 校验。`,'meta'));
+  else{button=el('button',page?.loading?'正在读取…':page?'继续加载':'加载完整报告','quiet small');button.type='button';button.dataset.focusKey='review-report';button.disabled=Boolean(page?.loading);button.onclick=()=>loadWorkflowPage(view.run_id,0,'review_report');section.append(button);}
+  box.append(section);if(button&&focusKey===button.dataset.focusKey)button.focus({preventScroll:true});
+}
 // The captured Workflow output is shown apart from the parent summary, page by page from the
 // hash-checked artifact; it is evidence for Codex, never an acceptance by itself.
 function renderWorkflowReport(box,view,focusKey){
@@ -1022,15 +1039,15 @@ function renderWorkflowReport(box,view,focusKey){
   box.append(section);
   refocus?.focus({preventScroll:true});
 }
-async function loadWorkflowPage(runId,index){
-  const key=workflowPageKey(runId,index);
+async function loadWorkflowPage(runId,index,name='workflow_report'){
+  const key=workflowPageKey(runId,index,name);
   const page=st.workflowPages.get(key)||{text:'',next:0,total:null,sha:null,loading:false,error:''};
   if(page.loading||page.next===null)return;
   page.loading=true;page.error='';st.workflowPages.set(key,page);
   if(st.run===runId)renderDetail();
   try{
-    const a=await api('/api/artifact',{run_id:runId,name:'workflow_report',index,offset:page.next,limit:65536},{});
-    if(!a.available)page.error='完整报告暂不可读（'+(a.state||'unknown')+'）；这不表示 Workflow 没有运行。';
+    const a=await api('/api/artifact',{run_id:runId,name,index,offset:page.next,limit:65536},{});
+    if(!a.available)page.error='完整报告暂不可读（'+(a.state||'unknown')+'）；请核对报告交付记录。';
     else if(a.offset_bytes!==page.next||(page.sha!==null&&a.sha256!==page.sha)||(page.total!==null&&a.total_bytes!==page.total))
       page.error='分页与已载入部分不一致，已停止拼接；请核对报告产物。';
     else{page.text+=a.content;page.next=a.next_offset_bytes;page.total=a.total_bytes;page.sha=a.sha256;}
@@ -1042,7 +1059,7 @@ function renderReport(view,hasDetail){
   const rp=reportFact(view,hasDetail);
   $('reportTag').textContent=reportKindText(rp.kind)+(view.superseded_by?' · 历史':'');
   const focused=document.activeElement?.dataset?.focusKey;
-  const workflowFocus=typeof focused==='string'&&focused.startsWith('workflow-')?focused:null;
+  const workflowFocus=typeof focused==='string'&&(focused.startsWith('workflow-')||focused==='review-report')?focused:null;
   const box=$('reportBody');box.className='report-box tone-'+rp.tone;box.replaceChildren();
   const result=hasDetail?view.result:undefined;
   const structured=structuredOf(result);
@@ -1089,7 +1106,7 @@ function renderReport(view,hasDetail){
       const details=el('details');details.append(el('summary','原 Claude 报告（已退回，未采纳）'),el('p',structured.summary,'prose'));box.append(details);
     }
   }
-  if(hasDetail)renderWorkflowReport(box,view,workflowFocus);
+  if(hasDetail){renderReviewReport(box,view,workflowFocus);renderWorkflowReport(box,view,workflowFocus);}
   $('reportSource').textContent=view.superseded_by?'历史记录':'';
   const evidenceRoot=$('evidenceBody');evidenceRoot.replaceChildren();
   const title=(rp.kind==='failed_with_content'||rp.kind==='failed_no_structured')?'失败证据与未确认项':'核验依据与未确认项';
@@ -1630,7 +1647,7 @@ $('copyPromptBtn').onclick=async()=>{
 $('maintenanceBtn').onclick=()=>{
   $('drawerOverlay').classList.remove('hidden');$('maintenanceBtn').setAttribute('aria-expanded','true');
   st.focusReturn=document.activeElement;$('drawerClose').focus();
-  $('drawerConnection').textContent=['online','recovered'].includes(conn.status)?'已连接':conn.status==='offline'?'连接中断':conn.status==='token_invalid'?'凭证失效':'连接中';
+  $('drawerConnection').textContent=connectionLabel();
   renderMaintenance();
 };
 function closeDrawer(){$('drawerOverlay').classList.add('hidden');$('maintenanceBtn').setAttribute('aria-expanded','false');if(st.focusReturn)st.focusReturn.focus();}

@@ -4,6 +4,19 @@
 
 以下为版本变更记录，保留实现与验证细节。首次使用见[快速开始](docs/getting-started.zh-CN.md)，实际验证范围见[发布验证](RELEASE-VERIFICATION.md)。
 
+## 0.7.0：完整审查、副本写保护与随包协调说明
+
+版本标签 `v0.7.0`，完整构建 `0.7.0+codex.20261003090000`。源码、分发与真实 Claude 的验证范围分别记录于 [验证记录](RELEASE-VERIFICATION.md)，旧发布条目、标签与资产保持原身份。
+
+- 审查包保留 `user_request` 原话及来源，`review_scope=defects|quality|full` 默认 full；覆盖与执行权限分别选择。缺原话的旧调用保持 strict 并标明 legacy_unspecified，不把 objective 冒充用户原话。
+- 带原话的新 MCP Git review 默认 isolated：在独立可写 clone 中使用 Bash、Agent、Skill、Workflow 与测试工具，OS 限制原仓、Git 元数据、要求源和运行控制文件写入。保护不可用明确拒绝，可选 strict。它不是凭证/网络沙箱，外部 MCP 默认关闭；artifacts 保持 strict，implement 的 owned_files 边界保留。
+- 完整报告写到副本 `.codex-review/<run_id>.json`，采集后保留哈希、父级结果、工具和 Workflow 完成事实。可选内置 `codex-full-review` 脚本帮助分维度审查，不强制使用或凑发现。副本随 run 保留供纠正/resume，returned/unknown 不自动清理。
+- findings 支持分类和证据置信度；有 findings 时逐项记录 accepted/downgraded/rejected，降级或拒绝保留理由。原发现和失败核验不删除，reported 仍须 Codex 独立核验。
+- 协调说明随插件固定发布，在线 content check/review/switch 退役；read/status、不可变历史快照与原任务绑定保留。SKILL/guide 精简去重，legacy 命名只读 Workflow 入口继续兼容。
+- 删除退役 CLI 下载、资格验证与切换执行链；按职责拆分启动、进程监督、流解析和结果校验，集中原子写入、文件读取及按用途区分的身份声明。引入固定版本 Ruff 和局部 strict Mypy 检查。
+- 执行锁迁移到持久目录，同时继承旧锁与双写 unknown 标记；保留旧进程兼容和按 owner 核验的恢复机制。例行状态查询不再扫描历史 CLI 维护数据。
+- 修复非 UTF-8 Git 差异、SIGTERM/SIGHUP 清理、Viewer I/O 错误、未知旧验证任务取消、早期运行目录失败与关闭等待预算；安装 staging 失败清理本次副本，历史备份保留。源码/构建/安装/真实运行验证分别记录，不在本条目补造通过数。
+
 ## 0.6.2：Workflow 交付、运行恢复与需求排序
 
 正式版本 `v0.6.2`，完整构建标识 `0.6.2+codex.20261002042337`。发布已完成独立审查与回归的修复，安装命令与版本说明同步更新；旧 `v0.6.1` 标签及资产保持不变。实际验证范围见 [验证记录](RELEASE-VERIFICATION.md)。

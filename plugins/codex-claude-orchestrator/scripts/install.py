@@ -98,29 +98,34 @@ def install_catalog(root, target, entries):
         if not marker.is_file() or json.loads(marker.read_text()).get("name") != "codex-claude-team":
             raise RuntimeError(f"已有非本插件管理目录：{target}")
     staging = Path(tempfile.mkdtemp(prefix="catalog-stage-", dir=target.parent))
-    for relative in entries:
-        dest = staging / relative
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(root / relative, dest)
-    # zip extraction can discard execute bits. Restore only the known MCP
-    # launcher after its source content was verified by FILE-SHA256; no other
-    # package path receives a mode change.
-    if LAUNCHER_RELATIVE in entries:
-        launcher = staging / LAUNCHER_RELATIVE
-        if launcher.is_symlink() or not launcher.is_file():
-            raise RuntimeError("安装包 MCP 启动器无效。")
-        launcher.chmod(launcher.stat().st_mode | stat.S_IXUSR)
-    shutil.copy2(root / "FILE-SHA256.json", staging / "FILE-SHA256.json")
     backup = None
-    if target.exists():
-        backup = target.with_name(staging.name.replace("stage", "previous"))
-        target.rename(backup)
     try:
-        staging.rename(target)
-    except OSError:
-        if backup is not None:
-            backup.rename(target)
-        raise
+        for relative in entries:
+            dest = staging / relative
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(root / relative, dest)
+        # ZIP extraction can discard execute bits. Only the verified launcher
+        # receives a mode change.
+        if LAUNCHER_RELATIVE in entries:
+            launcher = staging / LAUNCHER_RELATIVE
+            if launcher.is_symlink() or not launcher.is_file():
+                raise RuntimeError("安装包 MCP 启动器无效。")
+            launcher.chmod(launcher.stat().st_mode | stat.S_IXUSR)
+        shutil.copy2(root / "FILE-SHA256.json", staging / "FILE-SHA256.json")
+        if target.exists():
+            backup = target.with_name(staging.name.replace("stage", "previous"))
+            target.rename(backup)
+        try:
+            staging.rename(target)
+        except OSError:
+            if backup is not None:
+                backup.rename(target)
+            raise
+    finally:
+        # Keep both candidates if restoring the old catalog itself failed.
+        # Otherwise only this attempt's unpublished staging is disposable.
+        if staging.exists() and (backup is None or target.exists()):
+            shutil.rmtree(staging, ignore_errors=True)
     return backup
 
 
@@ -153,6 +158,7 @@ def restore_catalog_after_registration_failure(target, backup, candidate_version
         # rollback artifact even if the subsequent host audit is unavailable.
         shutil.copytree(backup, restore_staging, copy_function=shutil.copy2)
     except OSError as error:
+        shutil.rmtree(restore_staging, ignore_errors=True)
         return {'catalog_rollback': 'not_attempted', 'reason': f'catalog_restore_stage_failed: {error}'}
     try:
         target.rename(failed_candidate)

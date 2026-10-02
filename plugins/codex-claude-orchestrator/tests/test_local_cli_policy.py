@@ -16,6 +16,8 @@ ROOT = Path(__file__).resolve().parents[1]
 REPO = ROOT.parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import model_catalog  # noqa: E402
+import cli_store  # noqa: E402
+import cli_validation  # noqa: E402
 
 BRIDGE = ROOT / "skills/codex-claude-orchestrator/scripts/bridge.py"
 PRODUCTION_ENTRIES = [
@@ -39,6 +41,21 @@ class EntryPointTests(unittest.TestCase):
             for call in RETIRED_CALLS:
                 with self.subTest(entry=path.name, call=call):
                     self.assertNotIn(call, text)
+
+    def test_retired_implementation_cannot_be_invoked_directly(self):
+        for name in ("prepare", "capture", "identity", "record_qualification", "select", "dispatch_metadata",
+                     "activate", "activate_explicit", "activate_automatic", "rollback", "rollback_explicit",
+                     "set_update_policy", "acquire_official_release", "acquire_official_target"):
+            with self.subTest(module="cli_store", api=name):
+                self.assertFalse(hasattr(cli_store, name))
+        for name in ("start", "_worker", "validate_probe_descriptor", "_run_scenario", "_finalize_success"):
+            with self.subTest(module="cli_validation", api=name):
+                self.assertFalse(hasattr(cli_validation, name))
+        self.assertFalse((ROOT / "scripts/official_releases.py").exists())
+        for module in (cli_store, cli_validation):
+            imported = inspect.getsource(module)
+            self.assertNotIn("import subprocess", imported)
+            self.assertNotIn("urllib", imported)
 
     def test_current_local_version_has_no_hard_coded_admission(self):
         for path in [*PRODUCTION_ENTRIES, ROOT / "scripts/cli_store.py", ROOT / "scripts/cli_validation.py"]:

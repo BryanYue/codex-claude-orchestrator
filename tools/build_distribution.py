@@ -27,26 +27,11 @@ LAUNCHER_RELATIVE = PLUGIN_RELATIVE / "scripts/launch.sh"
 INSTALL_COMMAND_RELATIVE = Path("Install.command")
 EXECUTABLE_RELATIVE_PATHS = frozenset({INSTALL_COMMAND_RELATIVE, LAUNCHER_RELATIVE})
 
-# Keep this list aligned with compatibility.bridge_contract_id(), without
-# importing runtime code from a different installation into the builder.
-CONTRACT_RELATIVE_PATHS = (
-    "skills/codex-claude-orchestrator/scripts/bridge.py",
-    "skills/codex-claude-orchestrator/scripts/runtime.py",
-    "skills/codex-claude-orchestrator/scripts/workspace.py",
-    "skills/codex-claude-orchestrator/scripts/events.py",
-    "skills/codex-claude-orchestrator/scripts/named_workflow.py",
-    "skills/codex-claude-orchestrator/scripts/compatibility.py",
-    "skills/codex-claude-orchestrator/scripts/usage.py",
-    "skills/codex-claude-orchestrator/scripts/workflow_delivery.py",
-    "scripts/cli_validation.py",
-    "scripts/cli_store.py",
-    "scripts/content_store.py",
-    "scripts/plugin_identity.py",
-)
+CODE_IDENTITY_RELATIVE = PLUGIN_RELATIVE / "code-identity.json"
 
 OMIT_DIR_NAMES = {".venv", "__pycache__", ".uv-cache", ".git", "dist",
                   ".pytest_cache", "coverage", ".mypy_cache", ".ruff_cache"}
-ALLOWED_SUFFIXES = {".md", ".json", ".py", ".lock", ".toml", ".yaml", ".yml", ".sh", ".html", ".command", ".png"}
+ALLOWED_SUFFIXES = {".md", ".json", ".py", ".lock", ".toml", ".yaml", ".yml", ".sh", ".html", ".command", ".png", ".js"}
 ALLOWED_BARE_NAMES = {".gitignore"}
 VERSION_PATTERN = re.compile(r"^\d+\.\d+\.\d+$")
 SERVER_VERSION_PATTERN = re.compile(r'MCPServer\(\s*["\']claude-orchestrator["\'],\s*version=["\']([^"\']+)["\']')
@@ -172,11 +157,35 @@ def require_marketplace_identity(blobs: dict[Path, bytes]) -> None:
         raise BuildError(f"Marketplace identity name mismatch: {marketplace.get('name')!r}")
 
 
+def identity_paths(blobs: dict[Path, bytes], purpose: str) -> tuple[str, ...]:
+    """Read the committed declaration, never import the target installation."""
+    try:
+        declaration = json.loads(required_bytes(blobs, CODE_IDENTITY_RELATIVE))
+    except (ValueError, UnicodeError) as exc:
+        raise BuildError("Code identity declaration is malformed") from exc
+    if not isinstance(declaration, dict) or declaration.get("schema_version") != 1:
+        raise BuildError("Unsupported code identity declaration")
+    purposes = declaration.get("purposes")
+    paths = purposes.get(purpose) if isinstance(purposes, dict) else None
+    if (not isinstance(paths, list) or not paths
+            or any(not isinstance(path, str) for path in paths) or len(paths) != len(set(paths))):
+        raise BuildError("Code identity paths must be a nonempty unique list of strings")
+    for relative in paths:
+        path = Path(relative)
+        if path.is_absolute() or path.as_posix() != relative or any(part in {".", ".."} for part in path.parts):
+            raise BuildError("Code identity declaration contains an unsafe path")
+    if "code-identity.json" not in paths or "scripts/identity_manifest.py" not in paths:
+        raise BuildError("Code identity must include its declaration and reader")
+    return tuple(paths)
+
+
 def contract_digest(blobs: dict[Path, bytes]) -> str:
-    entries = []
-    for relative in CONTRACT_RELATIVE_PATHS:
-        path = PLUGIN_RELATIVE / relative
-        entries.append((relative, hashlib.sha256(required_bytes(blobs, path)).hexdigest()))
+    # A package must also carry every declared startup dependency, even when
+    # its startup purpose has additional files outside the contract purpose.
+    for relative in identity_paths(blobs, "startup"):
+        required_bytes(blobs, PLUGIN_RELATIVE / relative)
+    entries = sorted((relative, hashlib.sha256(required_bytes(blobs, PLUGIN_RELATIVE / relative)).hexdigest())
+                     for relative in identity_paths(blobs, "contract"))
     return hashlib.sha256(json.dumps(entries, sort_keys=True).encode()).hexdigest()
 
 

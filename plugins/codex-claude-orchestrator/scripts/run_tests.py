@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Run plugin regressions with a throwaway coordination TMPDIR.
+"""Run plugin regressions with throwaway legacy and durable coordination roots.
 
 Production Runtime and bridge processes retain their legacy coordination paths.
 This entrypoint changes only the environment passed to fresh test subprocesses,
 so test-created lane locks and unknown markers cannot accumulate in the user's
-normal TMPDIR.
+normal TMPDIR or persistent coordination root.
 """
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ def run_suites(root: Path, suite: str, *, execute: Callable[..., subprocess.Comp
                temporary_directory: Callable[..., str] = tempfile.mkdtemp) -> int:
     """Run selected suites, preserving output and waiting for every child.
 
-    ``TMPDIR`` is copied into the child environment only.  The runner does not
+    Coordination paths are copied into the child environment only. The runner does not
     mutate ``os.environ`` and never deletes a production coordination directory.
     """
     root = root.resolve()
@@ -51,6 +51,7 @@ def run_suites(root: Path, suite: str, *, execute: Callable[..., subprocess.Comp
     try:
         environment = dict(os.environ)
         environment["TMPDIR"] = str(isolated_tmp)
+        environment["CODEX_CLAUDE_COORDINATION_ROOT"] = str(isolated_tmp / "durable-coordination")
         environment["CLAUDE_ORCHESTRATOR_CLI_ROOT"] = str(isolated_tmp / "cli-store")
         for name in selected_suites(suite):
             try:

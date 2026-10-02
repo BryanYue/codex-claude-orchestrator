@@ -76,6 +76,12 @@ class StartupRecoveryTests(unittest.TestCase):
         for path, _ in bridge.unknown_markers(self.lane):
             path.unlink(missing_ok=True)
 
+    def assert_run_markers(self, run_id):
+        markers = bridge.unknown_markers(self.lane)
+        roots = set(bridge.unknown_marker_roots())
+        self.assertEqual([value["run_id"] for _, value in markers], [run_id] * len(roots))
+        self.assertEqual({path.parent for path, _ in markers}, roots)
+
     def packet(self, revision=1, cwd=None, task="startup"):
         return {"task_id": task, "revision": revision, "role": "review", "cwd": str(cwd or self.repo),
                 "objective": "fixture", "requirement_sources": [str(self.requirement)], "constraints": [],
@@ -206,7 +212,7 @@ class StartupRecoveryTests(unittest.TestCase):
         self.assertFalse(os.path.lexists(run_dir))
         self.assertEqual(self.lifecycle(run_id)["phase"], startup_protocol.PRE_SPAWN_PHASE)
         self.assertFalse(self.task_log.exists(), "no Claude task may run when the bridge never started")
-        self.assertEqual([value["run_id"] for _, value in bridge.unknown_markers(self.lane)], [run_id])
+        self.assert_run_markers(run_id)
         self.assertEqual(self.record(run_id)["bridge_logs"]["stderr"]["state"], "present")
         with self.assertRaisesRegex(RuntimeError, "unknown"):
             self.runtime.start(self.packet(revision=2))
@@ -281,7 +287,7 @@ class StartupRecoveryTests(unittest.TestCase):
             with self.assertRaisesRegex(OSError, "receipt write failure"):
                 self.runtime.reconcile(run_id, "checked", ["fixture evidence"], digest)
         self.assertIsNone(self.record(run_id).get("reconciliation"))
-        self.assertEqual([value["run_id"] for _, value in bridge.unknown_markers(self.lane)], [run_id])
+        self.assert_run_markers(run_id)
         self.assertFalse(receipt.exists())
         with self.assertRaisesRegex(RuntimeError, "unknown"):
             self.runtime.start(self.packet(revision=2))
@@ -296,7 +302,7 @@ class StartupRecoveryTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "workspace changed"):
             self.runtime.reconcile(run_id, "stale", ["fixture"], stale)
         self.assertIsNone(self.record(run_id).get("reconciliation"))
-        self.assertEqual(len(bridge.unknown_markers(self.lane)), 1)
+        self.assert_run_markers(run_id)
         fresh = self.runtime.inspect_recovery(run_id)
         self.assertTrue(fresh["eligible"], fresh)
         self.assertNotEqual(fresh["workspace"]["digest"], stale)
@@ -312,7 +318,7 @@ class StartupRecoveryTests(unittest.TestCase):
         self.assertEqual(detail["child"]["state"], "unconfirmed")
         with self.assertRaises(RuntimeError):
             self.runtime.reconcile(run_id, "unbound", ["fixture"], "0" * 64)
-        self.assertEqual(len(bridge.unknown_markers(self.lane)), 1)
+        self.assert_run_markers(run_id)
 
     def test_tampered_or_missing_startup_bindings_stay_unconfirmed(self):
         run_id = self.early_death()
@@ -364,7 +370,7 @@ class StartupRecoveryTests(unittest.TestCase):
                     for path, value in originals.items():
                         path.write_bytes(value)
                 self.assertIsNone(self.record(run_id).get("reconciliation"))
-                self.assertEqual(len(bridge.unknown_markers(self.lane)), 1)
+                self.assert_run_markers(run_id)
         self.assertTrue(self.runtime.inspect_recovery(run_id)["eligible"])
 
     def test_bridge_written_phases_after_takeover_keep_launch_uncertainty(self):
@@ -467,7 +473,7 @@ class StartupRecoveryTests(unittest.TestCase):
                 self.runtime.reconcile(run_id, "first fact", ["first evidence"], digest)
         original = receipt.read_bytes()
         self.assertIsNone(self.record(run_id).get("reconciliation"))
-        self.assertEqual(len(bridge.unknown_markers(self.lane)), 1)
+        self.assert_run_markers(run_id)
         # Corrupt or mismatched pending audit records cannot be replaced to pass.
         for corruption in ("{bad", json.dumps({**json.loads(original), "packet_sha256": "0" * 64})):
             with self.subTest(corruption=corruption):
@@ -475,7 +481,7 @@ class StartupRecoveryTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "existing recovery receipt"):
                     self.runtime.reconcile(run_id, "retry", ["retry evidence"], digest)
                 self.assertEqual(receipt.read_text(), corruption)
-                self.assertEqual(len(bridge.unknown_markers(self.lane)), 1)
+                self.assert_run_markers(run_id)
         receipt.write_bytes(original)
         recovered = self.runtime.reconcile(run_id, "different retry", ["different evidence"], digest)
         self.assertEqual(receipt.read_bytes(), original)

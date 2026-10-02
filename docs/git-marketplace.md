@@ -11,13 +11,14 @@ No open-source license has been selected.
 - Publisher: BryanYue.
 - Marketplace: `codex-claude-team`.
 - Plugin: `codex-claude-orchestrator` (display name: Codex–Claude 协作).
-- Release ref: `v0.6.2`. Use a published fixed tag or full commit SHA; do not
-  move a release tag after publishing it.
-- Release boundary: `v0.6.2` includes complete Workflow report delivery, bounded
-  prompt delivery and lifecycle recovery, content compatibility checks, and
-  latest-execution-start task ordering. Older tags, including `v0.6.1`, remain
-  immutable. Refreshing an older fixed ref does not install 0.6.2; use the
-  explicit version-switching steps below.
+- Fixed release ref: `v0.7.0`, build `0.7.0+codex.20261003090000`.
+  Source, distribution, installed-cache and real-provider verification are
+  recorded separately in the release verification record.
+- Release boundary: independent writable review with OS source-write protection,
+  original request and review coverage, explicit finding adjudication, and bundled
+  guidance. Older tags, including `v0.5.0`, `v0.6.0`, `v0.6.1` and `v0.6.2`, remain
+  immutable. Refreshing an older fixed ref does not install 0.7.0; use the explicit
+  version-switching steps below.
 - The marketplace entry resolves `./plugins/codex-claude-orchestrator` relative
   to the fetched repository root. The Git market and ZIP catalog share the
   same plugin identity; do not install renamed duplicates to switch sources.
@@ -43,7 +44,7 @@ need no token. An SSH URL still requires working SSH authentication;
 For a machine without an existing `codex-claude-team` marketplace:
 
 ```bash
-codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v0.6.2
+codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v0.7.0
 codex plugin add codex-claude-orchestrator@codex-claude-team
 codex plugin marketplace list --json
 codex plugin list --json
@@ -55,7 +56,7 @@ ref from these list outputs: compare `git -C /market/root rev-parse HEAD` with
 the selected published commit (or inspect the persisted marketplace ref
 read-only). A plugin entry may still say `source=local` because it points into
 the fetched Git snapshot; the marketplace source establishes its Git origin.
-The base MCP version is 0.6.2; full plugin versions also contain a
+The target base MCP version is 0.7.0; full plugin versions also contain a
 cache-refresh suffix.
 
 Before opening a new Codex task, prepare the locked Python dependencies from
@@ -120,8 +121,9 @@ Version, provenance and byte identity are separate fields.
 
 [RELEASE-VERIFICATION.md](../RELEASE-VERIFICATION.md) distinguishes actual
 remote installation, upgrade/rollback and MCP protocol checks from source
-checks, synthetic UI tests and real Claude execution. The current 0.6.2
-packaging and published-tag checks are recorded there. The following is
+checks, synthetic UI tests and real Claude execution. Candidate checks do not
+prove remote installation or provider execution. The 0.6.2 packaging and
+published-tag checks remain historical evidence. The following is
 historical 0.6.1 installation evidence: on 2026-10-02, the
 published `v0.6.1` tag resolved to
 `871818a9fabc297e53b8ca398ab317cd6470461f`. After candidate acceptance it was
@@ -140,8 +142,9 @@ SHA remains in the historical verification section rather than being the
 default rollback target for all installations.
 
 Documentation corrections on `main` do not move a published tag or replace its ZIP.
-Versioned Markdown under `references/` can update through the reviewed content
-channel; it does not update executable code or an already-running MCP process.
+From 0.7.0, Markdown under `references/` ships with the plugin release; online
+content updates are retired. Historical snapshots remain readable. Neither a
+document correction nor installation replaces an already-running MCP process.
 
 Report issues at [GitHub Issues](https://github.com/BryanYue/codex-claude-orchestrator/issues)
 with the plugin version, operating system and a sanitized error. Do not attach

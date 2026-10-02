@@ -384,14 +384,25 @@ def read_page(run_dir: Path, delivery: Any, *, index: int = 0, part: str = "repo
                 "note": "This Workflow call has no captured artifact; the run did not deliver its full report."}
     recorded = collection.get(part)
     expected_path = artifact_names(index)[part]
+    return read_captured_page(run_dir, recorded, expected_path=expected_path, answer=answer,
+                              offset=offset, limit=limit, binding=collection.get("binding"),
+                              representation="exact_text" if part == "report" else "exact_envelope")
+
+
+def read_captured_page(run_dir: Path, recorded: Any, *, expected_path: str, answer: dict[str, Any],
+                       offset: int = 0, limit: int = DEFAULT_PAGE_BYTES, binding: Any = None,
+                       representation: str = "exact_text") -> dict[str, Any]:
+    """Page a hash-bound artifact at a trusted caller's fixed path, never a recorded arbitrary path."""
+    offset, limit = _int("offset", offset), _int("limit", limit)
+    if offset < 0:
+        raise DeliveryError("offset must be non-negative")
+    if not MIN_PAGE_BYTES <= limit <= MAX_PAGE_BYTES:
+        raise DeliveryError(f"limit must be {MIN_PAGE_BYTES}..{MAX_PAGE_BYTES} bytes")
     if (not isinstance(recorded, dict) or recorded.get("path") != expected_path
-            or not isinstance(recorded.get("size_bytes"), int) or not isinstance(recorded.get("sha256"), str)):
+            or isinstance(recorded.get("size_bytes"), bool) or not isinstance(recorded.get("size_bytes"), int)
+            or not isinstance(recorded.get("sha256"), str)):
         return {**answer, "available": False, "state": "record_invalid"}
     try:
-        folder = os.lstat(run_dir / OUTPUT_DIR)
-        if stat.S_ISLNK(folder.st_mode) or not stat.S_ISDIR(folder.st_mode):
-            return {**answer, "available": False, "state": "unreadable",
-                    "note": "The artifact directory is not a plain directory inside the run record."}
         data, before, after = _read_bounded(run_dir / expected_path, MAX_OUTPUT_BYTES, root=run_dir)
     except FileNotFoundError:
         return {**answer, "available": False, "state": "missing", "note": "The captured artifact file is missing."}
@@ -417,7 +428,7 @@ def read_page(run_dir: Path, delivery: Any, *, index: int = 0, part: str = "repo
             "pagination": "utf8_byte_offsets", "offset_bytes": offset, "page_bytes": end - offset,
             "next_offset_bytes": end if end < total else None, "end_of_artifact": end == total,
             "total_bytes": total, "total_characters": recorded.get("characters"), "sha256": recorded["sha256"],
-            "binding": collection.get("binding"),
-            "representation": recorded.get("representation", "exact_text" if part == "report" else "exact_envelope"),
+            "binding": binding,
+            "representation": recorded.get("representation", representation),
             "value_type": recorded.get("value_type"),
-            "note": "Captured Workflow output; provenance and byte completeness are verified, semantic correctness is not."}
+            "note": "Captured output; provenance and byte completeness are verified, semantic correctness is not."}

@@ -21,6 +21,7 @@ except ImportError:  # executed from the scripts directory by the MCP server
     from events import append, latest, latest_meaningful, read, statistics  # type: ignore
 import content_store  # bridge placed the plugin scripts directory on sys.path
 import startup_protocol
+from result_schema import finding_decisions as validate_finding_decisions
 
 # Must be taken while this module is being imported; see loaded_identity().
 _LOADED_CODE = startup_protocol.loaded_identity(startup_protocol.plugin_root(Path(bridge.__file__).resolve()))
@@ -103,9 +104,7 @@ class Runtime:
             if result is _NO_REGISTRY_CHANGE:
                 fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
                 return None
-            tmp = self.registry_path.with_name(f".registry.{secrets.token_hex(6)}.tmp")
-            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-            os.replace(tmp, self.registry_path)
+            bridge.dump(self.registry_path, data)
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
             return result
 
@@ -117,11 +116,10 @@ class Runtime:
             return self._open_lane_lock(lane)
 
     def _open_lane_lock(self, lane: str):
-        handle = bridge.lane_lock_path(lane).open("a+")
+        from lane_lock import acquire
         try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            handle = acquire(lane)
         except BlockingIOError:
-            handle.close()
             raise RuntimeError("another supervised run already owns this cwd's worktree lane")
         _LOCAL_LANES[lane] = handle
         return handle
@@ -288,7 +286,7 @@ class Runtime:
     @staticmethod
     def _marker_values() -> list[Any]:
         values = []
-        for path in sorted(bridge.unknown_marker_root().glob("*.json")):
+        for path in sorted({path for root in bridge.unknown_marker_roots() for path in root.glob("*.json")}):
             try:
                 values.append(json.loads(path.read_text(encoding="utf-8")))
             except (OSError, ValueError):
@@ -577,119 +575,20 @@ class Runtime:
             stdout = None
             stderr = None
             cancel_request = None
+            run_id = None
             try:
-                # Holding the lane lets this Runtime safely settle an orphaned
-                # prior record from any cwd of this worktree before deciding
-                # whether a new dispatch is legal.
-                for old in self._registry().get("runs", {}).values():
-                    if old.get("status") not in ACTIVE and not self._unreconciled_unknown(old):
-                        continue
-                    if not isinstance(old.get("cwd"), str) or not self._record_in_lane(old, lane_identity):
-                        continue
-                    legacy = self._legacy_lane_key(old)
-                    legacy_handle = None
-                    if legacy is not None and legacy != lane_identity:
-                        try:
-                            legacy_handle = self._lane_lock(legacy)
-                        except RuntimeError as exc:
-                            raise RuntimeError("a supervised run recorded before worktree lanes may still own "
-                                               f"{old['cwd']}; wait for it or reconcile it before dispatch") from exc
-                    try:
-                        evidence = self._trusted_terminal(old)
-                        if evidence:
-                            self._adopt_trusted_terminal(old["run_id"], evidence)
-                        elif old.get("status") in ACTIVE:
-                            self._mark_run_unknown(old["run_id"], "prior bridge no longer owns the cwd and has no trustworthy terminal receipt")
-                    finally:
-                        if legacy_handle is not None:
-                            self._release_lane(legacy, legacy_handle)
-                self._retry_lane_admission_cleanup(lane_identity)
-                if bridge.unknown_markers(lane_identity):
-                    raise RuntimeError("cwd worktree has an unknown prior supervised run; reconcile it manually before dispatch")
-                registry = self._registry()
-                same_task = [r for r in registry.get("runs", {}).values() if r.get("task_id") == normalized["task_id"] and r.get("cwd") == normalized["cwd"]]
-                if any((self._unreconciled_unknown(r) or r.get("status") in ACTIVE) and self._record_in_lane(r, lane_identity)
-                       for r in registry.get("runs", {}).values()):
-                    raise RuntimeError("cwd worktree has an unknown or unsettled recorded run; reconcile it manually before dispatch")
-                if any(r.get("revision") == normalized["revision"] for r in same_task):
-                    raise ValueError("task revision already exists for this cwd")
-                if same_task and normalized["revision"] <= max(r["revision"] for r in same_task):
-                    raise ValueError("task revision must strictly increase for this cwd")
-                previous = None
-                if resume_run_id:
-                    previous = registry.get("runs", {}).get(resume_run_id)
-                    if not previous:
-                        raise ValueError("resume_run_id was not found")
-                    if (previous.get("status") != "reported" or previous.get("superseded_by") or previous.get("task_id") != normalized["task_id"]
-                            or previous.get("cwd") != normalized["cwd"] or normalized["revision"] <= previous.get("revision", 0)):
-                        raise RuntimeError("resume_run_id must have a reported terminal receipt")
-                    bridge.validate_resume(normalized, Path(previous["run_dir"]))
-                else:
-                    candidates = [r for r in same_task if r.get("revision", 0) < normalized["revision"]]
-                    previous = max(candidates, key=lambda r: r["revision"]) if candidates else None
+                previous = self._admit_start(normalized, lane_identity, resume_run_id)
                 content_binding = self._content_binding(previous if resume_run_id else None, expected_content_digest)
                 cli_descriptor = bridge.create_cli_descriptor(normalized, Path(previous["run_dir"]) if resume_run_id else None)
                 run_id = "run-" + secrets.token_urlsafe(12).replace("-", "_")
                 run_dir = self._run_dir(run_id)
-                packet_path = self.packets_root / f"{run_id}.json"
-                packet_path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-                packet_sha256 = self._file_sha256(packet_path)
-                cli_path = self.packets_root / f"{run_id}.cli.json"
-                bridge.dump(cli_path, cli_descriptor)
-                cli_sha256 = self._file_sha256(cli_path)
-                content_path = content_sha256 = None
-                if content_binding is not None:
-                    content_path = self.packets_root / f"{run_id}.content.json"
-                    bridge.dump(content_path, content_binding)
-                    content_sha256 = self._file_sha256(content_path)
-                lifecycle_path = self._lifecycle_path(run_id)
-                lifecycle_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-                startup_nonce = secrets.token_hex(16)
-                # Written once, before the bridge exists; only the bridge may
-                # replace it, after verifying this binding.
-                bridge.dump(lifecycle_path, startup_protocol.pre_spawn_record(
-                    run_id=run_id, task_id=normalized["task_id"], revision=normalized["revision"], cwd=normalized["cwd"],
-                    packet_sha256=packet_sha256, cli_descriptor_sha256=cli_sha256, lane_identity=lane_identity,
-                    nonce=startup_nonce, code_value=code_identity["value"]))
-                record = {"run_id": run_id, "task_id": normalized["task_id"], "revision": normalized["revision"], "cwd": normalized["cwd"],
-                          "lane_identity": lane_identity, "status": "starting", "phase": "starting", "started_at": time.time(), "updated_at": time.time(),
-                          "last_activity_at": None, "model": normalized["model"], "session_id": None, "summary": "bridge starting",
-                          "requested_model": normalized["model"], "effort": normalized["effort"],
-                          "objective": normalized["objective"], "role": normalized["role"],
-                          "scope": {"cwd": normalized["cwd"], "owned_files": normalized["owned_files"],
-                                    "input_files": normalized.get("input_files", [])},
-                          "decision": None, "previous_run_id": previous.get("run_id") if previous else None, "run_dir": str(run_dir),
-                          "owner_id": self.owner_id, "packet_sha256": packet_sha256, "lifecycle_file": str(lifecycle_path),
-                          "cli_descriptor_file": str(cli_path), "cli_descriptor_sha256": cli_sha256,
-                          "cli_identity_id": cli_descriptor.get("identity_id"),
-                          "content_binding": content_store.binding_summary(content_binding),
-                          "content_binding_file": str(content_path) if content_path else None,
-                          "content_binding_sha256": content_sha256,
-                          "startup_nonce": startup_nonce,
-                          "startup_protocol_version": startup_protocol.STARTUP_PROTOCOL_VERSION,
-                          "bridge_code_identity": code_identity["value"], "bridge_script": str(bridge_script),
-                          "bridge_spawn_cwd": str(self.state_root),
-                          "changed_files": None, "workspace_changes": workspace_changes(None, None),
-                          "environment": {"isolation": "bridge hook constraints only; no OS sandbox claim"}}
-                record["events_count"] = 0
-                def register(data):
-                    data.setdefault("runs", {})[run_id] = record
-                    for old in data["runs"].values():
-                        if old.get("task_id") == normalized["task_id"] and old.get("cwd") == normalized["cwd"] and old.get("revision", 0) < normalized["revision"]:
-                            old.setdefault("superseded_by", run_id)
-                            old["updated_at"] = time.time()
-                self._update(register)
-                command = [sys.executable, str(bridge_script), "run", "--packet", str(packet_path), "--run-dir", str(run_dir), "--timeout", str(timeout),
-                           "--cli-descriptor", str(cli_path), "--cli-descriptor-sha256", cli_sha256,
-                           startup_protocol.NONCE_ARGUMENT, startup_nonce]
-                if resume_run_id:
-                    command += ["--resume-from", previous["run_dir"]]
-                if content_path is not None:
-                    command += ["--content-binding", str(content_path), "--content-binding-sha256", content_sha256]
+                command, lifecycle_path = self._prepare_start(
+                    normalized, run_id, run_dir, lane_identity, previous, cli_descriptor,
+                    content_binding, bridge_script, code_identity, timeout, resume_run_id)
                 stdout =(self.logs_root / f"{run_id}.stdout.log").open("w", encoding="utf-8")
                 stderr = (self.logs_root / f"{run_id}.stderr.log").open("w", encoding="utf-8")
                 environment = dict(os.environ)
-                environment["CODEX_CLAUDE_LANE_FD"] = str(lane.fileno())
+                environment.update(lane.inherited_environment())
                 cancel_request = self.state_root / "cancel-requests" / f"{run_id}.json"
                 environment["CODEX_BRIDGE_CANCEL_FILE"] = str(cancel_request)
                 environment["CODEX_BRIDGE_LIFECYCLE_FILE"] = str(lifecycle_path)
@@ -697,7 +596,7 @@ class Runtime:
                 # The bridge must not inherit this server's cwd, which a plugin
                 # reinstall can delete; Claude itself still runs in packet cwd.
                 proc = subprocess.Popen(command, cwd=str(self.state_root), stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr,
-                                        text=True, start_new_session=True, env=environment, pass_fds=(lane.fileno(),))
+                                        text=True, start_new_session=True, env=environment, pass_fds=lane.filenos())
                 bridge_identity = bridge.capture_process_identity(proc.pid)
                 self._update(lambda data: data["runs"][run_id].update(bridge_pid=proc.pid, bridge_process_group=proc.pid,
                                                                         bridge_identity=bridge_identity,
@@ -707,71 +606,194 @@ class Runtime:
                 thread.start()
                 return self.snapshot(run_id)
             except Exception as exc:
-                watcher_alive = thread is not None and thread.is_alive()
-                if proc is not None and "run_id" in locals():
-                    # The bridge exists and inherited the CWD lane FD.  Do not
-                    # relabel this as a spawn failure or signal the process
-                    # tree: request cancellation through the durable file
-                    # protocol and leave an auditable unknown until the bridge
-                    # and any Claude child are confirmed stopped.
-                    request = {"reason": f"runtime supervision setup failed: {exc}",
-                               "requested_at": time.time(), "requested_by": self.owner_id}
-                    try:
-                        if cancel_request is not None:
-                            bridge.dump(cancel_request, request)
-                    except Exception:
-                        pass
-                    try:
-                        if run_dir.is_dir():
-                            bridge.dump(run_dir / "cancel.json", request)
-                    except Exception:
-                        pass
-                    def mark_post_spawn_unknown(data):
-                        rec = data.get("runs", {}).get(run_id)
-                        if rec:
-                            rec.update(status="unknown", phase="unknown", updated_at=time.time(),
-                                       bridge_pid=proc.pid, bridge_process_group=proc.pid,
-                                       supervision_failure={"stage": "post_bridge_popen", "error": str(exc),
-                                                            "cancel_requested_at": request["requested_at"]},
-                                       summary="runtime lost supervision after bridge start; cancellation requested and recovery evidence is required")
-                    try:
-                        self._update(mark_post_spawn_unknown)
-                    except Exception:
-                        pass
-                    try:
-                        self._mark_unknown_lane(normalized["cwd"], run_id, "runtime supervision failed after bridge start")
-                    except Exception:
-                        pass
-                    if not watcher_alive:
-                        # Keep one owner for the Popen handle and lane when the
-                        # runtime can still create a recovery watcher.  It only
-                        # reaps and records the already-cancel-requested bridge;
-                        # it does not signal it.
-                        recovery_thread = threading.Thread(target=self._watch,
-                                                           args=(run_id, proc, lane, stdout, stderr), daemon=True)
-                        self._workers[run_id] = (proc, lane)
-                        try:
-                            recovery_thread.start()
-                            watcher_alive = True
-                        except Exception:
-                            self._workers.pop(run_id, None)
-                    if not watcher_alive:
-                        for handle in (stdout, stderr):
-                            if handle is not None and not handle.closed:
-                                handle.close()
-                        self._release_lane(lane_identity, lane)
+                if proc is not None and run_id is not None:
+                    self._handle_started_failure(exc, normalized, run_id, run_dir, lane_identity,
+                                                 lane, proc, thread, stdout, stderr, cancel_request)
                     raise
-                if "run_id" in locals():
+                if run_id is not None:
                     try:
                         for handle in (stdout, stderr):
                             if handle is not None and not handle.closed:
                                 handle.close()
-                        self._update(lambda data: data["runs"][run_id].update(status="failed", phase="failed", updated_at=time.time(),
-                                                                              summary=f"bridge spawn failed before process start: {exc}"))
+                        self._update(lambda data, detail=str(exc): data["runs"][run_id].update(status="failed", phase="failed", updated_at=time.time(),
+                                                                              summary=f"bridge spawn failed before process start: {detail}"))
                     except Exception:
                         pass
                 self._release_lane(lane_identity, lane)
                 raise
+
+    def _admit_start(self, normalized: dict[str, Any], lane_identity: str,
+                     resume_run_id: str | None) -> dict[str, Any] | None:
+        """Reconcile the exclusively held lane, then validate revision/resume admission."""
+        # Holding the lane lets this Runtime safely settle an orphaned
+        # prior record from any cwd of this worktree before deciding
+        # whether a new dispatch is legal.
+        for old in self._registry().get("runs", {}).values():
+            if old.get("status") not in ACTIVE and not self._unreconciled_unknown(old):
+                continue
+            if not isinstance(old.get("cwd"), str) or not self._record_in_lane(old, lane_identity):
+                continue
+            legacy = self._legacy_lane_key(old)
+            legacy_handle = None
+            if legacy is not None and legacy != lane_identity:
+                try:
+                    legacy_handle = self._lane_lock(legacy)
+                except RuntimeError as exc:
+                    raise RuntimeError("a supervised run recorded before worktree lanes may still own "
+                                       f"{old['cwd']}; wait for it or reconcile it before dispatch") from exc
+            try:
+                evidence = self._trusted_terminal(old)
+                if evidence:
+                    self._adopt_trusted_terminal(old["run_id"], evidence)
+                elif old.get("status") in ACTIVE:
+                    self._mark_run_unknown(old["run_id"], "prior bridge no longer owns the cwd and has no trustworthy terminal receipt")
+            finally:
+                if legacy_handle is not None:
+                    self._release_lane(legacy, legacy_handle)
+        self._retry_lane_admission_cleanup(lane_identity)
+        if bridge.unknown_markers(lane_identity):
+            raise RuntimeError("cwd worktree has an unknown prior supervised run; reconcile it manually before dispatch")
+        registry = self._registry()
+        same_task = [r for r in registry.get("runs", {}).values() if r.get("task_id") == normalized["task_id"] and r.get("cwd") == normalized["cwd"]]
+        if any((self._unreconciled_unknown(r) or r.get("status") in ACTIVE) and self._record_in_lane(r, lane_identity)
+               for r in registry.get("runs", {}).values()):
+            raise RuntimeError("cwd worktree has an unknown or unsettled recorded run; reconcile it manually before dispatch")
+        if any(r.get("revision") == normalized["revision"] for r in same_task):
+            raise ValueError("task revision already exists for this cwd")
+        if same_task and normalized["revision"] <= max(r["revision"] for r in same_task):
+            raise ValueError("task revision must strictly increase for this cwd")
+        previous = None
+        if resume_run_id:
+            previous = registry.get("runs", {}).get(resume_run_id)
+            if not previous:
+                raise ValueError("resume_run_id was not found")
+            if (previous.get("status") != "reported" or previous.get("superseded_by") or previous.get("task_id") != normalized["task_id"]
+                    or previous.get("cwd") != normalized["cwd"] or normalized["revision"] <= previous.get("revision", 0)):
+                raise RuntimeError("resume_run_id must have a reported terminal receipt")
+            bridge.validate_resume(normalized, Path(previous["run_dir"]))
+        else:
+            candidates = [r for r in same_task if r.get("revision", 0) < normalized["revision"]]
+            previous = max(candidates, key=lambda r: r["revision"]) if candidates else None
+        return previous
+
+    def _prepare_start(self, normalized: dict[str, Any], run_id: str, run_dir: Path, lane_identity: str,
+                       previous: dict[str, Any] | None, cli_descriptor: dict[str, Any],
+                       content_binding: dict[str, Any] | None, bridge_script: Path,
+                       code_identity: dict[str, Any], timeout: float, resume_run_id: str | None) -> tuple[list[str], Path]:
+        """Persist immutable launch bindings and register intent before any bridge exists."""
+        packet_path = self.packets_root / f"{run_id}.json"
+        packet_path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        packet_sha256 = self._file_sha256(packet_path)
+        cli_path = self.packets_root / f"{run_id}.cli.json"
+        bridge.dump(cli_path, cli_descriptor)
+        cli_sha256 = self._file_sha256(cli_path)
+        content_path = content_sha256 = None
+        if content_binding is not None:
+            content_path = self.packets_root / f"{run_id}.content.json"
+            bridge.dump(content_path, content_binding)
+            content_sha256 = self._file_sha256(content_path)
+        lifecycle_path = self._lifecycle_path(run_id)
+        lifecycle_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        startup_nonce = secrets.token_hex(16)
+        # Written once, before the bridge exists; only the bridge may
+        # replace it, after verifying this binding.
+        bridge.dump(lifecycle_path, startup_protocol.pre_spawn_record(
+            run_id=run_id, task_id=normalized["task_id"], revision=normalized["revision"], cwd=normalized["cwd"],
+            packet_sha256=packet_sha256, cli_descriptor_sha256=cli_sha256, lane_identity=lane_identity,
+            nonce=startup_nonce, code_value=code_identity["value"]))
+        record = {"run_id": run_id, "task_id": normalized["task_id"], "revision": normalized["revision"], "cwd": normalized["cwd"],
+                  "lane_identity": lane_identity, "status": "starting", "phase": "starting", "started_at": time.time(), "updated_at": time.time(),
+                  "last_activity_at": None, "model": normalized["model"], "session_id": None, "summary": "bridge starting",
+                  "requested_model": normalized["model"], "effort": normalized["effort"],
+                  "objective": normalized["objective"], "role": normalized["role"],
+                  "scope": {"cwd": normalized["cwd"], "owned_files": normalized["owned_files"],
+                            "input_files": normalized.get("input_files", [])},
+                  "decision": None, "previous_run_id": previous.get("run_id") if previous else None, "run_dir": str(run_dir),
+                  "owner_id": self.owner_id, "packet_sha256": packet_sha256, "lifecycle_file": str(lifecycle_path),
+                  "cli_descriptor_file": str(cli_path), "cli_descriptor_sha256": cli_sha256,
+                  "cli_identity_id": cli_descriptor.get("identity_id"),
+                  "content_binding": content_store.binding_summary(content_binding),
+                  "content_binding_file": str(content_path) if content_path else None,
+                  "content_binding_sha256": content_sha256,
+                  "startup_nonce": startup_nonce,
+                  "startup_protocol_version": startup_protocol.STARTUP_PROTOCOL_VERSION,
+                  "bridge_code_identity": code_identity["value"], "bridge_script": str(bridge_script),
+                  "bridge_spawn_cwd": str(self.state_root),
+                  "changed_files": None, "workspace_changes": workspace_changes(None, None),
+                  "environment": {"isolation": "bridge hook constraints only; no OS sandbox claim"}}
+        record["events_count"] = 0
+        def register(data):
+            data.setdefault("runs", {})[run_id] = record
+            for old in data["runs"].values():
+                if old.get("task_id") == normalized["task_id"] and old.get("cwd") == normalized["cwd"] and old.get("revision", 0) < normalized["revision"]:
+                    old.setdefault("superseded_by", run_id)
+                    old["updated_at"] = time.time()
+        self._update(register)
+        command = [sys.executable, str(bridge_script), "run", "--packet", str(packet_path), "--run-dir", str(run_dir), "--timeout", str(timeout),
+                   "--cli-descriptor", str(cli_path), "--cli-descriptor-sha256", cli_sha256,
+                   startup_protocol.NONCE_ARGUMENT, startup_nonce]
+        if resume_run_id:
+            command += ["--resume-from", previous["run_dir"]]
+        if content_path is not None:
+            command += ["--content-binding", str(content_path), "--content-binding-sha256", content_sha256]
+        return command, lifecycle_path
+
+    def _handle_started_failure(self, exc: Exception, normalized: dict[str, Any], run_id: str,
+                                run_dir: Path, lane_identity: str, lane, proc, thread,
+                                stdout, stderr, cancel_request: Path | None) -> None:
+        """Request durable cancellation after Popen; retain uncertainty and a reaping owner."""
+        watcher_alive = thread is not None and thread.is_alive()
+        # The bridge exists and inherited the CWD lane FD.  Do not
+        # relabel this as a spawn failure or signal the process
+        # tree: request cancellation through the durable file
+        # protocol and leave an auditable unknown until the bridge
+        # and any Claude child are confirmed stopped.
+        request = {"reason": f"runtime supervision setup failed: {exc}",
+                   "requested_at": time.time(), "requested_by": self.owner_id}
+        try:
+            if cancel_request is not None:
+                bridge.dump(cancel_request, request)
+        except Exception:
+            pass
+        try:
+            if run_dir.is_dir():
+                bridge.dump(run_dir / "cancel.json", request)
+        except Exception:
+            pass
+        def mark_post_spawn_unknown(data):
+            rec = data.get("runs", {}).get(run_id)
+            if rec:
+                rec.update(status="unknown", phase="unknown", updated_at=time.time(),
+                           bridge_pid=proc.pid, bridge_process_group=proc.pid,
+                           supervision_failure={"stage": "post_bridge_popen", "error": str(exc),
+                                                "cancel_requested_at": request["requested_at"]},
+                           summary="runtime lost supervision after bridge start; cancellation requested and recovery evidence is required")
+        try:
+            self._update(mark_post_spawn_unknown)
+        except Exception:
+            pass
+        try:
+            self._mark_unknown_lane(normalized["cwd"], run_id, "runtime supervision failed after bridge start")
+        except Exception:
+            pass
+        if not watcher_alive:
+            # Keep one owner for the Popen handle and lane when the
+            # runtime can still create a recovery watcher.  It only
+            # reaps and records the already-cancel-requested bridge;
+            # it does not signal it.
+            recovery_thread = threading.Thread(target=self._watch,
+                                               args=(run_id, proc, lane, stdout, stderr), daemon=True)
+            self._workers[run_id] = (proc, lane)
+            try:
+                recovery_thread.start()
+                watcher_alive = True
+            except Exception:
+                self._workers.pop(run_id, None)
+        if not watcher_alive:
+            for handle in (stdout, stderr):
+                if handle is not None and not handle.closed:
+                    handle.close()
+            self._release_lane(lane_identity, lane)
 
     def _content_binding(self, previous: dict[str, Any] | None, expected_digest: str | None = None) -> dict[str, Any] | None:
         """Fresh tasks pin the effective reviewed content; a resume keeps the prior run's pin."""
@@ -1527,7 +1549,8 @@ class Runtime:
         return self.snapshot(run_id)
 
     def record_decision(self, run_id: str, decision: str, reason: str, evidence: list[str],
-                        resolution: str | None = None, completion_summary: str | None = None) -> dict:
+                        resolution: str | None = None, completion_summary: str | None = None,
+                        finding_decisions: list[dict] | None = None) -> dict:
         if decision not in {"accepted", "returned"}: raise ValueError("decision must be accepted or returned")
         if not isinstance(reason, str) or not reason.strip() or not isinstance(evidence, list) or not evidence or not all(isinstance(x, str) and x.strip() for x in evidence):
             raise ValueError("reason and evidence strings are required")
@@ -1548,6 +1571,10 @@ class Runtime:
             rec = data.get("runs", {}).get(run_id)
             if not rec or rec.get("status") != "reported" or rec.get("superseded_by"):
                 raise RuntimeError("decision requires a non-superseded reported run")
+            reported = self._read_json(run_dir / "result.json") or {}
+            findings = (reported.get("structured") or {}).get("findings", [])
+            if findings or finding_decisions is not None:
+                value["finding_decisions"] = validate_finding_decisions(findings, finding_decisions)
             history = list(rec.get("decision_history") or [])
             current = rec.get("decision")
             if isinstance(current, dict) and (not history or history[-1] != current):
@@ -1565,7 +1592,9 @@ class Runtime:
         for run_id in list(self._workers):
             try: self.cancel(run_id, "runtime closing")
             except (RuntimeError, ValueError): pass
-        deadline = time.monotonic() + 8
+        # Allow TERM grace, direct-child reap and group confirmation, followed
+        # by output collection and durable terminal evidence from the bridge.
+        deadline = time.monotonic() + 3 * bridge.TERMINATION_GRACE_SECONDS + 6
         while self._workers and time.monotonic() < deadline: time.sleep(.1)
         for run_id in list(self._workers):
             record = self._registry().get("runs", {}).get(run_id, {})
