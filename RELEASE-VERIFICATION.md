@@ -1,3 +1,110 @@
+# 0.7.1 release verification
+
+Full plugin version: `0.7.1+codex.20261003035940`. Fixed release ref: `v0.7.1`.
+[Release and artifacts](https://github.com/BryanYue/codex-claude-orchestrator/releases/tag/v0.7.1).
+
+Implementation commit: `adbe18a2c8ef6a0224bea0a3df98aa3404c890cd`, based on
+`f1cbe205e15d0e85080bced60d045754ce0c81e0` (v0.7.0). The next commit changes only
+this release record. The archive's `RELEASE-MANIFEST.json` identifies the exact
+packaging commit; `FILE-SHA256.json` and the adjacent ZIP checksum bind its bytes.
+Earlier release tags and assets remain unchanged.
+
+## Executed checks
+
+- One full invocation passed **389 plugin tests** (127.503 seconds) and
+  **242 Bridge tests** (117.794 seconds), with no skips.
+- Subsequently, **10 isolated end-to-end tests** passed (20.535 seconds), with
+  no skips. This reran nine existing methods with stronger control-path probes
+  and added one SIGTERM test. Combined Bridge coverage is **243 distinct
+  methods**; reruns are not counted as additional methods. The only later
+  production-file edit removed a trailing blank line in retired CLI code.
+- After committing the source, **29 distribution tests** passed (16.947 seconds),
+  with no skips. Total distinct test-method coverage is **661**.
+- Ruff `F`, `C901`, `PLR0912` and `PLR0915` passed. Complexity, branch and statement
+  ceilings are the measured v0.7.0 maxima (59/59/145), preventing new violations;
+  this does not assert every function became shorter. Strict Mypy passed for
+  five selected pure modules, not the entire project. `git diff --check` passed.
+- Tests used actual macOS `sandbox-exec`, fake CLI subprocesses, stdio MCP and
+  local HTTP. Checks cover the real Runtime/Bridge protection list, poisoned Git
+  callbacks, malformed raw report retention/paging, repeated resume, outside
+  source mutation, GBK/subdirectory inputs, cleanup races, and signal shutdown.
+  Separate real-process tests cover detached `setsid` descendants, closed stdio,
+  ignored SIGTERM, process-identity reuse and unconfirmed stopping.
+
+## Real Claude CLI acceptance
+
+Local Claude Code **2.1.287** executed model requests in disposable Git fixtures;
+stream evidence identified the actual model as **claude-sonnet-5-5**. Codex
+independently implemented and reviewed this plugin. Claude was used only as the
+product under test on the fixture, not to develop or review this release.
+
+- Bash actually ran the fixture's failing arithmetic test and attempted a write
+  to its original requirement source. The test reproduced the preset defect;
+  the source write raised `PermissionError`. Independent Git status and source
+  bytes confirmed the original fixture stayed unchanged.
+- Agent completed an independent read, the project PreToolUse hook ran, and a
+  simple native Workflow completed. Initialization events contained an empty
+  external MCP server list. Complete reports were captured and hash-checked.
+- The shipped `codex-full-review` Workflow then completed its shared map/checks,
+  five review dimensions, independent verification and synthesis: **eight
+  finished agents**, with the final parent report delivered. CLI safety
+  annotations remained visible in the Workflow output and the parent report.
+- Two actual failures exposed fixes: `--allowedTools "*"` did not authorize Bash
+  and Workflow under `dontAsk`; an agent's CLI safety annotation before JSON
+  broke direct parsing. Explicit builtin tool names and single-object parsing
+  with retained annotations passed the subsequent real runs. Broken or multiple
+  JSON objects and missing required phases still fail in regression tests.
+- Four model requests, including both failed attempts, had a combined CLI
+  client-side cost estimate of **$2.1273125**. This is not a bill or a subscription
+  quota measurement. An earlier unsupported `max_turns` option was blocked at
+  preflight without launching a model. Failed evidence was retained.
+
+## Behavior and limits
+
+Isolated hook coverage gaps and failed Workflow attempts remain audit warnings;
+strict mode still requires guard evidence. Transport, source invariants,
+process stopping and report validation remain enforced. Incomplete required
+Workflow coverage still produces a blocked report. Report delivery and schema
+validity do not establish semantic acceptance: findings need coordinator review.
+
+Trusted Git observations disable executable callbacks and have timeouts. Source
+protection covers linked worktrees, executing plugin/Python files and Runtime
+control state. Internal hardlink groups are supported only when all aliases
+are protected. External hardlinks, absolute/external source symlinks, submodules
+and sparse/unmerged layouts remain unsupported. Nested macOS sandbox tools may
+need their documented local option or a recorded skip; outer source protection
+is retained. Credentials, unrelated local paths and the network are not isolated.
+
+New `claude_cleanup_review` removes only explicitly disposed, stopped copies
+under lane and registry locks, after rereading current disposition. Unknown,
+superseded or returned-for-revision copies remain retained. Reports, decisions,
+tracked diffs and status lists survive cleanup; this is not a byte archive of
+all untracked or binary reproduction artifacts. Marker-based descendant
+supervision covers observed identities and visible inherited markers; deliberate
+marker removal before observation and inaccessible unidentified processes remain
+outside its proof. No complete host/process containment is claimed.
+
+The review feedback contained **66 entries**, including duplicates and design
+suggestions. It was not treated as 66 independent confirmed bugs. The remaining
+package/import-layout and shared-context redesigns were not represented as
+completed by this patch; legacy read-only Workflow and dual-lock compatibility
+remain for existing tasks/processes. Dead CLI reconciliation and import fallback
+branches were removed; Git, lock observation, code-identity path declarations
+and live/final model projection now share their respective helpers.
+
+Production Python is **11,536 lines**, versus 11,157 in v0.7.0 and 13,537 in
+v0.6.2. The added correctness/supervision behavior increases this patch's net
+size by 379 lines; no deletion quota was used. `SKILL.md` plus `guide.md` is
+**7,922 characters**, versus the original 20,984. These are source metrics,
+not token counts or quality scores.
+
+This release does **not** claim the `7a145dc` recall benchmark, a repository-wide
+blind review comparison, Intel Mac coverage, or reinstallation/reload of the
+user's active plugin cache. Local CLI/auth settings and the installed plugin
+were not replaced. Installation of the fixed ref requires a fresh MCP connection.
+
+---
+
 # 0.7.0 release verification
 
 Full plugin version: `0.7.0+codex.20261003090000`. Fixed release ref: `v0.7.0`.
