@@ -276,5 +276,92 @@ assert.equal(byId('drawerMaintenanceDetail').textContent,'','blank next_action a
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
+    def test_task_list_orders_by_latest_execution_start_across_statuses(self):
+        node = shutil.which('node')
+        if not node:
+            self.skipTest('Node is required for the executable UI regression')
+        script = re.search(r'<script>(.*?)</script>', (ROOT / 'assets/dashboard.html').read_text(), re.S).group(1)
+        harness = HARNESS_PRELUDE + r'''
+const row=(id,extra)=>({run_id:id,task_id:id,cwd:'/fx',revision:1,status:'reported',decision:null,superseded_by:null,objective:'Task '+id,...extra});
+run(`globalThis.loadRows=function(rows){st.cache.clear();for(const r of rows)st.cache.set(r.run_id,mergeDetail(undefined,r,Date.now()));
+  st.loadedOrder=rows.map(r=>r.run_id);st.loadedSet=new Set(st.loadedOrder);st.extraIds=new Set();renderList();};`);
+const order=()=>Array.from(run('st.cardElements'),c=>c.dataset.taskKey.split('\u0000')[0]);
+const rows=[
+  row('a',{started_at:100}),
+  row('b',{status:'running',started_at:300,last_activity_at:1000}),
+  row('c',{decision:{decision:'accepted'},started_at:200,ended_at:5000}),
+  row('d1',{task_id:'d',started_at:50,superseded_by:'d2'}),
+  row('d2',{task_id:'d',revision:2,status:'failed',started_at:400}),
+  row('e',{}),
+  row('g',{started_at:150}),
+  row('f',{started_at:150}),
+];
+run("conn.status='online';st.filter='all';st.search='';st.run='';");
+run(`loadRows(${JSON.stringify(rows)})`);
+assert.deepEqual(order(),['d','b','c','f','g','a','e'],'latest execution start, across statuses; ties by key; missing start last');
+assert.equal(byId('taskGroups').children.filter(n=>n.className==='group-label').length,0,'no status grouping in the default list');
+
+// Activity, completion and a coordinator decision never move a demand.
+const touched=rows.map(r=>r.run_id==='b'?{...r,last_activity_at:999999}:r.run_id==='a'?{...r,ended_at:999999,status:'failed'}:
+  r.run_id==='c'?{...r,decision:{decision:'returned'},updated_at:999999}:r);
+run(`loadRows(${JSON.stringify(touched)})`);
+assert.deepEqual(order(),['d','b','c','f','g','a','e']);
+
+// A genuine fresh execution of an older demand moves it.
+const fresh=[...touched.map(r=>r.run_id==='a'?{...r,superseded_by:'a2'}:r),row('a2',{task_id:'a',revision:2,status:'running',started_at:500})];
+run(`loadRows(${JSON.stringify(fresh)})`);
+assert.deepEqual(order(),['a','d','b','c','f','g','e']);
+
+// Chips narrow membership but keep the same order; the selection survives the reorder.
+run("st.run='b';st.filter='active';renderList();");
+assert.deepEqual(order(),['a','b']);
+assert.equal(run("st.cardElements.find(c=>c.dataset.taskKey.startsWith('b')).getAttribute('aria-current')"),'true');
+run("st.filter='attention';renderList();");
+assert.deepEqual(order(),['d','c','f','g','e'],'a returned decision needs attention but keeps its start-time place');
+run("st.filter='all';renderList();");
+assert.deepEqual(order(),['a','d','b','c','f','g','e']);
+assert.equal(run("st.cardElements.filter(c=>c.getAttribute('tabindex')==='0').length"),1,'exactly one roving tab stop');
+'''
+        source = 'const SOURCE=' + __import__('json').dumps(script) + ';\n' + harness
+        result = subprocess.run([node, '-'], input=source, text=True, capture_output=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_workflow_report_pages_are_joined_only_when_coherent(self):
+        node = shutil.which('node')
+        if not node:
+            self.skipTest('Node is required for the executable UI regression')
+        script = re.search(r'<script>(.*?)</script>', (ROOT / 'assets/dashboard.html').read_text(), re.S).group(1)
+        harness = HARNESS_PRELUDE + r'''
+(async()=>{
+  assert.equal(run("execFact({status:'blocked',result:{blocked_by:'workflow_evidence'}},true).label"),'Workflow 报告未完整交回');
+  assert.equal(run("execFact({status:'blocked',result:{blocked_by:'executor'}},true).label"),'执行者无法继续');
+  const delivery={status:'delivered',reason_codes:[],invocations:[{index:0,collection:{status:'collected',report:{size_bytes:9,sha256:'h'}}}]};
+  run(`conn.status='online';st.run='w1';st.cache.set('w1',mergeDetail(undefined,${JSON.stringify({run_id:'w1',task_id:'w1',cwd:'/fx',revision:1,status:'reported',decision:null,result:{structured:{summary:'parent summary'},workflow_delivery:delivery}})},Date.now()));`);
+  const pages=[{available:true,offset_bytes:0,next_offset_bytes:5,total_bytes:9,sha256:'h',content:'hello'},
+               {available:true,offset_bytes:5,next_offset_bytes:null,total_bytes:9,sha256:'h',content:' all'}];
+  const requested=[];
+  context.fetch=async(url)=>{requested.push([url.searchParams.get('name'),Number(url.searchParams.get('offset'))]);const page=pages.shift();return {ok:true,json:async()=>page};};
+  await run("loadWorkflowPage('w1',0)");
+  await run("loadWorkflowPage('w1',0)");
+  assert.deepEqual(requested,[['workflow_report',0],['workflow_report',5]]);
+  assert.equal(run("st.workflowPages.get(workflowPageKey('w1',0)).text"),'hello all');
+  assert.equal(run("st.workflowPages.get(workflowPageKey('w1',0)).next"),null);
+  await run("loadWorkflowPage('w1',0)");
+  assert.equal(requested.length,2,'a complete report is not fetched again');
+
+  run(`st.cache.set('w2',mergeDetail(undefined,${JSON.stringify({run_id:'w2',task_id:'w2',cwd:'/fx',revision:1,status:'reported',decision:null,result:{workflow_delivery:delivery}})},Date.now()));st.run='w2';`);
+  pages.push({available:true,offset_bytes:0,next_offset_bytes:5,total_bytes:9,sha256:'h',content:'hello'},
+             {available:true,offset_bytes:5,next_offset_bytes:null,total_bytes:9,sha256:'other',content:' all'});
+  await run("loadWorkflowPage('w2',0)");
+  await run("loadWorkflowPage('w2',0)");
+  assert.equal(run("st.workflowPages.get(workflowPageKey('w2',0)).text"),'hello','an incoherent page is never appended');
+  assert.match(run("st.workflowPages.get(workflowPageKey('w2',0)).error"),/不一致/);
+})().catch(error=>{console.error(error);process.exitCode=1});
+'''
+        source = 'const SOURCE=' + __import__('json').dumps(script) + ';\n' + harness
+        result = subprocess.run([node, '-'], input=source, text=True, capture_output=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

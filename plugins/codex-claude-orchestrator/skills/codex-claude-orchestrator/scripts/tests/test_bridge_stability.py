@@ -52,6 +52,7 @@ if args == ['--help']:
     print(' '.join(flag for flag in flags if flag != os.environ.get('STABILITY_OMIT_FLAG'))); raise SystemExit(0)
 if args == ['auth','status','--json']:
     print(json.dumps({'loggedIn':True})); raise SystemExit(0)
+sys.stdin.buffer.read()
 session=args[args.index('--session-id')+1]
 print(json.dumps({'type':'system','subtype':'init','session_id':session,'model':'test-model'}))
 cost=os.environ.get('STABILITY_COST')
@@ -229,6 +230,74 @@ print(json.dumps(result))
         self.assertEqual(result["blocked_by"], "executor")
         self.assertEqual(result["structured"]["summary"], "fixture summary")
         self.assertEqual(result["structured"]["unresolved"], ["need more detail"])
+
+    def run_with_cancel_at(self, stage, *, early):
+        """Run the bridge in process and record a cancellation as soon as ``stage`` returns."""
+        module = load_bridge_module()
+        name = f"cancel-{stage}-{'early' if early else 'run'}"
+        run_dir = self.root / name
+        packet_path = self.root / f"{name}.json"
+        packet_path.write_text(json.dumps({**self.packet(role="review"), "task_id": name}))
+        lifecycle = self.root / f"{name}-lifecycle.json"
+        request = self.root / f"{name}-request.json"
+        original = getattr(module, stage)
+        launched = []
+
+        def cancel_after(*args, **kwargs):
+            value = original(*args, **kwargs)
+            # The descriptor is verified once before run_dir exists; only the
+            # final check after the guard self-test is the stage under test.
+            if stage == "verify_cli_descriptor" and not (run_dir / "hook-guard-preflight.json").exists():
+                return value
+            if early:
+                request.write_text("{}")
+            else:
+                module.dump(run_dir / "cancel.json", {"reason": f"fixture cancel during {stage}"})
+            return value
+
+        original_popen = subprocess.Popen
+
+        def popen(command, *args, **kwargs):
+            if isinstance(command, list) and "--json-schema" in command:
+                launched.append(command)
+            return original_popen(command, *args, **kwargs)
+
+        environment = {"CODEX_BRIDGE_LIFECYCLE_FILE": str(lifecycle)}
+        if early:
+            environment["CODEX_BRIDGE_CANCEL_FILE"] = str(request)
+        args = argparse.Namespace(packet=str(packet_path), run_dir=str(run_dir), timeout=3, resume_from=None)
+        with mock.patch.dict(os.environ, environment), mock.patch.object(module, stage, side_effect=cancel_after), \
+                mock.patch.object(module.subprocess, "Popen", new=popen):
+            code = module.run(args)
+        return module, code, run_dir, json.loads(lifecycle.read_text()), launched
+
+    def test_cancellation_during_final_preflight_never_launches_claude(self):
+        for stage in ("check_environment", "hook_policy_preflight", "verify_cli_descriptor"):
+            for early in (False, True):
+                with self.subTest(stage=stage, early=early):
+                    module, code, run_dir, lifecycle, launched = self.run_with_cancel_at(stage, early=early)
+                    self.assertEqual(code, 1)
+                    self.assertEqual(launched, [], "no Claude child may be spawned after a cancellation was observed")
+                    self.assertFalse((run_dir / "child.json").exists())
+                    self.assertTrue((run_dir / "cancel.json").exists())
+                    receipt = json.loads((run_dir / "receipt.json").read_text())
+                    self.assertEqual(receipt["status"], "cancelled")
+                    self.assertIn("before Claude dispatch", receipt["note"])
+                    self.assertEqual((lifecycle["terminal"], lifecycle["phase"], lifecycle["child_started"], lifecycle["status"]),
+                                     (True, "pre_dispatch", False, "cancelled"))
+                    self.assertEqual(module.unknown_markers(module.lane_identity(self.repo)), [])
+
+    def test_uncancelled_launch_still_reports_after_the_final_check(self):
+        module = load_bridge_module()
+        packet_path = self.root / "no-cancel.json"
+        packet_path.write_text(json.dumps(self.packet(role="review")))
+        lifecycle = self.root / "no-cancel-lifecycle.json"
+        args = argparse.Namespace(packet=str(packet_path), run_dir=str(self.root / "no-cancel"), timeout=3, resume_from=None)
+        with mock.patch.dict(os.environ, {"CODEX_BRIDGE_LIFECYCLE_FILE": str(lifecycle)}):
+            self.assertEqual(module.run(args), 0)
+        record = json.loads(lifecycle.read_text())
+        self.assertEqual((record["phase"], record["child_started"], record["status"]), ("terminal", True, "reported"))
+        self.assertEqual(json.loads((self.root / "no-cancel" / "result.json").read_text())["prompt_delivery"]["state"], "complete")
 
     def test_only_finite_nonnegative_provider_cost_is_transparent(self):
         for value, expected in (("0", 0.0), ("0.125", 0.125), ("-1", None), ("nan", None)):

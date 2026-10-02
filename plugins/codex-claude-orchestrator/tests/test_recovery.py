@@ -43,6 +43,7 @@ if a == ['--help']: print('-p --model --effort --output-format --verbose --json-
 if a == ['auth','status','--json']: print(json.dumps({'loggedIn':True})); raise SystemExit
 s=a[a.index('--session-id')+1] if '--session-id' in a else a[a.index('--resume')+1]
 print(json.dumps({'type':'system','subtype':'init','session_id':s,'model':'fixture'}), flush=True)
+sys.stdin.buffer.read()
 print(json.dumps({'type':'result','subtype':'success','session_id':s,'structured_output':{'status':'completed','summary':'done','evidence':[], 'checks':[], 'unresolved':[]}}), flush=True)
 """)
         self.fake.chmod(0o755)

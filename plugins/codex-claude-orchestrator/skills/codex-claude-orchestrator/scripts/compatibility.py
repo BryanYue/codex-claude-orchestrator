@@ -68,7 +68,7 @@ def bridge_contract_id() -> str:
     scripts = Path(__file__).resolve().parent
     plugin = scripts.parents[2]
     names = [scripts / name for name in ("bridge.py", "runtime.py", "workspace.py", "events.py", "named_workflow.py",
-                                         "compatibility.py", "usage.py")]
+                                         "compatibility.py", "usage.py", "workflow_delivery.py")]
     names += [plugin / "scripts" / name for name in ("cli_validation.py", "cli_store.py", "content_store.py", "plugin_identity.py")]
     contents = [(str(path.relative_to(plugin)), hashlib.sha256(path.read_bytes()).hexdigest()) for path in names if path.is_file()]
     return hashlib.sha256(json.dumps(contents, sort_keys=True).encode()).hexdigest()

@@ -37,6 +37,7 @@ CONTRACT_RELATIVE_PATHS = (
     "skills/codex-claude-orchestrator/scripts/named_workflow.py",
     "skills/codex-claude-orchestrator/scripts/compatibility.py",
     "skills/codex-claude-orchestrator/scripts/usage.py",
+    "skills/codex-claude-orchestrator/scripts/workflow_delivery.py",
     "scripts/cli_validation.py",
     "scripts/cli_store.py",
     "scripts/content_store.py",

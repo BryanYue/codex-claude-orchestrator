@@ -28,6 +28,7 @@ _LOADED_CODE = startup_protocol.loaded_identity(startup_protocol.plugin_root(Pat
 
 ACTIVE = {"starting", "running", "executing", "collecting", "cancelling"}
 FINAL = {"reported", "blocked", "failed", "cancelled", "timeout", "unknown"}
+SETTLED = FINAL - {"unknown"}
 PHASES = {"preflight", "starting", "executing", "collecting", "reported", "blocked", "failed", "cancelled", "timeout", "unknown", "cancelling"}
 _NO_REGISTRY_CHANGE = object()
 _LOCAL_LANES: dict[str, Any] = {}
@@ -213,8 +214,11 @@ class Runtime:
     def _own_unknown_markers(self, cwd: str, run_id: str) -> tuple[list[Path], list[Path]]:
         ours: list[Path] = []
         others: list[Path] = []
+        record = self._registry().get("runs", {}).get(run_id, {})
         for path, value in bridge.unknown_markers(self._run_lane(run_id, cwd)[0]):
-            (ours if isinstance(value, dict) and value.get("run_id") == run_id else others).append(path)
+            owned = (isinstance(value, dict) and value.get("run_id") == run_id
+                     and self._marker_from_this_runtime(record, value))
+            (ours if owned else others).append(path)
         return ours, others
 
     def _require_matching_unknown_marker(self, cwd: str, run_id: str) -> list[Path]:
@@ -228,6 +232,110 @@ class Runtime:
         """Clear only this run's admission markers; other runs' markers keep blocking the lane."""
         for marker in self._own_unknown_markers(cwd, run_id)[0]:
             marker.unlink(missing_ok=True)
+
+    def _note_admission_cleanup(self, run_id: str, state: str, error: str | None = None) -> None:
+        """Record a post-terminal cleanup fact; it never changes the run's execution status."""
+        def note(data):
+            rec = data.get("runs", {}).get(run_id)
+            if not rec:
+                return _NO_REGISTRY_CHANGE
+            previous = rec.get("admission_cleanup") if isinstance(rec.get("admission_cleanup"), dict) else {}
+            attempts = previous.get("attempts") if isinstance(previous.get("attempts"), int) else 0
+            value = {"state": state, "attempts": attempts + 1, "attempted_at": time.time()}
+            if error:
+                value["error"] = error[:500]
+            rec["admission_cleanup"] = value
+        self._update(note)
+
+    def _finish_admission_cleanup(self, run_id: str, cwd: str, *, record_success: bool = False) -> bool:
+        """Clear a settled run's own lane markers, keeping any failure as a retryable fact.
+
+        The execution outcome is already committed and stays as it is: an
+        unlink failure neither turns it into unknown nor publishes another
+        marker.  A marker that could not be removed keeps blocking the lane
+        until admission or a restart retries this under the same proof.
+        """
+        try:
+            self._clear_matching_unknown_marker(cwd, run_id)
+        except Exception as exc:
+            try:
+                self._note_admission_cleanup(run_id, "pending", f"{type(exc).__name__}: {exc}")
+            except Exception:
+                pass
+            return False
+        try:
+            current = self._registry().get("runs", {}).get(run_id, {})
+            if record_success or isinstance(current.get("admission_cleanup"), dict):
+                self._note_admission_cleanup(run_id, "completed")
+        except Exception:
+            pass
+        return True
+
+    def _retry_admission_cleanup(self, record: dict[str, Any]) -> bool:
+        """Retry a settled run's own marker cleanup; the caller holds the run's lane exclusively.
+
+        Only a bound, trusted terminal whose bridge and Claude process groups
+        are proven stopped may clear its own markers.  Foreign or malformed
+        markers are never touched and keep blocking.
+        """
+        run_id = record.get("run_id")
+        evidence = self._trusted_terminal(record)
+        if not evidence or evidence.get("status") != record.get("status"):
+            self._note_admission_cleanup(run_id, "pending", "terminal binding, lifecycle or stopped-process proof is not currently available")
+            return False
+        return self._finish_admission_cleanup(run_id, record.get("cwd", ""), record_success=True)
+
+    @staticmethod
+    def _marker_values() -> list[Any]:
+        values = []
+        for path in sorted(bridge.unknown_marker_root().glob("*.json")):
+            try:
+                values.append(json.loads(path.read_text(encoding="utf-8")))
+            except (OSError, ValueError):
+                continue
+        return values
+
+    def _marker_from_this_runtime(self, record: dict[str, Any], marker: dict[str, Any]) -> bool:
+        intent = marker.get("launch_intent") if isinstance(marker.get("launch_intent"), dict) else {}
+        # Missing legacy fields are allowed; every explicit owner must agree.
+        return (("state_root" not in marker or marker["state_root"] == str(self.state_root))
+                and ("run_dir" not in marker or marker["run_dir"] == record.get("run_dir"))
+                and ("run_dir" not in intent or intent["run_dir"] == record.get("run_dir")))
+
+    def _admission_cleanup_candidates(self, lane: str | None = None) -> list[dict[str, Any]]:
+        """Settled runs with pending cleanup or a marker of their own, optionally limited to one lane."""
+        runs = self._registry().get("runs", {})
+        found: dict[str, dict[str, Any]] = {}
+        for run_id, record in runs.items():
+            cleanup = record.get("admission_cleanup")
+            if (record.get("status") in SETTLED and isinstance(cleanup, dict) and cleanup.get("state") == "pending"
+                    and (lane is None or self._record_in_lane(record, lane))):
+                found[run_id] = record
+        markers = [value for _, value in bridge.unknown_markers(lane)] if lane is not None else self._marker_values()
+        for value in markers:
+            if not isinstance(value, dict):
+                continue
+            record = runs.get(value.get("run_id"))
+            if (isinstance(record, dict) and record.get("status") in SETTLED
+                    and self._marker_from_this_runtime(record, value)):
+                found[record["run_id"]] = record
+        return list(found.values())
+
+    def _retry_lane_admission_cleanup(self, lane: str) -> None:
+        """Admission path: the caller already holds ``lane``."""
+        for record in self._admission_cleanup_candidates(lane):
+            legacy = self._legacy_lane_key(record)
+            handle = None
+            try:
+                if legacy is not None and legacy != lane:
+                    handle = self._lane_lock(legacy)
+                self._retry_admission_cleanup(record)
+            except Exception:
+                # Whatever remains is reported by the marker check that follows.
+                pass
+            finally:
+                if handle is not None:
+                    self._release_lane(legacy, handle)
 
     @staticmethod
     def _has_reconciliation(record: dict[str, Any]) -> bool:
@@ -258,6 +366,19 @@ class Runtime:
                     self._adopt_trusted_terminal(run_id, evidence)
                 elif record.get("status") in ACTIVE:
                     self._mark_run_unknown(run_id, "runtime restarted without a confirmed owner; manual reconciliation required")
+            finally:
+                self._release_lanes(held)
+        # A settled run whose own marker cleanup failed earlier is retried
+        # here; a lane still held elsewhere is retried by its next admission.
+        for record in self._admission_cleanup_candidates():
+            try:
+                held = self._hold_record_lanes(record)
+            except RuntimeError:
+                continue
+            try:
+                self._retry_admission_cleanup(record)
+            except Exception:
+                pass
             finally:
                 self._release_lanes(held)
 
@@ -400,7 +521,7 @@ class Runtime:
         if current.get("status") == "unknown":
             self._mark_unknown_lane(current.get("cwd", ""), run_id, "bridge returned a trustworthy unknown terminal receipt")
             return
-        self._clear_matching_unknown_marker(current.get("cwd", ""), run_id)
+        self._finish_admission_cleanup(run_id, current.get("cwd", ""))
 
     def _sync_unowned(self, run_id: str) -> None:
         with self._guard:
@@ -482,6 +603,7 @@ class Runtime:
                     finally:
                         if legacy_handle is not None:
                             self._release_lane(legacy, legacy_handle)
+                self._retry_lane_admission_cleanup(lane_identity)
                 if bridge.unknown_markers(lane_identity):
                     raise RuntimeError("cwd worktree has an unknown prior supervised run; reconcile it manually before dispatch")
                 registry = self._registry()
@@ -703,7 +825,7 @@ class Runtime:
             if final.get("status") == "unknown":
                 self._mark_unknown_lane(cwd, run_id, "bridge exited without a trustworthy terminal receipt")
             else:
-                self._clear_matching_unknown_marker(cwd, run_id)
+                self._finish_admission_cleanup(run_id, cwd)
         except Exception as exc:
             if terminated and cwd:
                 try:
@@ -1146,6 +1268,13 @@ class Runtime:
             blocking.append(str(workspace.get("reason") or "current workspace evidence is unavailable"))
         detail["blocking_reasons"] = blocking
         detail["eligible"] = not blocking
+        cleanup = record.get("admission_cleanup")
+        if isinstance(cleanup, dict):
+            detail["admission_cleanup"] = cleanup
+            if record.get("status") in SETTLED and cleanup.get("state") == "pending":
+                detail["admission_cleanup_note"] = (
+                    "the settled outcome is kept; this run's own lane-marker cleanup is retried at the next dispatch "
+                    "for this worktree or a Runtime restart, under the same trusted-terminal and stopped-process proof")
         return detail
 
     def inspect_recovery(self, run_id: str) -> dict[str, Any]:

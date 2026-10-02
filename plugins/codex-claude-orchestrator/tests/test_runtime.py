@@ -39,6 +39,7 @@ def opt(x): return a[a.index(x)+1] if x in a else None
 s=opt('--resume') or opt('--session-id')
 print(json.dumps({'type':'system','subtype':'init','session_id':s,'model':'test-model'}), flush=True)
 if os.environ.get('RUNTIME_FAKE_SLEEP'): time.sleep(3)
+sys.stdin.buffer.read()
 print(json.dumps({'type':'assistant','session_id':s,'message':{'model':'provider-model','content':[]}}), flush=True)
 print(json.dumps({'type':'result','subtype':'success','session_id':s,'modelUsage':{'provider-model':{'inputTokens':1}},'usage':{'input_tokens':1},'permission_denials':([{'tool_name':'Read','reason':'denied'}] if os.environ.get('RUNTIME_FAKE_DENY') else []),'structured_output':{'status':'completed','summary':'done','evidence':['fake'], 'checks':[], 'unresolved':[]}}), flush=True)
 """)
@@ -583,6 +584,149 @@ print(json.dumps({'type':'result','subtype':'success','session_id':s,'modelUsage
         child = json.loads((Path(record["run_dir"]) / "child.json").read_text())
         self.assertEqual(self.runtime._process_presence(child["process_group"], group=True, label="fixture child")["state"], "stopped")
         lane = self.runtime._lane_lock(str(self.repo)); self.runtime._release_lane(str(self.repo), lane)
+
+    def wait_released(self, run_id):
+        deadline = time.monotonic() + 8
+        while run_id in self.runtime._workers and time.monotonic() < deadline:
+            time.sleep(.05)
+        self.assertNotIn(run_id, self.runtime._workers)
+
+    def own_markers(self, run_id):
+        lane = bridge.lane_identity(self.repo)
+        return [value for _, value in bridge.unknown_markers(lane) if isinstance(value, dict) and value.get("run_id") == run_id]
+
+    def failing_cleanup(self, *, leave_marker=True):
+        """A transient unlink fault; optionally this run's own marker is what could not be removed."""
+        def fail(cwd, run_id):
+            if leave_marker:
+                bridge.publish_unknown_marker(bridge.lane_identity(self.repo), {
+                    "cwd": str(self.repo.resolve()), "run_id": run_id, "reason": "fixture marker left by a failed unlink",
+                    "state_root": str(self.runtime.state_root), "recorded_at": time.time()})
+            raise PermissionError("fixture transient marker unlink fault")
+        return fail
+
+    def settle_with_failed_cleanup(self, revision, *, status="reported", **failure):
+        env = {"failed": {"RUNTIME_FAKE_DENY": "1"}, "cancelled": {"RUNTIME_FAKE_SLEEP": "1"},
+               "timeout": {"RUNTIME_FAKE_SLEEP": "1"}}.get(status, {})
+        with mock.patch.dict(os.environ, env), \
+                patch.object(self.runtime, "_clear_matching_unknown_marker", side_effect=self.failing_cleanup(**failure)):
+            started = self.runtime.start(self.packet(revision=revision), timeout=1 if status == "timeout" else 30)
+            run_id = started["run_id"]
+            if status == "cancelled":
+                child = Path(started["run_dir"]) / "child.json"
+                deadline = time.monotonic() + 8
+                while not child.is_file() and time.monotonic() < deadline:
+                    time.sleep(.02)
+                self.runtime.cancel(run_id, "fixture cancel")
+            self.finish(run_id)
+            self.wait_released(run_id)
+        return run_id
+
+    def test_original_terminal_marker_repro_no_longer_blocks_the_lane(self):
+        run_id = self.settle_with_failed_cleanup(1, leave_marker=False)
+        record = self.runtime._registry()["runs"][run_id]
+        self.assertEqual(record["status"], "reported")
+        self.assertEqual(record["admission_cleanup"]["state"], "pending")
+        self.assertIn("PermissionError", record["admission_cleanup"]["error"])
+        self.assertEqual(self.own_markers(run_id), [], "a cleanup fault no longer publishes an unknown marker")
+        detail = self.runtime.inspect_recovery(run_id)
+        self.assertEqual(detail["blocking_reasons"], ["run is not unknown"])
+        self.assertIn("retried", detail["admission_cleanup_note"])
+        next_run = self.runtime.start(self.packet(revision=2))["run_id"]
+        self.assertEqual(self.finish(next_run)["snapshot"]["status"], "reported")
+        self.assertEqual(self.runtime._registry()["runs"][run_id]["admission_cleanup"]["state"], "completed")
+
+    def test_settled_runs_keep_their_outcome_and_admission_retries_their_own_marker(self):
+        revision = 0
+        for status in ("reported", "failed", "cancelled", "timeout"):
+            with self.subTest(status=status):
+                revision += 1
+                run_id = self.settle_with_failed_cleanup(revision, status=status)
+                record = self.runtime._registry()["runs"][run_id]
+                self.assertEqual((record["status"], record["admission_cleanup"]["state"]), (status, "pending"))
+                self.assertEqual(len(self.own_markers(run_id)), 1, "the marker that could not be unlinked still blocks")
+                revision += 1
+                next_run = self.runtime.start(self.packet(revision=revision))["run_id"]
+                self.assertEqual(self.own_markers(run_id), [])
+                self.assertEqual(self.finish(next_run)["snapshot"]["status"], "reported")
+                self.wait_released(next_run)
+                record = self.runtime._registry()["runs"][run_id]
+                self.assertEqual((record["status"], record["admission_cleanup"]["state"]), (status, "completed"))
+                self.assertEqual(self.runtime.snapshot(run_id)["status"], status)
+
+    def test_restart_retries_settled_cleanup_but_a_foreign_marker_still_blocks(self):
+        run_id = self.settle_with_failed_cleanup(1)
+        lane = bridge.lane_identity(self.repo)
+        foreign = bridge.publish_unknown_marker(lane, {"cwd": str(self.repo.resolve()), "run_id": "run-foreign",
+                                                       "reason": "another run's recovery record", "recorded_at": time.time()})
+        self.addCleanup(lambda: foreign.unlink(missing_ok=True))
+        restarted = Runtime(self.root / "runtime-state")
+        try:
+            self.assertEqual(self.own_markers(run_id), [], "restart retries this run's own cleanup")
+            self.assertEqual(restarted._registry()["runs"][run_id]["status"], "reported")
+            with self.assertRaisesRegex(RuntimeError, "unknown prior supervised run"):
+                restarted.start(self.packet(revision=2))
+            self.assertTrue(foreign.exists(), "a marker of another run is never cleared")
+        finally:
+            restarted.close()
+
+    def test_pending_cleanup_preserves_every_explicit_foreign_owner(self):
+        run_id = self.settle_with_failed_cleanup(1)
+        record = self.runtime._registry()["runs"][run_id]
+        lane = bridge.lane_identity(self.repo)
+        marker_path, original = next((p, v) for p, v in bridge.unknown_markers(lane) if v.get("run_id") == run_id)
+        variants = [
+            {"state_root": str(self.root / "foreign-state")},
+            {"run_dir": str(self.root / "foreign-run")},
+            {"launch_intent": {"run_dir": str(self.root / "foreign-run")}},
+            {"run_dir": record["run_dir"], "launch_intent": {"run_dir": str(self.root / "foreign-run")}},
+        ]
+        try:
+            for fields in variants:
+                with self.subTest(fields=fields):
+                    bridge.dump(marker_path, {**original, **fields})
+                    expected = marker_path.read_bytes()
+                    self.runtime._update(lambda data: data["runs"][run_id].update(admission_cleanup={"state": "pending"}))
+                    with self.assertRaisesRegex(RuntimeError, "unknown prior supervised run"):
+                        self.runtime.start(self.packet(revision=2))
+                    self.assertEqual(marker_path.read_bytes(), expected)
+                    self.assertEqual(self.runtime.snapshot(run_id)["status"], "reported")
+        finally:
+            bridge.dump(marker_path, original)
+        next_run = self.runtime.start(self.packet(revision=2))["run_id"]
+        self.assertEqual(self.finish(next_run)["snapshot"]["status"], "reported")
+
+    def test_retry_keeps_blocking_without_bound_terminal_and_stopped_process_proof(self):
+        run_id = self.settle_with_failed_cleanup(1)
+        record = self.runtime._registry()["runs"][run_id]
+        lifecycle = Path(record["lifecycle_file"])
+        packet = self.runtime._packet_path(run_id)
+        originals = {lifecycle: lifecycle.read_bytes(), packet: packet.read_bytes()}
+        live = {"state": "running", "reason": "fixture live process group"}
+        tampers = {
+            "lifecycle": lambda: lifecycle.write_text(json.dumps({**json.loads(originals[lifecycle]), "packet_sha256": "0" * 64})),
+            "packet": lambda: packet.write_bytes(originals[packet] + b"\n"),
+            "live_group": None,
+        }
+        for label, tamper in tampers.items():
+            with self.subTest(case=label):
+                if tamper is not None:
+                    tamper()
+                    with self.assertRaisesRegex(RuntimeError, "unknown prior supervised run"):
+                        self.runtime.start(self.packet(revision=2))
+                else:
+                    with patch.object(Runtime, "_process_presence", return_value=live), \
+                            self.assertRaisesRegex(RuntimeError, "unknown prior supervised run"):
+                        self.runtime.start(self.packet(revision=2))
+                self.assertEqual(len(self.own_markers(run_id)), 1)
+                cleanup = self.runtime._registry()["runs"][run_id]["admission_cleanup"]
+                self.assertEqual(cleanup["state"], "pending")
+                self.assertIn("proof", cleanup["error"])
+                for path, data in originals.items():
+                    path.write_bytes(data)
+        next_run = self.runtime.start(self.packet(revision=2))["run_id"]
+        self.assertEqual(self.own_markers(run_id), [])
+        self.assertEqual(self.finish(next_run)["snapshot"]["status"], "reported")
 
 
 if __name__ == "__main__": unittest.main(verbosity=2)

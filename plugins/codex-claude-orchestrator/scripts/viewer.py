@@ -7,6 +7,7 @@ import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import secrets
+import sys
 import threading
 from urllib.parse import parse_qs, urlparse
 
@@ -23,6 +24,8 @@ ARTIFACTS = {
     "workspace_before": "workspace_before.json", "workspace_after": "workspace_after.json",
     "reconciliation": "reconciliation.json", "content_binding": "content-binding.json",
 }
+# Captured saved-Workflow output, served in UTF-8-safe byte pages after a hash check.
+PAGED_ARTIFACTS = {"workflow_report": "report", "workflow_envelope": "envelope"}
 
 _MAINTENANCE_FIELDS = frozenset({
     "policy", "version_management", "state", "reason", "message", "next_action", "notice_pending",
@@ -69,7 +72,22 @@ def _authorized(header, token: str) -> bool:
     return hmac.compare_digest(supplied, ("Bearer " + token).encode("ascii"))
 
 
-def read_artifact(runtime, run_id: str, name: str) -> dict:
+def _workflow_delivery():
+    scripts = str(ROOT / "skills/codex-claude-orchestrator/scripts")
+    if scripts not in sys.path:
+        sys.path.append(scripts)
+    import workflow_delivery
+    return workflow_delivery
+
+
+def read_artifact(runtime, run_id: str, name: str, *, index: int = 0, offset: int = 0, limit: int | None = None) -> dict:
+    if name in PAGED_ARTIFACTS:
+        snapshot = runtime.snapshot(run_id)
+        result = snapshot.get("result") if isinstance(snapshot.get("result"), dict) else {}
+        delivery = _workflow_delivery()
+        return delivery.read_page(Path(snapshot["run_dir"]), result.get("workflow_delivery"), index=index,
+                                  part=PAGED_ARTIFACTS[name], offset=offset,
+                                  limit=delivery.DEFAULT_PAGE_BYTES if limit is None else limit)
     if name not in ARTIFACTS:
         raise ValueError("Unknown artifact")
     snapshot = runtime.snapshot(run_id)
@@ -160,7 +178,8 @@ class Viewer:
                             raise ValueError("Invalid event page")
                         return self.send(200, viewer.runtime.events(run_id, after=after, limit=limit))
                     if route.path == "/api/artifact":
-                        return self.send(200, read_artifact(viewer.runtime, run_id, q.get("name", [""])[0]))
+                        paging = {key: int(q[key][0]) for key in ("index", "offset", "limit") if key in q}
+                        return self.send(200, read_artifact(viewer.runtime, run_id, q.get("name", [""])[0], **paging))
                     return self.send(404, {"error": "Not found"})
                 except (ValueError, RuntimeError, KeyError, FileNotFoundError) as exc:
                     return self.send(400, {"error": str(exc)})

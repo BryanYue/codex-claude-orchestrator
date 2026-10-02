@@ -9,6 +9,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 REPO = ROOT.parents[1]
@@ -59,6 +60,23 @@ class Fetch:
 
 
 class ContentStoreTests(unittest.TestCase):
+    def test_previously_approved_content_rechecks_executable_capabilities(self):
+        capability = "future_fixture_interface"
+        source, digest = self.source("future", requires={"content_api": 1, "capabilities": CAPABILITIES + [capability]})
+        with mock.patch.object(content_store, "CAPABILITIES", content_store.CAPABILITIES | {capability}):
+            self.store.check(local_dir=str(source))
+            self.store.review(digest, "approve", "reviewed future fixture", ["fixture"])
+            binding = self.store.pin(digest, require_read=True)
+        with self.assertRaises(ContentError):
+            self.store.pin(digest, require_read=True)
+        with self.assertRaises(ContentError):
+            content_store.verify_binding(binding)
+        self.assertFalse(self.store.status()["effective"]["verified"])
+        self.assertTrue(self.store.read(digest=digest)["text"], "historical content stays readable as evidence")
+        self.store.switch("disable", "fixture executable downgrade")
+        with self.assertRaises(ContentError):
+            self.store.switch("rollback", "cannot reactivate unsupported content", digest)
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name).resolve()

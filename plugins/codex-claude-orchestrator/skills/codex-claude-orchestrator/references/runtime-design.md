@@ -42,6 +42,8 @@ start/status/wait/details/decide 增加可选 compact，默认 false 保留旧�
 
 该模式只读、fresh-only，不允许 correction 或 resume，不能转而调用内联脚本、其他 Workflow 或普通 review。bridge 需要观察到同一绑定 Workflow 的工具调用、成功结果和完成通知，且所采用的父级结果在完成通知之后，才会允许报告继续进入主 Codex 核验；完成前的结果只是中间结果。它既不批准计划，也不等于多席 Workflow 的成功。
 
+未发布修订把“完成”与“完整报告交付”分开：每个绑定调用都必须由结构化 `system/task_notification` 给出 `output_file`，bridge 从只交给本轮子进程的私有 `CLAUDE_CODE_TMPDIR` 根中按会话/task 精确定位并快照整份公开任务输出及其 `result` 文本表示（字符串原文或明确标记的对象/数组 JSON；信封始终保留原始字节），记录哈希与绑定。所有交付事实来自本轮 stream 推出的逐调用证据（`result.workflow_delivery`），不是另一个持久任务调度器或状态机；缺任一环节以稳定原因码把原本 completed 的 run 记为 `blocked_by=workflow_evidence`，failed/cancelled/timeout 不被覆盖。完整报告与父级 summary 分开展示并按字节分页读取；收集只证明来源与字节完整，内容正确性仍由 Codex 核验。多次真实 Workflow 调用沿用原语义：全部完成并各自收齐产物才算交付，不自动重试付费调用。文件 hook 只复核冻结的绑定脚本，完整 inventory 留在派单与实际 Workflow 调用两个入口。
+
 历史记录：早期版本曾在 CLI 2.1.276、2.1.277 和 2.1.278 的真实 MCP 夹具观察该受限模式：一名只读 agent，关联启动/完成事件、结构化结果以及文件未变化。支持原生 system/task_notification，拒绝只有模型完成声明的结果。当前版本不再按 CLI 版本准入，任何本机 CLI 都必须在该轮产生同样的完成证据。该证据不代表完整 Dynamic Workflow Review、多席位成本与实施型写入边界已验收。
 
 ## 尚未验收：Claude Dynamic Workflow Review
@@ -65,6 +67,8 @@ Dynamic Workflows 可用于 CLI、Desktop、`-p` 与 SDK。关键词触发只适
 对 0.6.1 新绑定的 run，只有整个执行目录不存在时，恢复才可使用外置派单 packet；目录存在时要求完整且一致的目录内 packet/CLI 副本。仍须在 lane 锁内证明 Bridge 进程组已停止、无其他执行者、工作区与 expected_workspace_digest 一致，并验证生命周期的 nonce/代码/lane 绑定。损坏绑定不能借 `child.json` 绕过，启动结果不确定时保持 unknown。
 
 恢复先持久化审计事实，再提交 registry，最后只移除匹配本轮的 marker。执行目录存在时沿用 `reconciliation.json`；整个目录尚未生成时写 `<state_root>/recovery-receipts/<run_id>.json`，不补造目录或活动日志。后一路径即使回执已写、registry 提交失败，重试也只能采纳同一份绑定事实；不覆写原因/证据。恢复后旧 unknown 状态和历史证据保留，只允许新的 fresh revision。旧版缺少启动绑定的事故记录不因此获得恢复资格。
+
+未发布修订的三处交接修补：其一，Bridge 在 Popen 后先持久化 PID/PGID，再于同一非阻塞监督循环里写提示词、读 stdout，执行时限从启动起算，因此不读 stdin 的子进程同样受超时与取消约束；其二，最后一段预检（guard 自检、描述符、代码身份）之后、launch intent 之前再查两处取消标记，命中即记“启动前取消”而不启动 Claude；其三，可信终态 run 的 marker 清理失败只记录 `admission_cleanup` 事实，终态不变，由同 worktree 的下一次派单或 Runtime 重启在独占 lane、可信终态绑定与进程组停止证明下重试，仅删除该 run 自己的 marker，外来/格式异常 marker 与证明不足时继续阻断。
 
 Claude 子进程在独立进程组中运行，不继承 lane 锁。因此 bridge 在 lane 锁内复查无 marker 后，于 Claude Popen 之前发布本 run 的 lane 级 launch intent marker，记录原 cwd、规范 lane、run_id、run_dir 与 lifecycle 文件位置。Runtime 与 bridge 都崩溃而子进程仍存活时，其他状态目录的 Runtime 与独立 bridge 仍会被这个 marker 拒绝，同一 worktree 的任何 cwd 都不能派发；linked worktree 不受影响。bridge 只在以下条件都满足后，才按 nonce 删除自己未被改写的 marker：直接子进程已回收、进程组确认不存在（或 Popen 明确失败、从未启动），且回执与终态 lifecycle 已落盘。清理未确认、启动被中断、以及任何崩溃窗口都保留 marker。Runtime 判定 unknown 时，会用带 `state_root` 的同 run marker 覆盖它。之后只能由原状态目录采纳可信终态，或经 inspect/reconcile 核实进程组已停止后清除，不凭 PID 自动清理。
 

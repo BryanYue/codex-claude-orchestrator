@@ -27,7 +27,7 @@ _SKILL_SCRIPTS = "skills/codex-claude-orchestrator/scripts"
 # manifests are versioned content, so a guide-only update keeps the identity.
 CODE_FILES = tuple(f"{_SKILL_SCRIPTS}/{name}" for name in (
     "bridge.py", "runtime.py", "compatibility.py", "events.py", "workspace.py", "usage.py",
-    "named_workflow.py", "protocol.py")) + tuple(f"scripts/{name}" for name in (
+    "named_workflow.py", "protocol.py", "workflow_delivery.py")) + tuple(f"scripts/{name}" for name in (
     "executable_locator.py", "content_store.py", "plugin_identity.py", "startup_protocol.py"))
 _LOADED: dict[str, dict[str, Any]] = {}
 

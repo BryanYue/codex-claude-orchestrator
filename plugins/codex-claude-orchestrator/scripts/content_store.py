@@ -30,7 +30,7 @@ import urllib.request
 
 SCHEMA = "codex-claude-orchestrator.content/v1"
 CONTENT_API = 1
-CAPABILITIES = frozenset({"check", "read", "review", "disable", "rollback", "task_pin"})
+CAPABILITIES = frozenset({"check", "read", "review", "disable", "rollback", "task_pin", "workflow_report_v1", "workflow_report_json_v1"})
 REPOSITORY = "BryanYue/codex-claude-orchestrator"
 CONTENT_PATH = "plugins/codex-claude-orchestrator/skills/codex-claude-orchestrator/references"
 DEFAULT_REF = "main"
@@ -450,6 +450,9 @@ class ContentStore:
         if review is None or review["decision"] not in TRUSTED_DECISIONS:
             raise ContentError(f"content {digest[:12]} has no approved review; it cannot be used for a task")
         manifest, _, _ = self._verify_dir(self.snapshots / digest, digest)
+        issue = compatibility_issue(manifest)
+        if issue:
+            raise ContentError(issue)
         return {"schema_version": 1, "digest": digest, "mode": mode, "fallback_reason": fallback_reason,
                 "origin": (review.get("source") or {}).get("kind"), "source": review.get("source"),
                 "content_version": manifest["content_version"], "entry": manifest["entry"],
@@ -484,6 +487,9 @@ class ContentStore:
             digest = state["active"]
             try:
                 manifest, _, _ = self._verify_dir(self.snapshots / digest, digest)
+                issue = compatibility_issue(manifest)
+                if issue:
+                    raise ContentError(issue)
                 review, _ = self._review(digest)
                 if review is None or review["decision"] != "approved":
                     raise ContentError("active content has no approved review")
@@ -794,6 +800,9 @@ def verify_binding(binding: Any) -> dict[str, Any]:
     if review is None or review["decision"] not in TRUSTED_DECISIONS or review_sha != expected_review.get("record_sha256"):
         raise ContentError("content binding review record is missing or changed")
     manifest, _, _ = store._verify_dir(snapshot_dir, digest)
+    issue = compatibility_issue(manifest)
+    if issue:
+        raise ContentError(issue)
     if (manifest["files"] != binding.get("files") or manifest["entry"] != binding.get("entry")
             or manifest["protocol_reference"] != binding.get("protocol_reference")
             or manifest["content_version"] != binding.get("content_version")):

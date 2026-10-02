@@ -30,6 +30,7 @@ if os.environ.get('STARTUP_TASK_LOG'):
     with open(os.environ['STARTUP_TASK_LOG'], 'a') as log: log.write(os.getcwd() + '\\n')
 s=a[a.index('--session-id')+1] if '--session-id' in a else a[a.index('--resume')+1]
 print(json.dumps({'type':'system','subtype':'init','session_id':s,'model':'fixture'}), flush=True)
+sys.stdin.buffer.read()
 print(json.dumps({'type':'result','subtype':'success','session_id':s,'structured_output':{'status':'completed','summary':'done','evidence':[],'checks':[],'unresolved':[]}}), flush=True)
 """
 TERMINAL = {"reported", "failed", "blocked", "cancelled", "timeout", "unknown"}

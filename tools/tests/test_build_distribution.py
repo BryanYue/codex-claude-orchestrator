@@ -33,6 +33,7 @@ CONTRACT_SOURCES = {
     "scripts/content_store.py": "# content_store\n",
     "scripts/plugin_identity.py": "# plugin_identity\n",
     "skills/codex-claude-orchestrator/scripts/usage.py": "# usage\n",
+    "skills/codex-claude-orchestrator/scripts/workflow_delivery.py": "# workflow_delivery\n",
 }
 
 

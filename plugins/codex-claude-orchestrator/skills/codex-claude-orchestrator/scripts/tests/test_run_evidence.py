@@ -23,6 +23,7 @@ if args == ['auth', 'status', '--json']:
     if mode == 'logged_out': print(json.dumps({'loggedIn': False})); sys.exit(1)
     print(json.dumps({'loggedIn': True, 'authMethod': 'claude.ai', 'apiProvider': 'firstParty'})); sys.exit(0)
 
+sys.stdin.buffer.read()
 def option(name): return args[args.index(name) + 1] if name in args else None
 session = option('--resume') or option('--session-id')
 
@@ -73,6 +74,27 @@ elif mode == 'bulky_denial':
           'tool_input': {'file_path': 'x.txt', 'content': 'A' * 5000}}]})
 elif mode == 'string_denial':
     emit({**success, 'permission_denials': ['no']})
+elif mode == 'blank_summary':
+    emit({**success, 'structured_output': {**report, 'summary': ' \n\t '}})
+elif mode == 'blank_item':
+    emit({**success, 'structured_output': {**report, 'evidence': ['e', '   ']}})
+elif mode == 'no_findings':
+    emit({**success, 'structured_output': {'status': 'completed', 'summary': 'No findings.', 'evidence': [], 'checks': [], 'unresolved': []}})
+elif mode in ('formatter_rejected', 'formatter_rejected_invalid_final'):
+    raw = '{broken formatter input}'
+    emit({'type': 'assistant', 'session_id': session, 'parent_tool_use_id': None,
+          'message': {'role': 'assistant', 'content': [{'type': 'tool_use', 'id': 'invalid-formatter',
+             'name': 'StructuredOutput', 'caller': {'type': 'direct'},
+             'input': {'__unparsedToolInput': {'raw': raw, 'len': len(raw.encode('utf-8'))}}}]}})
+    emit({'type': 'user', 'session_id': session, 'parent_tool_use_id': None,
+          'message': {'role': 'user', 'content': [{'type': 'tool_result', 'tool_use_id': 'invalid-formatter',
+             'is_error': True, 'content': 'Rejected malformed formatter input'}]}})
+    emit({**success, 'structured_output': {**report, 'summary': 5}} if mode.endswith('invalid_final') else success)
+elif mode == 'external_exact':
+    use('r1', 'Read', {'file_path': os.environ['FAKE_EXTERNAL']})
+    use('g1', 'Grep', {'pattern': 'evidence', 'path': os.environ['FAKE_EXTERNAL']}); emit(success)
+elif mode == 'parent_search':
+    use('g1', 'Grep', {'pattern': 'evidence', 'path': os.path.dirname(os.environ['FAKE_EXTERNAL'])}); emit(success)
 else:
     emit(success)
 """
@@ -101,6 +123,17 @@ class CoverageAndDenialUnitTests(unittest.TestCase):
 
     def record(self, status, tool, tool_use_id):
         self.bridge.append_activity(self.run, "tool", "hook decision", tool=tool, status=status, tool_use_id=tool_use_id)
+
+    def test_long_paths_keep_scope_rule_and_action_in_bounded_denial(self):
+        parent = Path("/") / ("long" * 60)
+        source = parent / ("file" * 60 + ".md")
+        reason = self.bridge._outside_scope_message(parent, {source}, True)
+        self.bridge.append_activity(self.run, "tool", "tool path denied", text=reason,
+                                    tool="Grep", status="denied", tool_use_id="g1")
+        denial = self.bridge.hook_denials(self.run, {"g1": "Grep"}, [])[0]
+        self.assertIn("never searchable", denial["reason"])
+        self.assertIn("Use Read", denial["reason"])
+        self.assertIn("one exact file", denial["reason"])
 
     def test_allowed_and_denied_matching_events_are_both_audited_and_reported_separately(self):
         self.record("allowed", "Read", "r1")
@@ -136,6 +169,137 @@ class CoverageAndDenialUnitTests(unittest.TestCase):
         self.assertEqual((ordinary["status"], ordinary["expected_count"]), ("complete", 0))
         workflow = self.bridge.hook_coverage(self.run, uses, guard_all_tools=True)
         self.assertEqual((workflow["denied_tool_use_ids"], workflow["missing_tool_use_ids"]), (["s1"], ["s2"]))
+
+    def formatter_events(self):
+        # Redacted native CLI shape: invalid bare evidence value, exact raw
+        # length, parent assistant wrapper followed by its parent user error.
+        session = "formatter-parent"
+        raw = '{"status":"blocked","evidence": Evidence is still pending}'
+        def turn(kind, block):
+            return {"type": kind, "session_id": session, "parent_tool_use_id": None,
+                    "message": {"role": kind, "content": [block]}}
+        report = {"status": "completed", "summary": "final report", "evidence": [], "checks": [], "unresolved": []}
+        return [
+            {"type": "system", "subtype": "init", "session_id": session, "model": "test-model"},
+            turn("assistant", {"type": "tool_use", "id": "workflow-1", "name": "Workflow", "input": {"name": "fixture"}}),
+            turn("user", {"type": "tool_result", "tool_use_id": "workflow-1", "is_error": False, "content": "acknowledged"}),
+            turn("assistant", {"type": "tool_use", "id": "formatter-bad", "name": "StructuredOutput", "caller": {"type": "direct"},
+                               "input": {"__unparsedToolInput": {"raw": raw, "len": len(raw.encode("utf-8"))}}}),
+            turn("user", {"type": "tool_result", "tool_use_id": "formatter-bad", "is_error": True, "content": "formatter rejected invalid input"}),
+            turn("assistant", {"type": "tool_use", "id": "formatter-good", "name": "StructuredOutput", "input": report}),
+            turn("user", {"type": "tool_result", "tool_use_id": "formatter-good", "is_error": False, "content": "formatted"}),
+            {"type": "result", "subtype": "success", "session_id": session, "parent_tool_use_id": None, "structured_output": report},
+        ]
+
+    def parse_formatter_events(self, events):
+        stream = self.run / "formatter-stream.jsonl"
+        stream.write_text("\n".join(json.dumps(item) for item in events) + "\n")
+        return self.bridge.parse_stream(stream, "formatter-parent")
+
+    def formatter_coverage(self, meta):
+        return self.bridge.hook_coverage(self.run, meta["guarded_tool_uses"], guard_all_tools=True,
+                                         rejected_formatter_tool_uses=meta["rejected_formatter_tool_uses"])
+
+    def test_native_unparsed_formatter_rejection_is_separate_from_hook_coverage(self):
+        self.record("allowed", "Workflow", "workflow-1")
+        self.record("allowed", "StructuredOutput", "formatter-good")
+        final, meta = self.parse_formatter_events(self.formatter_events())
+        original = self.bridge.hook_coverage(self.run, meta["guarded_tool_uses"], guard_all_tools=True)
+        self.assertEqual((original["expected_count"], original["audited_count"]), (3, 2))
+        self.assertEqual(original["missing_tool_use_ids"], ["formatter-bad"])
+        coverage = self.formatter_coverage(meta)
+        self.assertEqual((coverage["status"], coverage["expected_count"], coverage["audited_count"]), ("complete", 2, 2))
+        self.assertEqual(coverage["pre_execution_rejected_formatter_tool_use_ids"], ["formatter-bad"])
+        proof = meta["rejected_formatter_tool_uses"]["formatter-bad"]
+        self.assertEqual((proof["tool_use_stream_line"], proof["tool_result_stream_line"]), (4, 5))
+        self.assertNotIn("raw", proof)
+        self.assertRegex(proof["input_sha256"], r"^[0-9a-f]{64}$")
+        self.assertEqual(self.bridge.result_payload(final)["status"], "completed")
+
+    def test_formatter_exclusion_requires_complete_invalid_input_and_unique_parent_error(self):
+        self.record("allowed", "Workflow", "workflow-1")
+        self.record("allowed", "StructuredOutput", "formatter-good")
+        def use(events): return events[3]["message"]["content"][0]
+        def error(events): return events[4]["message"]["content"][0]
+        def wrapper(events): return use(events)["input"]["__unparsedToolInput"]
+        def set_raw(events, raw):
+            use(events)["input"] = {"__unparsedToolInput": {"raw": raw, "len": len(raw.encode("utf-8"))}}
+        mutations = [
+            ("Read", lambda e: use(e).update(name="Read")),
+            ("Workflow", lambda e: use(e).update(name="Workflow")),
+            ("unknown tool", lambda e: use(e).update(name="UnknownTool")),
+            ("ordinary formatter input", lambda e: use(e).update(input={"status": "completed"})),
+            ("extra input field", lambda e: use(e)["input"].update(extra=True)),
+            ("extra wrapper field", lambda e: wrapper(e).update(extra=True)),
+            ("missing raw", lambda e: wrapper(e).pop("raw")),
+            ("missing length", lambda e: wrapper(e).pop("len")),
+            ("nonstring raw", lambda e: wrapper(e).update(raw=123)),
+            ("wrong length", lambda e: wrapper(e).update(len=1)),
+            ("boolean length", lambda e: wrapper(e).update(len=True)),
+            ("float length", lambda e: wrapper(e).update(len=57.0)),
+            ("valid object raw", lambda e: set_raw(e, '{"status":"completed"}')),
+            ("valid scalar raw", lambda e: set_raw(e, 'null')),
+            ("no error result", lambda e: e.pop(4)),
+            ("successful result", lambda e: error(e).update(is_error=False)),
+            ("missing is_error", lambda e: error(e).pop("is_error")),
+            ("string is_error", lambda e: error(e).update(is_error="true")),
+            ("empty error content", lambda e: error(e).update(content="")),
+            ("wrong result id", lambda e: error(e).update(tool_use_id="another-id")),
+            ("wrong use session", lambda e: e[3].update(session_id="other-session")),
+            ("wrong error session", lambda e: e[4].update(session_id="other-session")),
+            ("missing use session", lambda e: e[3].pop("session_id")),
+            ("missing error session", lambda e: e[4].pop("session_id")),
+            ("conflicting session alias", lambda e: e[4].update(sessionId="other-session")),
+            ("child use", lambda e: e[3].update(parent_tool_use_id="workflow-1")),
+            ("child error", lambda e: e[4].update(parent_tool_use_id="workflow-1")),
+            ("missing use parent identity", lambda e: e[3].pop("parent_tool_use_id")),
+            ("missing error parent identity", lambda e: e[4].pop("parent_tool_use_id")),
+            ("child caller", lambda e: use(e).update(caller={"type": "agent"})),
+            ("nonassistant use", lambda e: e[3].update(type="user")),
+            ("nonuser result", lambda e: e[4].update(type="assistant")),
+            ("result before use", lambda e: e.insert(3, e.pop(4))),
+            ("duplicate use", lambda e: e.insert(5, json.loads(json.dumps(e[3])))),
+            ("duplicate result", lambda e: e.insert(5, json.loads(json.dumps(e[4])))),
+            ("malformed duplicate use", lambda e: e.insert(5, {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "formatter-bad"}]}})),
+            ("provider denial", lambda e: e[-1].update(permission_denials=[{"tool_name": "StructuredOutput", "tool_use_id": "formatter-bad"}])),
+        ]
+        for name, mutate in mutations:
+            with self.subTest(case=name):
+                events = self.formatter_events()
+                mutate(events)
+                _, meta = self.parse_formatter_events(events)
+                self.assertEqual(meta["rejected_formatter_tool_uses"], {})
+                coverage = self.formatter_coverage(meta)
+                self.assertEqual(coverage["missing_tool_use_ids"], ["formatter-bad"])
+                self.assertEqual(coverage["pre_execution_rejected_formatter_count"], 0)
+
+    def test_existing_hook_evidence_and_denials_are_never_formatter_exemptions(self):
+        _, meta = self.parse_formatter_events(self.formatter_events())
+        for status in ("allowed", "denied"):
+            with self.subTest(status=status):
+                self.record(status, "StructuredOutput", "formatter-bad")
+                coverage = self.formatter_coverage(meta)
+                self.assertEqual(coverage["pre_execution_rejected_formatter_tool_use_ids"], [])
+                self.assertEqual(coverage["expected_count"], 3)
+                self.assertIn("formatter-bad", coverage[status + "_tool_use_ids"])
+        denials = self.bridge.hook_denials(self.run, meta["guarded_tool_uses"], [])
+        self.assertEqual([item["tool_use_id"] for item in denials], ["formatter-bad"])
+
+    def test_rejected_formatter_evidence_does_not_validate_the_final_result(self):
+        events = self.formatter_events()
+        events[-1]["structured_output"]["summary"] = 5
+        final, meta = self.parse_formatter_events(events)
+        self.assertIn("formatter-bad", meta["rejected_formatter_tool_uses"])
+        with self.assertRaises(self.bridge.BridgeError):
+            self.bridge.result_payload(final)
+
+    def test_any_same_id_hook_record_prevents_formatter_exclusion(self):
+        _, meta = self.parse_formatter_events(self.formatter_events())
+        self.record("denied", "Read", "formatter-bad")
+        coverage = self.formatter_coverage(meta)
+        self.assertEqual(coverage["pre_execution_rejected_formatter_count"], 0)
+        self.assertIn("formatter-bad", coverage["missing_tool_use_ids"])
+        self.assertEqual(self.bridge.hook_denials(self.run, meta["guarded_tool_uses"], [])[0]["tool_name"], "Read")
 
     def test_denial_entries_keep_only_the_actual_denials(self):
         event = {"type": "result", "subtype": "success", "usage": {"input_tokens": 9},
@@ -250,6 +414,28 @@ class RunEvidenceTests(unittest.TestCase):
         self.assertEqual(result["report_evidence"]["state"], "structured")
         self.assertIs(result["report_evidence"]["accepted"], False)
 
+    def test_actual_run_persists_formatter_rejection_proof_and_keeps_final_validation(self):
+        for mode in ("formatter_rejected", "formatter_rejected_invalid_final"):
+            with self.subTest(mode=mode):
+                got, run, receipt, result = self.run_mode(mode)
+                proof = result["rejected_formatter_tool_uses"]["invalid-formatter"]
+                child = json.loads((run / "child.json").read_text())
+                self.assertEqual(proof["session_id"], child["expected_session_id"])
+                self.assertEqual(proof["input_bytes"], len(b"{broken formatter input}"))
+                self.assertRegex(proof["input_sha256"], r"^[0-9a-f]{64}$")
+                self.assertLess(proof["tool_use_stream_line"], proof["tool_result_stream_line"])
+                self.assertNotIn("raw", proof)
+                self.assertEqual(result["hook_guard_coverage"]["pre_execution_rejected_formatter_count"], 0)
+                # Ordinary runs do not guard the formatter; the proof is still
+                # durable and cannot make an invalid final report valid.
+                if mode.endswith("invalid_final"):
+                    self.assertNotEqual(got.returncode, 0)
+                    self.assertEqual(receipt["status"], "failed")
+                    self.assertEqual(result["report_evidence"]["state"], "validation_error")
+                else:
+                    self.assertEqual(got.returncode, 0)
+                    self.assertEqual(receipt["status"], "reported")
+
     def test_denied_tool_use_is_audited_but_still_fails_the_run(self):
         for mode in ("denied", "denied_hook_only"):
             with self.subTest(mode=mode):
@@ -320,6 +506,33 @@ class RunEvidenceTests(unittest.TestCase):
         self.assertEqual(receipt["status"], "failed")
         self.assertEqual(result["result_validation_error"], "provider result lacks structured_output object")
         self.assertEqual(result["report_evidence"]["state"], "absent")
+
+    def test_blank_summary_or_item_is_a_schema_failure_but_a_short_report_is_valid(self):
+        for mode, message in (("blank_summary", "summary is blank"), ("blank_item", "evidence contains a blank item")):
+            with self.subTest(mode=mode):
+                got, run, receipt, result = self.run_mode(mode)
+                self.assertEqual(receipt["status"], "failed")
+                self.assertIn(message, result["result_validation_error"])
+                self.assertEqual(result["report_evidence"]["state"], "validation_error")
+        got, run, receipt, result = self.run_mode("no_findings")
+        self.assertEqual(receipt["status"], "reported", got.stderr)
+        self.assertEqual(result["structured"]["summary"], "No findings.")
+        schema = json.loads(json.loads((run / "command.json").read_text())["argv"][
+            json.loads((run / "command.json").read_text())["argv"].index("--json-schema") + 1])
+        self.assertEqual(schema["properties"]["summary"]["pattern"], r"\S")
+        self.assertEqual(schema["properties"]["evidence"]["items"]["pattern"], r"\S")
+
+    def test_exact_external_file_is_readable_but_its_parent_directory_search_fails_the_run(self):
+        with mock.patch.dict(os.environ, {"FAKE_EXTERNAL": str(self.requirement.resolve())}):
+            got, run, receipt, result = self.run_mode("external_exact")
+            self.assertEqual(receipt["status"], "reported", got.stderr)
+            self.assertEqual(result["hook_guard_coverage"]["allowed_count"], 2)
+            got, run, receipt, result = self.run_mode("parent_search")
+        self.assertEqual(receipt["status"], "failed")
+        denial = next(item for item in result["permission_denials"] if item.get("source") == "bridge_pretooluse_hook")
+        self.assertIn("outside cwd", denial["reason"])
+        self.assertIn(str(self.requirement.resolve()), denial["reason"])
+        self.assertIn("never searchable", denial["reason"])
 
     def test_failure_without_any_report_is_absent_and_not_a_validation_error(self):
         got, run, receipt, result = self.run_mode("error_no_report")

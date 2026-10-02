@@ -67,8 +67,6 @@ button:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-v
 .chip{border-radius:15px;padding:5px 11px;font-size:12px;border:1px solid var(--line);background:var(--panel)}
 .chip[aria-pressed=true]{background:var(--primary-bg);color:var(--primary-fg);border-color:var(--primary-bg)}
 .new-task-notice{background:var(--active-bg);color:var(--active-fg);border:1px solid var(--active-border);border-radius:8px;padding:9px 11px;margin-bottom:10px;font-size:13px;display:flex;justify-content:space-between;gap:8px;align-items:center}
-.group-label{font-size:10px;letter-spacing:1.4px;text-transform:uppercase;color:var(--muted-2);margin:14px 0 6px}
-.group-label:first-child{margin-top:0}
 .task-card{display:block;width:100%;text-align:left;padding:10px 11px;border-radius:10px;border:1px solid var(--line);background:var(--panel);margin-bottom:6px}
 .task-card:hover{background:var(--bg-detail)}
 .task-card[aria-current=true]{border-color:var(--text);background:var(--bg-detail)}
@@ -507,6 +505,7 @@ function execFact(v,hasDetail){
       if(by==='preflight'&&started===false)return {tone:'bad',label:'预检阻止 · Claude 未启动',detail:''};
       if(by==='preflight')return {tone:'bad',label:'预检阻止 · 启动状态未确认',detail:''};
       if(by==='executor')return {tone:'bad',label:'执行者无法继续',detail:''};
+      if(by==='workflow_evidence')return {tone:'bad',label:'Workflow 报告未完整交回',detail:''};
       if(by===undefined)return {tone:'bad',label:'被阻止',detail:'原因详情未载入'};
       return {tone:'bad',label:'被阻止',detail:''};
     }
@@ -597,19 +596,6 @@ function reasonLine(current,hasDetail){
   const tone=(top.tone==='settled'||top.tone==='history'||top.tone==='none')?'text2':top.tone;
   return {text:top.label,tone};
 }
-function attentionRank(current,hasDetail){
-  if(current.state!=='known')return 6;
-  const c=current.run;
-  if(c.status==='unknown')return 0;
-  if(gate.B2&&c.completion_matched===false)return 1;
-  const rp=reportFact(c,hasDetail);
-  if(rp.kind==='truncated'||rp.kind==='contract_failed')return 2;
-  if(['failed','timeout','blocked'].includes(c.status))return 3;
-  const vf=verifyFact(c,hasDetail);
-  if(vf.label==='已退回')return 4;
-  if(rp.kind==='formal')return 5;
-  return 6;
-}
 function nextStepFor(current,hasDetail){
   if(current.state!=='known')return null;
   const c=current.run;
@@ -622,6 +608,11 @@ function nextStepFor(current,hasDetail){
   if(ex.label.indexOf('预检阻止')===0)
     return {body:ex.label==='预检阻止 · Claude 未启动'?'Claude 未启动。先处理预检问题，再开启新一轮。':'Claude 启动状态未确认。先核对执行回执并处理预检问题，再开启新一轮。',
       prompt:`检查执行 ${c.run_id} 的预检阻止原因，并给出处理步骤。`};
+  if(c.status==='blocked'&&ex.label==='Workflow 报告未完整交回'){
+    const codes=Array.isArray(c.result?.workflow_delivery?.reason_codes)?c.result.workflow_delivery.reason_codes.join('、'):'';
+    return {body:`尚未取得完整的 Workflow 执行与报告证据${codes?'（'+codes+'）':''}。父级摘要不能代替完整报告。`,
+      prompt:`核对执行 ${c.run_id} 的 workflow_delivery 原因码与已保留证据，决定是否开启新一轮；不要对本轮记录验收结论。`};
+  }
   if(c.status==='blocked'&&ex.label==='执行者无法继续'){
     const value=structuredOf(c.result)||{};
     const summary=typeof value.summary==='string'?value.summary:'执行者需要补充材料或澄清规格。';
@@ -685,7 +676,7 @@ const st={
   selRequestKey:null,requestSeq:0,homeSeq:0,recentHomeIds:new Set(),pagesLoaded:false,invalidRun:null,
   backfillQueue:new Set(),observeCursorMap:new Map(),prefetchQueue:new Set(),visitedByTask:new Map(),backfillFailedAt:new Map(),backfillStopped:new Set(),observerOverflow:0,
   maintenance:null,maintenanceAt:0,maintenanceFailure:null,loadingMore:false,view:'list',focusReturn:null,taskFocusReturn:null,
-  cardElements:[],roundTabElements:[],roundFocusRun:null,openRaw:new Set(),
+  cardElements:[],roundTabElements:[],roundFocusRun:null,openRaw:new Set(),workflowPages:new Map(),
 };
 const conn={connGen:0,status:'connecting',homeOk:false,snapshotOk:false,eventsOk:false,retryDelay:0,validSelection:false,lastCriticalSyncAt:0,failureLabel:'连接已断开'};
 
@@ -715,12 +706,24 @@ function buildTasks(){
   return tasks;
 }
 function projectName(cwd){if(!cwd)return '';const parts=String(cwd).split('/').filter(Boolean);return parts.at(-1)||cwd;}
+// A demand's place in the list is its latest execution's start time: a fresh round moves it,
+// while polling, activity, completion or a coordinator decision never does.
+function latestStartOf(runs){return runs.reduce((max,r)=>Math.max(max,stamp(r.started_at)),0);}
+function compareTaskOrder(a,b){
+  if(a.latestStart!==b.latestStart){
+    if(!a.latestStart)return 1;
+    if(!b.latestStart)return -1;
+    return b.latestStart-a.latestStart;
+  }
+  const ka=taskKey(a.rep),kb=taskKey(b.rep);
+  return ka<kb?-1:ka>kb?1:0;
+}
 function taskDisplay(runs){
   const sorted=[...runs].sort((a,b)=>(a.revision||1)-(b.revision||1));
   const current=currentRoundOf(sorted,st.cache);
   const rep=current.state==='known'?current.run:sorted.at(-1);
   const title=firstSentence(rep.objective)||rep.task_id||rep.run_id;
-  return {runs:sorted,current,title,project:projectName(rep.cwd),cwd:rep.cwd,rep};
+  return {runs:sorted,current,title,project:projectName(rep.cwd),cwd:rep.cwd,rep,latestStart:latestStartOf(sorted)};
 }
 
 function renderConnection(){
@@ -844,18 +847,11 @@ function renderList(){
   const root=$('taskGroups');
   const focusedKey=document.activeElement?.dataset?.taskKey;
   root.replaceChildren();st.cardElements=[];
-  const order=[['attention','需要处理'],['active','进行中'],['closed','已收口']];
-  const activeGroups=st.filter==='all'?order:order.filter(([k])=>k===st.filter);
+  // Chips only narrow membership; every view keeps the same latest-start order across statuses.
+  const list=displays.filter(d=>(st.filter==='all'||d.group===st.filter)&&(!projectFilterValue||d.project===projectFilterValue)&&matchesSearch(d,st.search));
+  list.sort(compareTaskOrder);
   let shown=0;
-  for(const [key,label] of activeGroups){
-    let list=groups[key].filter(d=>(!projectFilterValue||d.project===projectFilterValue)&&matchesSearch(d,st.search));
-    if(key==='attention')list.sort((a,b)=>attentionRank(a.current,a.hasDetail)-attentionRank(b.current,b.hasDetail));
-    else if(key==='active')list.sort((a,b)=>stamp(b.rep.last_activity_at||b.rep.started_at)-stamp(a.rep.last_activity_at||a.rep.started_at));
-    else list.sort((a,b)=>stamp(b.rep.ended_at||b.rep.started_at)-stamp(a.rep.ended_at||a.rep.started_at));
-    if(!list.length)continue;
-    root.append(el('div',label,'group-label'));
-    for(const d of list){shown++;const card=taskCard(d);st.cardElements.push(card);root.append(card);}
-  }
+  for(const d of list){shown++;const card=taskCard(d);st.cardElements.push(card);root.append(card);}
   const cards=st.cardElements;
   const rovingCard=cards.find(c=>c.dataset.taskKey===focusedKey)||cards.find(c=>c.getAttribute('aria-current')==='true')||cards[0];
   for(const card of cards)card.setAttribute('tabindex',card===rovingCard?'0':'-1');
@@ -993,9 +989,60 @@ function denialText(item){
   if(tool||reason)return [tool,target,reason].filter(Boolean).map(first).join(' · ');
   return boundedJson(item);
 }
+function workflowPageKey(runId,index){return runId+'\u0000'+index;}
+// The captured Workflow output is shown apart from the parent summary, page by page from the
+// hash-checked artifact; it is evidence for Codex, never an acceptance by itself.
+function renderWorkflowReport(box,view,focusKey){
+  const delivery=view.result?.workflow_delivery;
+  if(!delivery||typeof delivery!=='object')return;
+  const section=el('div',undefined,'workflow-report');
+  const codes=Array.isArray(delivery.reason_codes)?delivery.reason_codes:[];
+  section.append(el('h3','Workflow 完整报告（与父级摘要分开保存）'));
+  section.append(el('p',delivery.status==='delivered'?'每个 Workflow 调用的完整输出都已从绑定文件收齐；内容仍需 Codex 核验。':`完整报告未交付${codes.length?'：'+codes.join('、'):''}。父级摘要不能代替它。`,'meta'));
+  const invocations=Array.isArray(delivery.invocations)?delivery.invocations:[];
+  let refocus=null;
+  invocations.forEach((item,index)=>{
+    const collection=item&&typeof item.collection==='object'&&item.collection?item.collection:{};
+    if(collection.status!=='collected'){
+      section.append(el('p',`调用 ${index+1}：未收集${collection.reason_code?'（'+collection.reason_code+'）':''}`,'meta'));return;
+    }
+    const report=collection.report||{};
+    if(report.representation==='json_value')section.append(el('p','此报告以 JSON 展示对象或数组；原始输出文件另行完整保留。','meta'));
+    const page=st.workflowPages.get(workflowPageKey(view.run_id,index));
+    section.append(el('p',`调用 ${index+1}：${report.size_bytes} 字节 · SHA-256 ${String(report.sha256||'').slice(0,12)}…`,'meta'));
+    if(page?.text)section.append(el('div',page.text,'artifact'));
+    if(page?.error)section.append(el('p',page.error,'meta'));
+    if(page&&page.next===null){section.append(el('p',`已载入全文 ${page.total} 字节；每页均由本机服务按记录的 SHA-256 校验。`,'meta'));return;}
+    const b=el('button',page?.loading?'正在读取…':page?'继续加载':'加载完整报告','quiet small');
+    b.type='button';b.dataset.focusKey='workflow-'+index;b.disabled=Boolean(page?.loading);
+    b.onclick=()=>loadWorkflowPage(view.run_id,index);
+    section.append(b);
+    if(focusKey===b.dataset.focusKey)refocus=b;
+  });
+  box.append(section);
+  refocus?.focus({preventScroll:true});
+}
+async function loadWorkflowPage(runId,index){
+  const key=workflowPageKey(runId,index);
+  const page=st.workflowPages.get(key)||{text:'',next:0,total:null,sha:null,loading:false,error:''};
+  if(page.loading||page.next===null)return;
+  page.loading=true;page.error='';st.workflowPages.set(key,page);
+  if(st.run===runId)renderDetail();
+  try{
+    const a=await api('/api/artifact',{run_id:runId,name:'workflow_report',index,offset:page.next,limit:65536},{});
+    if(!a.available)page.error='完整报告暂不可读（'+(a.state||'unknown')+'）；这不表示 Workflow 没有运行。';
+    else if(a.offset_bytes!==page.next||(page.sha!==null&&a.sha256!==page.sha)||(page.total!==null&&a.total_bytes!==page.total))
+      page.error='分页与已载入部分不一致，已停止拼接；请核对报告产物。';
+    else{page.text+=a.content;page.next=a.next_offset_bytes;page.total=a.total_bytes;page.sha=a.sha256;}
+  }catch(_){page.error='完整报告读取失败，可稍后重试。';}
+  page.loading=false;
+  if(st.run===runId)renderDetail();
+}
 function renderReport(view,hasDetail){
   const rp=reportFact(view,hasDetail);
   $('reportTag').textContent=reportKindText(rp.kind)+(view.superseded_by?' · 历史':'');
+  const focused=document.activeElement?.dataset?.focusKey;
+  const workflowFocus=typeof focused==='string'&&focused.startsWith('workflow-')?focused:null;
   const box=$('reportBody');box.className='report-box tone-'+rp.tone;box.replaceChildren();
   const result=hasDetail?view.result:undefined;
   const structured=structuredOf(result);
@@ -1042,6 +1089,7 @@ function renderReport(view,hasDetail){
       const details=el('details');details.append(el('summary','原 Claude 报告（已退回，未采纳）'),el('p',structured.summary,'prose'));box.append(details);
     }
   }
+  if(hasDetail)renderWorkflowReport(box,view,workflowFocus);
   $('reportSource').textContent=view.superseded_by?'历史记录':'';
   const evidenceRoot=$('evidenceBody');evidenceRoot.replaceChildren();
   const title=(rp.kind==='failed_with_content'||rp.kind==='failed_no_structured')?'失败证据与未确认项':'核验依据与未确认项';

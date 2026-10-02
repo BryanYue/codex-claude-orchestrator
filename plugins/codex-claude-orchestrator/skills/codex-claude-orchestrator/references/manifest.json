@@ -1,6 +1,6 @@
 {
   "schema": "codex-claude-orchestrator.content/v1",
-  "content_version": "2026.10.02.1",
+  "content_version": "2026.10.02.4",
   "entry": "guide.md",
   "protocol_reference": "orchestration-protocol.md",
   "requires": {
@@ -11,13 +11,15 @@
       "review",
       "disable",
       "rollback",
-      "task_pin"
+      "task_pin",
+      "workflow_report_v1",
+      "workflow_report_json_v1"
     ]
   },
   "files": [
     {
       "path": "guide.md",
-      "sha256": "ee60446d8fb4ca634eafb59fa7e284db0d4e492d72b03b2733370d8d47a5b7b0"
+      "sha256": "1f9be4dbb3acc18c40afc4e785f264d89481d0077909c6f26f865d4aee4d10ff"
     },
     {
       "path": "orchestration-protocol.md",
@@ -29,11 +31,11 @@
     },
     {
       "path": "bridge.md",
-      "sha256": "0884fb2375eafbbc21276f64531b1fc5d02c846dc0711d49e86d672d415b01a5"
+      "sha256": "793ffe21ab1464c5bb1d0813d613d2c04aa1482deb6c2c9cf23477bc4b2e3a7f"
     },
     {
       "path": "runtime-design.md",
-      "sha256": "0ddd237d3b4fcb1d72b5b8d1a94dedb4a9b229d5c1974b4b49bb22bbd4de1534"
+      "sha256": "fc3759c056d565ad55ec67a7c0465de15933f919f842cf9339e86f81d1e0fab0"
     },
     {
       "path": "source-snapshot.md",

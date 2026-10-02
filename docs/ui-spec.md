@@ -305,7 +305,7 @@ else /* 多个无 superseded_by（数据不一致） */  → current = { state:'
 
 **筛选 chips**：全部 / 需处理 / 进行中 / 已收口，各带计数（已载入任务数）。`aria-pressed`。
 
-**分组**：需要处理 → 进行中 → 已收口；空组不显示。
+**排序**（未发布修订）：列表不再按状态分组，所有筛选下都是同一个顺序——按每个需求最新一轮执行的 `started_at` 倒序。新一轮真实执行（更高 revision 的新 run）会让需求前移；轮询、活动、结束、验收/退回等更新不改变位置。开始时间相同按任务键升序，缺少开始时间的排在最后。筛选 chips 只缩小成员范围（需处理/进行中/已收口的判定见 §5.4），三项状态标志照常显示；选中项与键盘焦点按任务键保留。
 
 **任务卡**（`<button>`，整卡可点击）：
 - 第 1 行：标题 14px/600，最多两行截断；新增任务右侧“新”标签。
@@ -369,6 +369,7 @@ else /* 多个无 superseded_by（数据不一致） */  → current = { state:'
 
 - 任何历史轮（`superseded_by` 存在）：正文前加“本轮已被后续轮替代，仅供回看。”，标签后缀“· 历史”。
 - `/api/artifact` 的 `truncated=true` 只表示**展示截断**，在技术记录中注明“展示已截断；完整记录保留在本机”，**不得**据此显示“报告被截断”。
+- **Workflow 完整报告**（未发布修订）：`result.workflow_delivery` 存在时，在上述正文之后另起“Workflow 完整报告（与父级摘要分开保存）”。说明交付状态与原因码；每个已收集调用显示字节数与 SHA-256 前缀，并提供“加载完整报告 / 继续加载”，按 `/api/artifact?name=workflow_report&index=&offset=&limit=` 的 UTF-8 字节分页拼接。只有偏移、总字节数和 SHA-256 与已载入部分一致的页才会拼接，否则停止并提示重新打开；载入内容按 run 缓存，刷新不丢失。未收集的调用只显示原因码。它与 B1/B2/B3 gate 无关，gate 仍保持关闭。
 
 **核验依据与未确认项**（可展开，默认收起）：依次列出报告引用、Claude 自报检查、未确认项、Codex 核验依据、Codex 核验原因；失败类 run 的标题改为“失败证据与未确认项”。
 
@@ -443,6 +444,7 @@ switch (st):
                                    : none '已停止'   detail: '已按回执确认停止；工作区外副作用仍需核对。'
  'blocked'    → by === 'preflight' && started !== true ? bad '预检阻止 · Claude 未启动'
               : by === 'executor'                      ? bad '执行者无法继续'
+              : by === 'workflow_evidence'             ? bad 'Workflow 报告未完整交回'
               : by === undefined                       ? bad '被阻止'  detail: '原因详情未载入'
               :                                          bad '被阻止'
  'failed'     → started === false ? bad '启动失败 · Claude 未启动' : bad '执行失败'
@@ -507,7 +509,7 @@ else → none '未核验'   detail 按报告事实：formal '等待你在 Codex 
 ### 5.4 分组、原因行与排序（取当前轮）
 
 ```js
-if (current.state === 'not_loaded')  → attention，原因“当前轮待加载”（unknown 色），排在组内最末
+if (current.state === 'not_loaded')  → attention，原因“当前轮待加载”（unknown 色）
 c = current.run; ex = execFact(c); rp = reportFact(c); vf = verifyFact(c)
 closed    if vf ∈ {ok:'通过', ok:'Codex 已补齐完成'} || c.status === 'cancelled'
 active    if ACTIVE.has(c.status)
@@ -523,7 +525,7 @@ attention otherwise
   - 预检阻止：“预检阻止 · Claude 未启动”
   - Codex 补齐：“Codex 已补齐完成 · 原报告未采纳”
 - **原因行颜色**：取该事实的 tone fg；`settled` / `history` / `none` 用 `--text-2`。
-- **排序**：需要处理 = 状态未知 → 已退出未收齐 → 截断 / 契约未过 → 失败 / 超时 / 被阻止 → 已退回 → 待核验 → 当前轮待加载；同级按最近活动倒序。进行中按最近活动倒序。已收口按结束时间倒序。
+- **排序**：分组只决定筛选 chips 的成员，不决定顺序；顺序统一按最新一轮执行的开始时间倒序（见 §4.2）。此前“需要处理按关注度、进行中按最近活动、已收口按结束时间”的分组排序已移除。
 
 ---
 
@@ -633,6 +635,7 @@ attention otherwise
 | 已退回（当前轮） | 原报告已退回。可在 Codex 带着退回原因开启新一轮，或让 Codex 直接完成。 | 按退回原因修正这项任务。 |
 | 预检阻止 | Claude 未启动。先处理预检问题，再开启新一轮。 | 检查执行 <run_id> 的预检阻止原因，并给出处理步骤。 |
 | 执行者无法继续 | 执行者需要补充材料或澄清规格（沿用现有 action() 的 summary / unresolved 拼接）。 | 根据执行者说明补充材料或澄清规格后，再决定下一步。 |
+| Workflow 报告未完整交回 | Workflow 已执行，但完整报告未按证据收齐（附 `workflow_delivery.reason_codes`）。父级摘要不能代替完整报告。 | 核对执行 <run_id> 的 workflow_delivery 原因码与已保留证据，决定是否开启新一轮；不要对本轮记录验收结论。 |
 | 失败 / 超时（有内容） | 执行未正常交回，报告内容仅作失败证据。先核对失败原因和文件状态。 | 核对执行 <run_id> 的失败原因与文件状态；不要对本轮记录验收结论。 |
 | 失败 / 超时（无内容） | 执行未正常结束，需核对错误和文件状态。 | 核对这项执行失败的原因和文件状态。 |
 | 状态未知 | 状态无法确认，不代表已经失败。先在 Codex 核对实际进程和文件；确认之前不要重派，避免同一目录出现两个执行。 | 检查执行 <run_id> 是否仍在运行；核对进程与工作区文件后给出结论，暂不重派。 |

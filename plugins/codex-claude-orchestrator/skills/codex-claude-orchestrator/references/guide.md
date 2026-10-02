@@ -117,12 +117,14 @@ Git marketplace 安装不会运行根 `Install.command`。MCP 工具缺失或启
 - 每轮用新 run-dir；同一任务保持 task_id，revision 递增。MCP 记录默认在 `~/.codex/claude-orchestrator`，在现有 PROGRESS 中链接对应 run，不污染实现仓或改正式判据。
 - review 只有读文件与搜索工具；implement 增加 Write/Edit，精确列出 owned_files。普通角色不向 Claude 提供 shell、代理、Workflow 或 MCP 工具，构建/测试由 Codex 在用户授权的环境中执行。
 - 明确请求已保存 Workflow 时，使用 `role=workflow_review`、空 owned_files 与 inventory 返回的 `workflow={name,path,sha256,args?}`，只允许该名称和精确参数。它是只读、fresh-only，不能 resume；缺失真实工具调用或关联完成通知就不能记成功，完成通知之前交回的结构化结果只是中间结果。`timeout_seconds` 同时约束 Workflow 的后台等待，按脚本规模设足时限。开始前阅读脚本确认只读意图；失败则报告，不擅自替换为普通 review。完整协议的审查席与验收仍须单独满足。
+- 核验 Workflow 结果时读完整报告，不以父级 summary 代替：`claude_result(run_id, artifact="workflow_report", index=0, offset=0)` 后沿 `next_offset_bytes` 读完，核对 `total_bytes`/`sha256`；多次调用按 `index` 分别读取。`blocked_by=workflow_evidence` 表示 Workflow 证据或完整报告未收齐（看 `result.workflow_delivery.reason_codes`），不是 Claude 拒绝执行；按原因码核对后决定是否开新一轮，不原样付费重跑。
+- 编写或选用保存 Workflow 时，让每个子代理提示（或 `args`）带上同样的文件边界：cwd 内路径，以及 cwd 外只能按精确文件读取/搜索的 requirement source 清单，例如 `args: {"scope": {"inside_cwd": "<cwd>", "external_exact_files": ["<abs>/SPEC.md"]}}` 并在脚本中把它写进 agent 提示。搜索外部文件的父目录会被拒绝并使本轮 failed；bridge 不会授予父目录，也不会改写已批准的脚本。现有脚本没有传递边界时，先报告这一风险，由用户决定是否修改脚本。
 - 用户任务由原生 `claude_*` MCP Runtime 托管 bridge。MCP 不可用时报告限制并恢复正常连接，不改为直接 CLI 或临时监督脚本；只读安装/环境诊断及开发离线夹具与真实委派分开。不要用 `nohup` 或丢弃进程管理把本版伪装成持久服务。
 - 默认保留 Claude 的配置和 hook；附加本轮文件约束。宿主沙箱仍生效。若命令因为沙箱不能写 Claude 自身会话目录而失败，按宿主的权限升级流程请求具体命令权限，不使用 bypass/bare 或搬移凭证绕过。
 
 ## 接收、审查和验收
 
-`blocked_by=preflight` 表示未通过预检，先按 environment 的具体原因修正；`blocked_by=executor` 表示 Claude 已执行但缺材料/条件，先读 summary/unresolved。权限拒绝仍使本轮 failed，包括只记录在本 run hook 活动中、未进父级 stream 的 Workflow 子代理拒绝；保留已取得的证据给 Codex 判断下一步，不自动原样付费重跑。
+`blocked_by=preflight` 表示未通过预检，先按 environment 的具体原因修正；`blocked_by=executor` 表示 Claude 已执行但缺材料/条件，先读 summary/unresolved；`blocked_by=workflow_evidence` 表示保存 Workflow 的完成或完整报告证据不足（见上条）。权限拒绝仍使本轮 failed，包括只记录在本 run hook 活动中、未进父级 stream 的 Workflow 子代理拒绝；保留已取得的证据给 Codex 判断下一步，不自动原样付费重跑。
 
 先看 receipt 的执行状态、实际会话/模型、权限拒绝、输入/仓库身份及 `plugin_identity`（本轮开始时冻结的插件版本、来源 revision 与 dirty 状态、实际代码摘要和 bridge_contract_id；`state=unknown` 或 `provenance_only` 表示未核实，不能当作干净或已验证），再读 result 与必要原始事件。失败、取消或超时的 run 只要有最终报告，`result.structured` 或 `result_validation_error` 仍会保留，`result.report_evidence` 标明 `accepted=false`；报告里自称的 status 只是模型自述，运行结果以 receipt 为准。`permission_denials` 只含实际被拒绝的条目，完整 provider 事件在 `stream.jsonl`。`hook_guard_coverage` 分别给出 allowed / denied / missing 的 tool_use_id；denied 计入审计但仍使 run 失败。进程退出零、模型返回 completed、JSON 合法，均不构成验收通过。
 
@@ -161,3 +163,5 @@ Claude 原报告有错但 Codex 已亲自补齐并完成必要核验时，调用
 压缩或交接后回读原要求、适用规则、当前 PROGRESS、决策理由与真实 Git 状态。先核查已有 run，避免重派仍在执行的工作；必要时使用 fresh reviewer 对整体职责、不变量和正常流程作独立核对。
 
 交付先讲结果、实际验证和未完成边界，附关键 run/文件路径。若用户说“测试这个 Skill”但没给项目，使用隔离夹具做真实 CLI 调用与纠正，报告这些只证明调用闭环，不能证明生产长任务已降低偏差。
+
+本源码候选的完整 Workflow 报告接口要求 `workflow_report_v1` 与 `workflow_report_json_v1` 能力。内容在 fresh 固定、resume 校验、状态展示与回退时都会重新核对当前执行代码的能力；曾获批准不代表任何旧版都可使用。退回尚无此校验的旧插件前，先停用不兼容的动态内容；历史快照仍可按 digest 阅读为证据。

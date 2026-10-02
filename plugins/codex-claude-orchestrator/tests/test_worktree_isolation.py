@@ -35,7 +35,11 @@ if a == ['--help']: print('-p --model --effort --output-format --verbose --json-
 if a == ['auth','status','--json']: print(json.dumps({'loggedIn':True})); raise SystemExit
 s=a[a.index('--session-id')+1] if '--session-id' in a else a[a.index('--resume')+1]
 print(json.dumps({'type':'system','subtype':'init','session_id':s,'model':'fixture'}), flush=True)
-if os.environ.get('ISOLATION_FAKE_SLEEP'): time.sleep(float(os.environ['ISOLATION_FAKE_SLEEP']))
+if os.environ.get('ISOLATION_FAKE_SLEEP'):
+    if os.environ.get('ISOLATION_FAKE_READY'):
+        with open(os.environ['ISOLATION_FAKE_READY'], 'w') as ready: ready.write('ready')
+    time.sleep(float(os.environ['ISOLATION_FAKE_SLEEP']))
+sys.stdin.buffer.read()
 print(json.dumps({'type':'result','subtype':'success','session_id':s,'structured_output':{'status':'completed','summary':'done','evidence':[],'checks':[],'unresolved':[]}}), flush=True)
 """
 TERMINAL = {"reported", "failed", "blocked", "cancelled", "timeout", "unknown"}
@@ -142,6 +146,7 @@ class WorktreeLaneTests(unittest.TestCase):
         # WF-R7: Runtime A and its bridge are killed after child.json exists;
         # the Claude-shaped child lives on in its own process group.
         state_a = self.root / "state-a"
+        child_ready = self.root / "child-ready"
         owner_code = textwrap.dedent(f"""
             import json, sys, time
             sys.path.insert(0, {str(SCRIPTS)!r})
@@ -151,7 +156,8 @@ class WorktreeLaneTests(unittest.TestCase):
             time.sleep(120)
         """)
         owner = subprocess.Popen([sys.executable, "-u", "-c", owner_code], stdout=subprocess.PIPE,
-                                 stderr=subprocess.PIPE, text=True, env=dict(os.environ, ISOLATION_FAKE_SLEEP="120"))
+                                 stderr=subprocess.PIPE, text=True, env=dict(
+                                     os.environ, ISOLATION_FAKE_SLEEP="120", ISOLATION_FAKE_READY=str(child_ready)))
         groups: list[int] = []
 
         def stop_fixture_processes():
@@ -176,6 +182,9 @@ class WorktreeLaneTests(unittest.TestCase):
         self.assertNotIn(owner.pid, (child_group, bridge_pid))
         self.assertNotEqual(child_group, bridge_pid)
 
+        # child.json proves spawn, not that the fixture passed its initial
+        # stdout write; closing that pipe first can kill it with BrokenPipe.
+        self.wait_until(child_ready.exists, "child did not enter the crash-survival fixture")
         owner.kill(); owner.wait(timeout=5)
         os.kill(bridge_pid, signal.SIGKILL)
         self.wait_until(lambda: bridge.process_group_stopped(bridge_pid), "killed bridge group did not disappear")

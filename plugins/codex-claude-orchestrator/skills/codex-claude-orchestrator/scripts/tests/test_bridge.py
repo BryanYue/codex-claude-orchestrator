@@ -40,8 +40,8 @@ class BridgeTests(unittest.TestCase):
         subprocess.run(["git", "-C", str(self.repo), "commit", "-qm", "base"], check=True)
         self.requirement = self.root / "requirements.md"; self.requirement.write_text("must return evidence\n")
         self.fake = self.root / "fake_claude.py"
-        self.fake.write_text("""#!/usr/bin/env python3
-import json, os, pathlib, subprocess, sys, time
+        self.fake.write_text(f"#!{sys.executable}\n" + """
+import hashlib, json, os, pathlib, subprocess, sys, time
 mode=os.environ.get('FAKE_MODE','normal')
 args=sys.argv[1:]
 if os.environ.get('FAKE_CALLS_PATH'):
@@ -69,6 +69,17 @@ if mode == 'exit_immediately': sys.exit(17)
 if mode == 'wrong_session': session='wrong-session'
 print(json.dumps({'type':'system','subtype':'init','session_id':session,'model':'test-model'}))
 if mode == 'sleep': time.sleep(4)
+if mode == 'no_read_sleep': time.sleep(10)
+if mode == 'flood_then_read':
+    for _ in range(2048): print('x' * 1023)
+    sys.stdout.flush()
+if mode in ('read_stdin', 'flood_then_read'):
+    data=sys.stdin.buffer.read()
+    pathlib.Path(os.environ['FAKE_STDIN_OUT']).write_text(json.dumps({'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest()}))
+elif mode not in ('sleep', 'no_read_sleep'):
+    # Successful ordinary dispatch consumes the task prompt; explicit early
+    # exit/nonreader modes above remain adversarial delivery controls.
+    sys.stdin.buffer.read()
 if mode == 'childstdout': subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(.2)'])
 if mode == 'stubbornstdout':
     child=subprocess.Popen([sys.executable, '-c', 'import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); print("child ready",flush=True); time.sleep(30)'])
@@ -338,16 +349,62 @@ else: print(json.dumps({'type':'result','subtype':'success','session_id':session
         receipt = json.loads((run / "receipt.json").read_text())
         self.assertEqual(receipt["status"], "cancelled")
 
-    def test_liveness_permission_error_requires_independent_absence_evidence(self):
+    def ambiguous_cleanup(self, *, term_denied=False, settles=False, descendants=False):
         bridge = load_bridge_module()
-        for absent in (False, True):
-            proc = mock.Mock(pid=987654); proc.poll.return_value = None
-            with self.subTest(absent=absent), mock.patch.object(bridge.os, "killpg", side_effect=[None, PermissionError(1, "denied")]), mock.patch.object(bridge, "process_group_absent", return_value=absent):
-                diagnostic = bridge.terminate_group(proc)
-            if absent:
+        proc = mock.Mock(pid=987654); proc.poll.return_value = None
+        now = [0.0]
+        signals, absence_checks = [], []
+
+        def sleep(seconds):
+            now[0] += seconds
+
+        def killpg(pid, sig):
+            self.assertEqual(pid, proc.pid)
+            if sig == 0:
+                if descendants and any(item[0] == bridge.signal.SIGKILL for item in signals):
+                    raise ProcessLookupError(3, "absent after SIGKILL")
+                raise PermissionError(1, "ambiguous liveness")
+            signals.append((sig, now[0]))
+            if term_denied and sig == bridge.signal.SIGTERM:
+                raise PermissionError(1, "SIGTERM denied")
+
+        def absent(pid):
+            self.assertEqual(pid, proc.pid)
+            absence_checks.append(now[0])
+            return settles and len(absence_checks) >= 2
+
+        with mock.patch.object(bridge.os, "killpg", side_effect=killpg), \
+             mock.patch.object(bridge, "process_group_absent", side_effect=absent), \
+             mock.patch.object(bridge.time, "monotonic", side_effect=lambda: now[0]), \
+             mock.patch.object(bridge.time, "sleep", side_effect=sleep):
+            diagnostic = bridge.terminate_group(proc)
+        return diagnostic, signals, absence_checks, now[0]
+
+    def test_permission_error_retries_absence_within_existing_grace(self):
+        for term_denied in (False, True):
+            with self.subTest(term_denied=term_denied):
+                diagnostic, signals, checks, elapsed = self.ambiguous_cleanup(term_denied=term_denied, settles=True)
                 self.assertIsNone(diagnostic)
-            else:
-                self.assertIn("liveness check failed", diagnostic)
+                self.assertEqual([sig for sig, _ in signals], [15])
+                self.assertGreaterEqual(len(checks), 2)
+                self.assertLess(elapsed, 3)
+
+    def test_permission_error_with_live_descendants_still_escalates_sigkill(self):
+        for term_denied in (False, True):
+            with self.subTest(term_denied=term_denied):
+                diagnostic, signals, _, _ = self.ambiguous_cleanup(term_denied=term_denied, descendants=True)
+                self.assertIsNone(diagnostic)
+                self.assertEqual([sig for sig, _ in signals], [15, 9])
+                self.assertGreaterEqual(signals[1][1], 3)
+                self.assertLess(signals[1][1], 3.1)
+
+    def test_liveness_permission_error_requires_independent_absence_evidence(self):
+        diagnostic, signals, _, elapsed = self.ambiguous_cleanup()
+        self.assertIn("process group remained present after SIGKILL", diagnostic)
+        self.assertIn("liveness check failed: PermissionError", diagnostic)
+        self.assertEqual([sig for sig, _ in signals], [15, 9])
+        self.assertGreaterEqual(elapsed, 6)
+        self.assertLess(elapsed, 6.1)
 
     def test_fast_exit_is_reaped_without_unknown_cleanup_marker(self):
         os.environ["FAKE_MODE"] = "exit_immediately"
@@ -432,7 +489,9 @@ else: print(json.dumps({'type':'result','subtype':'success','session_id':session
             @staticmethod
             def poll(): return None
         with mock.patch.object(bridge.os, "killpg", side_effect=PermissionError(1, "Operation not permitted")), \
-             mock.patch.object(bridge, "process_group_absent", return_value=False):
+             mock.patch.object(bridge, "process_group_absent", return_value=False), \
+             mock.patch.object(bridge.time, "monotonic", side_effect=[0, 0, 3]), \
+             mock.patch.object(bridge.time, "sleep"):
             diagnostic = bridge.terminate_group(Proc())
         self.assertIn("PermissionError", diagnostic)
         run = self.root / "unconfirmed-cleanup"
@@ -615,6 +674,79 @@ else: print(json.dumps({'type':'result','subtype':'success','session_id':session
             self.assertIn('same-group descendants remained', json.loads((run / 'result.json').read_text())['process_group_error'])
         finally:
             os.environ.pop('CHILD_PID_FILE', None)
+
+    def large_packet(self):
+        # Far beyond any pipe buffer, so a blocking write would wait on the child.
+        return {**self.packet(), "objective": "x" * (1024 * 1024)}
+
+    def assert_stopped_without_marker(self, run):
+        group = json.loads((run / "child.json").read_text())["process_group"]
+        with self.assertRaises(ProcessLookupError):
+            os.killpg(group, 0)
+        self.assertEqual(load_bridge_module().unknown_markers(load_bridge_module().lane_identity(self.repo)), [])
+
+    def test_large_prompt_to_a_child_that_never_reads_stdin_still_times_out(self):
+        os.environ["FAKE_MODE"] = "no_read_sleep"
+        started = time.monotonic()
+        got, run = self.invoke(self.large_packet(), "stdin-timeout", timeout="1")
+        self.assertLess(time.monotonic() - started, 8, "the deadline must not wait for the child to read its prompt")
+        self.assertEqual(json.loads((run / "receipt.json").read_text())["status"], "timeout", got.stderr)
+        delivery = json.loads((run / "result.json").read_text())["prompt_delivery"]
+        self.assertEqual(delivery["state"], "incomplete")
+        self.assertLess(delivery["written_bytes"], delivery["bytes"])
+        self.assert_stopped_without_marker(run)
+
+    def test_large_prompt_to_a_child_that_never_reads_stdin_still_obeys_cancel(self):
+        os.environ["FAKE_MODE"] = "no_read_sleep"
+        packet_path = self.root / "stdin-cancel.json"; packet_path.write_text(json.dumps(self.large_packet()))
+        run = self.root / "stdin-cancel"
+        child = subprocess.Popen([sys.executable, str(BRIDGE), "run", "--packet", str(packet_path), "--run-dir", str(run),
+                                  "--timeout", "30"], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            deadline = time.monotonic() + 8
+            while not (run / "child.json").exists() and time.monotonic() < deadline:
+                time.sleep(.05)
+            self.assertTrue((run / "child.json").exists(), "the launched PID/PGID is persisted before prompt delivery")
+            started = time.monotonic()
+            marked = subprocess.run([sys.executable, str(BRIDGE), "cancel", "--run-dir", str(run), "--reason", "stop"],
+                                    text=True, capture_output=True)
+            self.assertEqual(marked.returncode, 0, marked.stderr)
+            child.wait(timeout=8)
+            self.assertLess(time.monotonic() - started, 6)
+        finally:
+            if child.poll() is None:
+                child.kill()
+            child.communicate(timeout=5)
+        self.assertEqual(json.loads((run / "receipt.json").read_text())["status"], "cancelled")
+        self.assertEqual(json.loads((run / "result.json").read_text())["prompt_delivery"]["state"], "incomplete")
+        self.assert_stopped_without_marker(run)
+
+    def test_whole_prompt_is_delivered_while_stdout_is_drained(self):
+        observed = self.root / "stdin-observed.json"
+        os.environ["FAKE_STDIN_OUT"] = str(observed)
+        try:
+            for mode in ("read_stdin", "flood_then_read"):
+                with self.subTest(mode=mode):
+                    os.environ["FAKE_MODE"] = mode
+                    got, run = self.invoke({**self.large_packet(), "task_id": "stdin-" + mode}, "stdin-" + mode, timeout="20")
+                    self.assertEqual(got.returncode, 0, got.stderr)
+                    self.assertEqual(json.loads((run / "receipt.json").read_text())["status"], "reported")
+                    delivery = json.loads((run / "result.json").read_text())["prompt_delivery"]
+                    self.assertEqual(delivery["state"], "complete")
+                    self.assertEqual(delivery["written_bytes"], delivery["bytes"])
+                    self.assertEqual(json.loads(observed.read_text())["bytes"], delivery["bytes"])
+                    self.assertGreater(delivery["bytes"], 1024 * 1024)
+        finally:
+            os.environ.pop("FAKE_STDIN_OUT", None)
+
+    def test_child_exiting_before_reading_a_large_prompt_fails_without_unknown(self):
+        os.environ["FAKE_MODE"] = "exit_immediately"
+        got, run = self.invoke(self.large_packet(), "stdin-early-exit")
+        self.assertNotEqual(got.returncode, 0)
+        self.assertEqual(json.loads((run / "receipt.json").read_text())["status"], "failed")
+        result = json.loads((run / "result.json").read_text())
+        self.assertEqual(result["prompt_delivery"]["state"], "incomplete")
+        self.assertFalse(load_bridge_module().unknown_lane_marker(self.repo).exists())
 
 
 if __name__ == "__main__":

@@ -36,6 +36,7 @@ import startup_protocol
 
 from events import append as append_activity
 import usage as usage_scope
+import workflow_delivery
 from compatibility import BUDGET_FLAGS, REQUIRED_FLAGS, GROUPS, bridge_contract_id, flag_advertised, required_flags, required_groups
 from compatibility import DISPATCH_PROTOCOL_VERSION, LEGACY_DISPATCH_CONTRACTS
 from workspace import WorkspaceError, artifact_snapshot, artifact_snapshot_difference, canonical_read_path, snapshot_digest, validate_artifact_lists
@@ -124,7 +125,13 @@ def aliases_protected(target: Path, protected: list[Path]) -> bool:
     return False
 
 
-def validate_packet(packet: Any) -> dict[str, Any]:
+def validate_packet(packet: Any, *, frozen_workflow: bool = False) -> dict[str, Any]:
+    """Validate a task packet.
+
+    ``frozen_workflow`` is for the per-tool hook re-reading the packet this
+    run already dispatched: the bound saved script is re-verified in place
+    instead of re-enumerating every saved workflow.
+    """
     if isinstance(packet, dict) and any(key in packet for key in ("cli_descriptor", "cli_selection", "cli_identity", "qualification")):
         raise BridgeError("CLI identity is selected by the supervisor, not by task packet fields")
     if isinstance(packet, dict) and "content_binding" in packet:
@@ -255,8 +262,8 @@ def validate_packet(packet: Any) -> dict[str, Any]:
         if packet.get("correction") is not None:
             raise BridgeError("workflow_review is fresh-only and cannot carry a correction")
         try:
-            from named_workflow import NamedWorkflowError, validate as validate_named_workflow
-            workflow = validate_named_workflow(workflow, cwd)
+            from named_workflow import NamedWorkflowError, validate as validate_named_workflow, verify_bound
+            workflow = verify_bound(workflow, cwd) if frozen_workflow else validate_named_workflow(workflow, cwd)
         except (NamedWorkflowError, OSError, subprocess.CalledProcessError) as exc:
             raise BridgeError(f"saved workflow identity check failed: {exc}") from exc
         packet["workflow"] = workflow
@@ -722,7 +729,26 @@ def _contained_path(raw: str, cwd: Path, sources: set[Path], allow_source: bool)
             if target.is_symlink():
                 raise BridgeError("symlink requirement source is forbidden")
             return target, False
-        raise BridgeError("path is outside cwd and requirement sources")
+        raise BridgeError(_outside_scope_message(target, sources, allow_source))
+
+
+SCOPE_HINT_FILES = 3
+
+
+def _outside_scope_message(target: Path, sources: set[Path], allow_source: bool) -> str:
+    """Explain a denial without granting anything: name the exact files a parent search was after."""
+    message = "path is outside cwd and requirement sources"
+    covered = sorted(str(source) for source in sources if target in source.parents)
+    if allow_source and covered:
+        shown = ", ".join(covered[:SCOPE_HINT_FILES])
+        if len(covered) > SCOPE_HINT_FILES:
+            shown += f" (+{len(covered) - SCOPE_HINT_FILES} more)"
+        # Keep the rule and usable operation before variable-length paths so
+        # bounded denial previews cannot hide the reason or suggest permission.
+        message += ("; a parent directory outside cwd is never searchable. "
+                    "Use Read, or Grep with path set to one exact file. "
+                    f"Exact requirement sources: {shown[:600]}")
+    return message
 
 
 def _artifact_read_path(raw: str, cwd: Path, allowed: set[Path]) -> Path:
@@ -845,29 +871,42 @@ def _activity_events(run_dir: Path) -> list[dict[str, Any]]:
     return events
 
 
-def hook_coverage(run_dir: Path, tool_uses: Mapping[str, str], *, guard_all_tools: bool = False) -> dict[str, Any]:
+def hook_coverage(run_dir: Path, tool_uses: Mapping[str, str], *, guard_all_tools: bool = False,
+                  rejected_formatter_tool_uses: Mapping[str, Any] | None = None) -> dict[str, Any]:
     # A hook decision is audit evidence whether it allowed or denied the call;
     # a denial still fails the run through hook_denials.  Any other status, or
     # an event whose tool differs from the provider's tool_use, proves nothing.
     decisions: dict[str, dict[str, str]] = {"allowed": {}, "denied": {}}
+    recorded_ids: set[str] = set()
     for event in _activity_events(run_dir):
+        if event.get("kind") == "tool" and isinstance(event.get("tool_use_id"), str):
+            recorded_ids.add(event["tool_use_id"])
         if (event.get("kind") == "tool" and event.get("status") in decisions
                 and isinstance(event.get("tool_use_id"), str) and isinstance(event.get("tool"), str)):
             decisions[event["status"]][event["tool_use_id"]] = event["tool"]
     # Ordinary runs install a path guard only for the file tools in their
     # matcher. StructuredOutput is the CLI's schema formatter and has no file
     # capability. Workflow uses matcher="*", so every observed tool (including
-    # each child StructuredOutput) must have a corresponding hook event.
+    # each child StructuredOutput) must have a corresponding hook event. Only
+    # a uniquely bound parent formatter rejected by the CLI before execution
+    # can be excluded; an existing hook record always takes precedence.
     guarded_names = set(READ_TOOLS + WRITE_TOOLS)
     expected = {tool_id: tool for tool_id, tool in tool_uses.items()
                 if tool != "EndConversation" and (guard_all_tools or tool in guarded_names)}
+    rejected = sorted(tool_id for tool_id, proof in (rejected_formatter_tool_uses or {}).items()
+                      if expected.get(tool_id) == "StructuredOutput" and tool_id not in recorded_ids
+                      and isinstance(proof, dict) and proof.get("state") == "rejected_before_execution"
+                      and proof.get("tool_name") == "StructuredOutput")
+    expected = {tool_id: tool for tool_id, tool in expected.items() if tool_id not in rejected}
     denied = sorted(tool_id for tool_id, tool in expected.items() if decisions["denied"].get(tool_id) == tool)
     allowed = sorted(tool_id for tool_id, tool in expected.items()
                      if decisions["allowed"].get(tool_id) == tool and tool_id not in denied)
     missing = sorted(set(expected) - set(allowed) - set(denied))
     return {"status": "complete" if not missing else "incomplete", "expected_count": len(expected),
             "audited_count": len(allowed) + len(denied), "allowed_count": len(allowed), "denied_count": len(denied),
-            "allowed_tool_use_ids": allowed, "denied_tool_use_ids": denied, "missing_tool_use_ids": missing}
+            "allowed_tool_use_ids": allowed, "denied_tool_use_ids": denied, "missing_tool_use_ids": missing,
+            "pre_execution_rejected_formatter_count": len(rejected),
+            "pre_execution_rejected_formatter_tool_use_ids": rejected}
 
 
 def hook_denials(run_dir: Path, tool_uses: Mapping[str, str], provider_denials: list[Any]) -> list[dict[str, Any]]:
@@ -912,7 +951,7 @@ def unexpected_tool_uses(tool_uses: Mapping[str, str], task_tools: tuple[str, ..
 
 def hook(packet_path: Path, cwd_arg: str) -> int:
     try:
-        packet = validate_packet(load(packet_path))
+        packet = validate_packet(load(packet_path), frozen_workflow=True)
         cwd = Path(cwd_arg).resolve()
         if cwd != Path(packet["cwd"]):
             raise BridgeError("hook cwd does not match packet")
@@ -945,6 +984,13 @@ def hook(packet_path: Path, cwd_arg: str) -> int:
                 exact_input = False
             if (packet.get("role") != "workflow_review" or not isinstance(input_, dict) or not exact_input):
                 raise BridgeError("only the packet's exact saved Workflow(name) is permitted")
+            # The invocation itself resolves the name, so effective-resolution
+            # and ambiguity checks run here again, not on every file tool.
+            from named_workflow import NamedWorkflowError, validate as validate_named_workflow
+            try:
+                validate_named_workflow(packet["workflow"], cwd)
+            except (NamedWorkflowError, OSError, subprocess.CalledProcessError) as exc:
+                raise BridgeError(f"saved workflow identity check failed: {exc}") from exc
             append_activity(packet_path.parent, "tool", "saved workflow permitted", tool="Workflow", file=expected,
                             status="allowed", tool_use_id=tool_use_id)
             return 0
@@ -1003,16 +1049,57 @@ def hook(packet_path: Path, cwd_arg: str) -> int:
         return hook_reply_denied(str(exc))
 
 
+def workflow_input(workflow: Mapping[str, Any]) -> dict[str, Any]:
+    return {key: workflow[key] for key in ("name", "args") if key in workflow}
+
+
+def scope_contract(packet: dict[str, Any]) -> dict[str, Any]:
+    """State the file and Workflow boundary the hook enforces, derived from the validated packet.
+
+    It is guidance only: the PreToolUse hook remains the enforcement, and a
+    denied call still fails the run.
+    """
+    cwd = Path(packet["cwd"])
+    if packet["workspace_kind"] == "artifacts":
+        read: dict[str, Any] = {
+            "mode": "exact_files_only",
+            "exact_files": list(dict.fromkeys(packet.get("input_files", []) + packet["requirement_sources"])),
+            "rule": "Read only these exact files, or Grep with path set to one of them; no directory or wildcard discovery."}
+    else:
+        external = []
+        for source in packet["requirement_sources"]:
+            try:
+                Path(source).relative_to(cwd)
+            except ValueError:
+                external.append(source)
+        read = {"inside_cwd": {"root": packet["cwd"], "tools": list(READ_TOOLS),
+                               "rule": "any path inside cwd; symlinked paths are denied"},
+                "external_exact_files": external,
+                "external_rule": ("Outside cwd, Read these exact files, or Grep with path set to exactly one of them. "
+                                  "Their parent directories and every other path outside cwd are denied, and a denial fails the run.")}
+    scope: dict[str, Any] = {"read": read,
+                             "write": ({"exact_files": list(packet["owned_files"])} if packet["role"] == "implement"
+                                       else {"mode": "none"})}
+    if packet["role"] == "workflow_review":
+        scope["workflow_invocation"] = {
+            "tool": "Workflow", "input": workflow_input(packet["workflow"]),
+            "rule": ("the only permitted Workflow call, with exactly this input; every agent it starts is held "
+                     "to the same read boundary")}
+    return scope
+
+
 def prompt(packet: dict[str, Any]) -> str:
     # Corrections stay in the user prompt: resumed Claude sessions retain old system snapshots.
     instruction = "Return only the requested structured result. Do not claim acceptance."
     if packet["role"] == "workflow_review":
         instruction = (
             f"Run only the saved Workflow named /{packet['workflow']['name']} through the Workflow tool, "
+            "with exactly the input in scope.workflow_invocation, "
             "then wait for its report before returning the structured result. The Workflow tool result is only "
             "a launch acknowledgement: the Workflow keeps running in the background and its completion "
-            "arrives automatically as a task notification. Do not poll it, inspect private workflow journals "
-            "or transcripts, or try other tools to obtain it; simply wait. A structured result returned before "
+            "arrives automatically as a task notification. Do not poll it, read its output file, inspect private "
+            "workflow journals or transcripts, or try other tools to obtain it; simply wait. The bridge captures "
+            "the Workflow's full output itself. A structured result returned before "
             "that completion is interim and is never accepted as the report. Do not use an inline script, "
             "a scriptPath, any other Workflow, or a normal review as a substitute. Do not claim that the "
             "Workflow ran unless the tool call completed successfully. Do not claim acceptance."
@@ -1024,7 +1111,8 @@ def prompt(packet: dict[str, Any]) -> str:
         "For documented commands, trace actual defaults, generated artifact names and their consumers before asserting consistency. "
         "Do not claim checks were executed when you only inspected code."
     )
-    return json.dumps({"packet": packet, "instruction": instruction, "evidence_rules": evidence_rules}, ensure_ascii=False)
+    return json.dumps({"packet": packet, "scope": scope_contract(packet), "instruction": instruction,
+                       "evidence_rules": evidence_rules}, ensure_ascii=False)
 
 
 def _stream_content_blocks(obj: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1092,25 +1180,129 @@ def denial_entries(event: dict[str, Any], depth: int = 0) -> list[Any]:
     return entries
 
 
+NOTIFICATION_HEADERS = frozenset({"task-id", "tool-use-id", "output-file", "status"})
+_NOTIFICATION_ELEMENT = re.compile(r"\s*<([a-z][a-z-]*)>([^<]*)</\1>")
+WORKFLOW_TASK_FAILURES = frozenset({"failed", "error", "killed", "stopped", "cancelled", "timeout"})
+WORKFLOW_TERMINAL_SOURCES = ("system_task_notification", "legacy_text_notification")
+
+
+def notification_headers(text: str) -> dict[str, str] | None:
+    """Read the header elements of a text that is itself one task notification.
+
+    Only a text that begins with ``<task-notification>`` counts, and only its
+    leading header elements are read; the first other element (a summary or
+    report body) ends them.  Tags quoted later, including a notification
+    embedded in a report body, are never read, so fields are never combined
+    across notifications.  A repeated header makes the notification ambiguous.
+    """
+    text = text.lstrip()
+    if not text.startswith("<task-notification>"):
+        return None
+    position = len("<task-notification>")
+    headers: dict[str, str] = {}
+    while True:
+        element = _NOTIFICATION_ELEMENT.match(text, position)
+        if element is None or element.group(1) not in NOTIFICATION_HEADERS:
+            return headers
+        if element.group(1) in headers:
+            return None
+        headers[element.group(1)] = element.group(2).strip()
+        position = element.end()
+
+
+def _new_invocation(tool_use_id: str, line: int) -> dict[str, Any]:
+    return {"tool_use_id": tool_use_id, "tool_use_line": line,
+            "acknowledgement": {"state": "missing", "stream_line": None},
+            "task_id": None, "task_started_line": None, "notifications_before_acknowledgement": 0,
+            "unbound_notifications": 0, "terminals": {source: [] for source in WORKFLOW_TERMINAL_SOURCES}}
+
+
+def _note_workflow_terminal(record: dict[str, Any], source: str, task_id: Any, status: Any, output_file: Any,
+                            line: int, diagnostics: dict[str, int]) -> None:
+    if record["acknowledgement"]["state"] == "missing":
+        record["notifications_before_acknowledgement"] += 1
+        return
+    if record["acknowledgement"]["state"] != "succeeded":
+        return
+    bound = record["task_id"]
+    # The Workflow's task is the first one started for its tool call; a
+    # notification for another task (such as a nested agent) is not its end.
+    if bound is not None and task_id != bound and not (source == "legacy_text_notification" and task_id is None):
+        record["unbound_notifications"] += 1
+        return
+    if status != "completed" and status not in WORKFLOW_TASK_FAILURES:
+        diagnostics["unrecognized_notification_statuses"] += 1
+        return
+    record["terminals"][source].append({"status": status, "stream_line": line,
+                                        "task_id": task_id if isinstance(task_id, str) else None,
+                                        "output_file": output_file if isinstance(output_file, str) else None})
+
+
+def _workflow_invocation_evidence(index: int, record: dict[str, Any]) -> dict[str, Any]:
+    """One per-invocation fact from the stream; structured system events outrank legacy text."""
+    source = next((name for name in WORKFLOW_TERMINAL_SOURCES if record["terminals"][name]), None)
+    terminals = record["terminals"][source] if source else []
+    first = terminals[0] if terminals else None
+    terminal = None
+    if first is not None:
+        conflict = any((item["status"], item["output_file"]) != (first["status"], first["output_file"])
+                       for item in terminals[1:])
+        terminal = {"status": first["status"], "source": source, "stream_line": first["stream_line"],
+                    "count": len(terminals), "conflict": conflict}
+    return {"index": index, "tool_use_id": record["tool_use_id"], "tool_use_line": record["tool_use_line"],
+            "acknowledgement": record["acknowledgement"],
+            "task_id": record["task_id"] or (first["task_id"] if first else None),
+            "task_started_line": record["task_started_line"], "terminal": terminal,
+            "output_reference": ({"output_file": first["output_file"], "source": source}
+                                 if first is not None and first["output_file"] is not None else None),
+            "notifications_before_acknowledgement": record["notifications_before_acknowledgement"],
+            "unbound_notifications": record["unbound_notifications"]}
+
+
+def _completed(invocation: dict[str, Any]) -> bool:
+    terminal = invocation.get("terminal")
+    return isinstance(terminal, dict) and terminal.get("status") == "completed" and not terminal.get("conflict")
+
+
 def parse_stream(path: Path, expected_session: str, expected_workflow: dict[str, Any] | str | None = None) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    """Parse the provider stream; only a parent ``type=result`` event in the expected session is final."""
     final = None
     metadata: dict[str, Any] = {"permission_denials": [], "actual_models": [], "actual_model_sources": [],
-                                "guarded_tool_uses": {}, "provider_response_observed": False}
-    expected_input = ({"name": expected_workflow} if isinstance(expected_workflow, str) else {key: expected_workflow[key] for key in ("name", "args") if key in expected_workflow}) if expected_workflow is not None else None
-    workflow_uses: set[str] = set()
-    workflow_results: set[str] = set()
-    workflow_completed: set[str] = set()
-    workflow_tasks: dict[str, str] = {}
-    interim_results = 0
+                                "guarded_tool_uses": {}, "provider_response_observed": False,
+                                "rejected_formatter_tool_uses": {}}
+    expected_input = ({"name": expected_workflow} if isinstance(expected_workflow, str) else workflow_input(expected_workflow)) if expected_workflow is not None else None
+    invocations: dict[str, dict[str, Any]] = {}
+    parent_result_lines: list[int] = []
+    final_line: int | None = None
+    diagnostics = {"non_parent_result_events": 0, "unexpected_session_result_events": 0,
+                   "other_workflow_tool_uses": 0, "unrecognized_notification_statuses": 0}
+    tool_use_counts: dict[str, int] = {}
+    tool_result_counts: dict[str, int] = {}
+    formatter_candidates: dict[str, dict[str, Any]] = {}
+    formatter_errors: dict[str, int] = {}
 
-    def task_matches(tool_id: Any, task_id: Any) -> bool:
-        # task_id is optional in a notification.  The Workflow task itself is
-        # the first task started for its tool call; once bound, a completion
-        # for any other task (such as a nested agent) is not the Workflow's.
-        started = workflow_tasks.get(tool_id)
-        return started is None or task_id == started
+    def invalid_formatter_input(block: dict[str, Any]) -> dict[str, Any] | None:
+        value = block.get("input")
+        if not isinstance(value, dict) or set(value) != {"__unparsedToolInput"}:
+            return None
+        wrapper = value["__unparsedToolInput"]
+        if not isinstance(wrapper, dict) or set(wrapper) != {"raw", "len"}:
+            return None
+        raw, length = wrapper["raw"], wrapper["len"]
+        if not isinstance(raw, str) or isinstance(length, bool) or not isinstance(length, int) or length <= 0:
+            return None
+        try:
+            encoded = raw.encode("utf-8")
+            if len(encoded) != length:
+                return None
+            json.loads(raw)
+        except json.JSONDecodeError:
+            return {"input_bytes": length, "input_sha256": hashlib.sha256(encoded).hexdigest()}
+        except (ValueError, UnicodeError, RecursionError):
+            return None
+        return None
 
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    for line_number, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), start=1):
         try:
             obj = json.loads(line)
         except json.JSONDecodeError:
@@ -1118,6 +1310,7 @@ def parse_stream(path: Path, expected_session: str, expected_workflow: dict[str,
         if isinstance(obj, dict):
             event_type = obj.get("type")
             event_session = obj.get("session_id") or obj.get("sessionId")
+            parent_event = obj.get("parent_tool_use_id") is None
             if event_session:
                 if event_session != expected_session:
                     metadata.setdefault("session_mismatches", []).append(event_session)
@@ -1153,85 +1346,146 @@ def parse_stream(path: Path, expected_session: str, expected_workflow: dict[str,
             if "usage" in obj:
                 metadata["usage"] = obj["usage"]
             metadata["permission_denials"].extend(denial_entries(obj))
+            # The observed CLI wrapper and matching error result establish a
+            # formatter never reached execution. Missing identity or duplicate
+            # IDs/results cannot establish this, and no error text is matched.
+            formatter_parent = (obj.get("parent_tool_use_id", True) is None
+                                and event_session == expected_session
+                                and all(obj.get(key, expected_session) == expected_session
+                                        for key in ("session_id", "sessionId")))
             for block in _stream_content_blocks(obj):
-                if block.get("type") == "tool_use" and isinstance(block.get("id"), str) and isinstance(block.get("name"), str):
-                    metadata["guarded_tool_uses"][block["id"]] = block["name"]
+                if block.get("type") == "tool_use" and isinstance(block.get("id"), str):
+                    tool_id = block["id"]
+                    tool_use_counts[tool_id] = tool_use_counts.get(tool_id, 0) + 1
+                    if isinstance(block.get("name"), str):
+                        metadata["guarded_tool_uses"][tool_id] = block["name"]
+                    if (tool_id.strip() and event_type == "assistant" and formatter_parent and block.get("name") == "StructuredOutput"
+                            and block.get("caller", {"type": "direct"}) == {"type": "direct"}):
+                        proof = invalid_formatter_input(block)
+                        if proof is not None:
+                            formatter_candidates[tool_id] = {**proof, "state": "rejected_before_execution",
+                                                             "tool_name": "StructuredOutput", "session_id": expected_session,
+                                                             "tool_use_stream_line": line_number}
+                elif block.get("type") == "tool_result" and isinstance(block.get("tool_use_id"), str):
+                    tool_id = block["tool_use_id"]
+                    tool_result_counts[tool_id] = tool_result_counts.get(tool_id, 0) + 1
+                    if (event_type == "user" and formatter_parent and block.get("is_error") is True
+                            and isinstance(block.get("content"), str) and block["content"].strip()):
+                        formatter_errors[tool_id] = line_number
             if expected_workflow is not None:
-                for block in _stream_content_blocks(obj):
-                    if block.get("type") == "tool_use" and block.get("name") == "Workflow":
-                        input_ = block.get("input")
-                        tool_id = block.get("id")
-                        if isinstance(tool_id, str) and isinstance(input_, dict) and input_ == expected_input:
-                            workflow_uses.add(tool_id)
-                    elif block.get("type") == "tool_result":
-                        tool_id = block.get("tool_use_id")
-                        if isinstance(tool_id, str) and tool_id in workflow_uses and block.get("is_error") is False:
-                            workflow_results.add(tool_id)
-                if (obj.get("type") == "system" and obj.get("subtype") == "task_started"
-                        and event_session == expected_session and obj.get("tool_use_id") in workflow_uses
-                        and isinstance(obj.get("task_id"), str)):
-                    workflow_tasks.setdefault(obj["tool_use_id"], obj["task_id"])
-                if (obj.get("type") == "system" and obj.get("subtype") == "task_notification"
-                        and event_session == expected_session and obj.get("status") == "completed"
-                        and obj.get("tool_use_id") in workflow_results
-                        and task_matches(obj.get("tool_use_id"), obj.get("task_id"))):
-                    workflow_completed.add(obj["tool_use_id"])
-                # Only the parent session's injected notification turn counts;
-                # a Workflow agent's own messages carry a parent_tool_use_id.
-                parent_user = (obj.get("type") == "user" and event_session == expected_session
-                               and obj.get("parent_tool_use_id") is None)
-                for text in (_stream_texts(obj) if parent_user else []):
-                    if "<task-notification>" not in text:
-                        continue
-                    tool_match = re.search(r"<tool-use-id>([^<]+)</tool-use-id>", text)
-                    status_match = re.search(r"<status>([^<]+)</status>", text)
-                    task_match = re.search(r"<task-id>([^<]+)</task-id>", text)
-                    if (tool_match and status_match and tool_match.group(1) in workflow_results
-                            and status_match.group(1) == "completed"
-                            and (task_match is None or task_matches(tool_match.group(1), task_match.group(1)))):
-                        workflow_completed.add(tool_match.group(1))
-            if obj.get("type") == "result" or "subtype" in obj and ("structured_output" in obj or obj.get("is_error")):
-                final = obj
-                metadata["final_session_id"] = event_session
-                if expected_workflow is not None:
-                    # A result emitted while the launched Workflow is still
-                    # pending (the launch acknowledgement turn) is interim; only
-                    # a later parent result can be the Workflow report.
-                    after_completion = (bool(workflow_uses) and workflow_completed == workflow_uses
-                                        and obj.get("parent_tool_use_id") is None)
-                    metadata["workflow_final_after_completion"] = after_completion
-                    if not after_completion:
-                        interim_results += 1
+                # Only the parent's own turns launch and acknowledge the call; a
+                # Workflow agent's messages carry a parent_tool_use_id.
+                if parent_event and event_session in (None, expected_session):
+                    for block in _stream_content_blocks(obj):
+                        if block.get("type") == "tool_use" and block.get("name") == "Workflow":
+                            tool_id = block.get("id")
+                            if isinstance(tool_id, str) and isinstance(block.get("input"), dict) and block["input"] == expected_input:
+                                invocations.setdefault(tool_id, _new_invocation(tool_id, line_number))
+                            else:
+                                diagnostics["other_workflow_tool_uses"] += 1
+                        elif block.get("type") == "tool_result" and block.get("tool_use_id") in invocations:
+                            record = invocations[block["tool_use_id"]]
+                            if record["acknowledgement"]["state"] == "missing":
+                                record["acknowledgement"] = {"state": "succeeded" if block.get("is_error") is False else "failed",
+                                                             "stream_line": line_number}
+                if event_type == "system" and event_session == expected_session and obj.get("tool_use_id") in invocations:
+                    record = invocations[obj["tool_use_id"]]
+                    if obj.get("subtype") == "task_started":
+                        if (record["task_id"] is None and isinstance(obj.get("task_id"), str)
+                                and obj.get("task_type", "local_workflow") == "local_workflow"):
+                            record["task_id"], record["task_started_line"] = obj["task_id"], line_number
+                    elif obj.get("subtype") == "task_notification":
+                        _note_workflow_terminal(record, "system_task_notification", obj.get("task_id"), obj.get("status"),
+                                                obj.get("output_file"), line_number, diagnostics)
+                if event_type == "user" and event_session == expected_session and parent_event:
+                    for text in _stream_texts(obj):
+                        headers = notification_headers(text)
+                        if headers and headers.get("tool-use-id") in invocations:
+                            _note_workflow_terminal(invocations[headers["tool-use-id"]], "legacy_text_notification",
+                                                    headers.get("task-id"), headers.get("status"), None,
+                                                    line_number, diagnostics)
+            if event_type == "result":
+                if parent_event and event_session == expected_session:
+                    final = obj
+                    final_line = line_number
+                    parent_result_lines.append(line_number)
+                    metadata["final_session_id"] = event_session
+                elif not parent_event:
+                    diagnostics["non_parent_result_events"] += 1
+                else:
+                    diagnostics["unexpected_session_result_events"] += 1
+    if isinstance(final, dict) and "usage" in final:
+        metadata["usage"] = final["usage"]
+    provider_denied_ids = {item.get("tool_use_id") or item.get("toolUseId")
+                          for item in metadata["permission_denials"] if isinstance(item, dict)
+                          and isinstance(item.get("tool_use_id") or item.get("toolUseId"), str)}
+    metadata["rejected_formatter_tool_uses"] = {
+        tool_id: {**proof, "tool_result_stream_line": formatter_errors[tool_id]}
+        for tool_id, proof in formatter_candidates.items()
+        if tool_use_counts.get(tool_id) == 1 and tool_result_counts.get(tool_id) == 1
+        and formatter_errors.get(tool_id, 0) > proof["tool_use_stream_line"]
+        and tool_id not in provider_denied_ids}
     init_session = metadata.get("system_init_session_id")
     final_session = metadata.get("final_session_id")
     if init_session == expected_session:
         metadata["actual_session_id"] = init_session
     if metadata.get("session_mismatches") or init_session != expected_session or final_session != expected_session or init_session != final_session:
         metadata["session_error"] = "system/init session and final result must both equal the expected session"
+    metadata["result_selection"] = {"rule": "last parent type=result event in the expected session",
+                                    "final_stream_line": final_line, "parent_result_events": len(parent_result_lines),
+                                    "non_parent_result_events": diagnostics["non_parent_result_events"],
+                                    "unexpected_session_result_events": diagnostics["unexpected_session_result_events"]}
     if expected_workflow is not None:
+        evidence = [_workflow_invocation_evidence(index, record) for index, record in enumerate(invocations.values())]
+        completed = bool(evidence) and all(_completed(item) for item in evidence)
+        last_completion = max((item["terminal"]["stream_line"] for item in evidence if _completed(item)), default=0)
+        after_completion = [line for line in parent_result_lines if completed and line > last_completion]
         metadata["workflow_name"] = expected_input["name"]
-        metadata["workflow_tool_use_observed"] = bool(workflow_uses)
-        metadata["workflow_tool_result_success"] = bool(workflow_uses) and workflow_results == workflow_uses
-        metadata["workflow_tool_use_count"] = len(workflow_uses)
-        metadata["workflow_tool_result_success_count"] = len(workflow_results)
-        metadata["workflow_completion_observed"] = bool(workflow_uses) and workflow_completed == workflow_uses
-        metadata["workflow_completion_count"] = len(workflow_completed)
-        metadata["workflow_final_after_completion"] = (metadata["workflow_completion_observed"]
-                                                       and metadata.get("workflow_final_after_completion") is True)
-        metadata["workflow_interim_result_count"] = interim_results
+        metadata["workflow_invocations"] = evidence
+        metadata["workflow_stream_diagnostics"] = {"other_workflow_tool_uses": diagnostics["other_workflow_tool_uses"],
+                                                   "unrecognized_notification_statuses": diagnostics["unrecognized_notification_statuses"]}
+        metadata["workflow_tool_use_observed"] = bool(evidence)
+        metadata["workflow_tool_result_success"] = bool(evidence) and all(item["acknowledgement"]["state"] == "succeeded" for item in evidence)
+        metadata["workflow_tool_use_count"] = len(evidence)
+        metadata["workflow_tool_result_success_count"] = sum(item["acknowledgement"]["state"] == "succeeded" for item in evidence)
+        metadata["workflow_completion_observed"] = completed
+        metadata["workflow_completion_count"] = sum(_completed(item) for item in evidence)
+        # A result emitted while a launched Workflow is still pending (the
+        # launch acknowledgement turn) is interim; only a later parent result
+        # can be the Workflow report.
+        metadata["workflow_final_after_completion"] = final_line is not None and final_line in after_completion
+        metadata["workflow_interim_result_count"] = len(parent_result_lines) - len(after_completion)
     metadata["actual_model_source"] = "+".join(metadata["actual_model_sources"]) or None
     return final, metadata
 
 
+NONBLANK = r"\S"
+RESULT_SCHEMA = {"type": "object", "required": ["status", "summary", "evidence", "checks", "unresolved"],
+                 "properties": {"status": {"enum": ["completed", "blocked"]},
+                                "summary": {"type": "string", "pattern": NONBLANK},
+                                "evidence": {"type": "array", "items": {"type": "string", "pattern": NONBLANK}},
+                                "checks": {"type": "array", "items": {"type": "string", "pattern": NONBLANK}},
+                                "unresolved": {"type": "array", "items": {"type": "string", "pattern": NONBLANK}}}}
+
+
 def result_payload(provider: dict[str, Any]) -> dict[str, Any]:
+    """Validate the structured report's schema: a non-blank summary and no blank list items.
+
+    This is shape, not adequacy: a short no-findings report is valid, and
+    whether its content is correct remains Codex's acceptance decision.
+    """
     value = provider.get("structured_output")
     if not isinstance(value, dict):
         raise BridgeError("provider result lacks structured_output object")
     if value.get("status") not in {"completed", "blocked"} or not isinstance(value.get("summary"), str):
         raise BridgeError("structured result has invalid status or summary")
+    if not value["summary"].strip():
+        raise BridgeError("structured result summary is blank")
     for key in ("evidence", "checks", "unresolved"):
         if not isinstance(value.get(key), list) or not all(isinstance(x, str) for x in value[key]):
             raise BridgeError(f"structured result {key} must be an array of strings")
+        if not all(x.strip() for x in value[key]):
+            raise BridgeError(f"structured result {key} contains a blank item")
     return value
 
 
@@ -1363,15 +1617,20 @@ def terminate_group(proc: subprocess.Popen[str]) -> str | None:
     # force.
     if proc.poll() is not None and process_group_stopped(proc.pid):
         return None
+    request_error = None
+    liveness_error = None
+
+    def diagnostic(message: str) -> str:
+        details = [value for value in (request_error, liveness_error) if value]
+        return "; ".join([message, *details])
+
     try:
         os.killpg(proc.pid, signal.SIGTERM)
     except ProcessLookupError:
         return None
     except OSError as exc:
         proc.poll()
-        if process_group_absent(proc.pid):
-            return None
-        return f"SIGTERM process-group request failed: {type(exc).__name__}: {exc}"
+        request_error = f"SIGTERM process-group request failed: {type(exc).__name__}: {exc}"
     # A parent can exit while descendants in its group ignore SIGTERM.
     deadline = time.monotonic() + 3
     while time.monotonic() < deadline:
@@ -1382,31 +1641,28 @@ def terminate_group(proc: subprocess.Popen[str]) -> str | None:
             return
         except OSError as exc:
             # Some macOS host permission checks race with group disappearance.
-            # A failed signal check alone never establishes that it has stopped.
-            try:
-                proc.wait(timeout=max(.01, deadline - time.monotonic()))
-            except subprocess.TimeoutExpired:
-                return f"process-group liveness check failed: {type(exc).__name__}: {exc}"
+            # Reaping/absence can settle within the existing grace period; an
+            # ambiguous snapshot must not skip the remaining wait or SIGKILL.
+            liveness_error = f"process-group liveness check failed: {type(exc).__name__}: {exc}"
             if process_group_absent(proc.pid):
                 return None
-            return f"process-group liveness check failed: {type(exc).__name__}: {exc}"
         time.sleep(.05)
     try:
         os.killpg(proc.pid, signal.SIGKILL)
     except ProcessLookupError:
         return None
     except OSError as exc:
-        return f"SIGKILL process-group request failed: {type(exc).__name__}: {exc}"
+        return diagnostic(f"SIGKILL process-group request failed: {type(exc).__name__}: {exc}")
     try:
         proc.wait(timeout=3)
     except subprocess.TimeoutExpired:
-        return "direct child did not terminate before cleanup deadline"
+        return diagnostic("direct child did not terminate before cleanup deadline")
     deadline = time.monotonic() + 3
     while time.monotonic() < deadline:
         if process_group_stopped(proc.pid):
             return None
         time.sleep(.05)
-    return "process group remained present after SIGKILL"
+    return diagnostic("process group remained present after SIGKILL")
 
 
 def record_unconfirmed_cleanup(run_dir: Path, packet: dict[str, Any], reason: str, cleanup_error: str,
@@ -1950,8 +2206,9 @@ def _run(args: argparse.Namespace) -> int:
         dump(run_dir / "cancel.json", {"reason": "runtime cancelled before bridge dispatch", "requested_at": time.time()})
         return pre_dispatch_cancelled(run_dir, packet, "cancelled before bridge dispatch")
     lock = None
-    proc: subprocess.Popen[str] | None = None
+    proc: subprocess.Popen[bytes] | None = None
     stream = err = selector = None
+    workflow_root: dict[str, Any] | None = None
     try:
         lock = lock_file(lane, packet["task_id"])
         # Markers are checked only under the lock: a live lane holder's own
@@ -2012,10 +2269,7 @@ def _run(args: argparse.Namespace) -> int:
         settings = {"hooks": {"PreToolUse": [{"matcher": matcher, "hooks": [{"type": "command", "command": hook_cmd}]}]}}
         dump(run_dir / "settings.json", settings)
         dump(run_dir / "mcp.json", {"mcpServers": {}})
-        schema = {"type": "object", "required": ["status", "summary", "evidence", "checks", "unresolved"],
-                  "properties": {"status": {"enum": ["completed", "blocked"]}, "summary": {"type": "string"},
-                  "evidence": {"type": "array", "items": {"type": "string"}}, "checks": {"type": "array", "items": {"type": "string"}},
-                  "unresolved": {"type": "array", "items": {"type": "string"}}}}
+        schema = RESULT_SCHEMA
         session = str(uuid.uuid4())
         tools = READ_TOOLS + (WRITE_TOOLS if packet["role"] == "implement" else ())
         allowed_tools = tools
@@ -2074,51 +2328,100 @@ def _run(args: argparse.Namespace) -> int:
         # example Runtime's post-spawn escalation of this run) would erase it.
         if unknown_markers(lane):
             raise BridgeError(unknown_message)
+        # The guard self-test, descriptor and code checks above can take
+        # seconds.  A cancellation observed by now must not launch Claude.
+        if (run_dir / "cancel.json").is_file() or (early_cancel and Path(early_cancel).is_file()):
+            if not (run_dir / "cancel.json").exists():
+                dump(run_dir / "cancel.json", {"reason": "runtime cancelled during bridge preflight", "requested_at": time.time()})
+            return pre_dispatch_cancelled(run_dir, packet, "cancelled during bridge preflight")
+        if packet["role"] == "workflow_review":
+            workflow_root = workflow_delivery.create_root()
+            dump(run_dir / "workflow-temp-root.json", workflow_root)
+            child_env[workflow_delivery.TMPDIR_ENV] = workflow_root["path"]
+        payload = memoryview(prompt(packet).encode("utf-8"))
         publish_launch_intent(args, run_dir, packet, lane)
         lifecycle_update(args, phase="launch_intent", child_started=None)
         launch_intent_update(args, "unconfirmed")
         try:
             proc = subprocess.Popen(command, cwd=packet["cwd"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=err,
-                                    text=True, start_new_session=True, env=child_env)
+                                    start_new_session=True, env=child_env)
         except OSError as exc:
             # Popen reports exec failure only after reaping its failed child.
             launch_intent_update(args, "not_launched")
             lifecycle_update(args, phase="pre_dispatch", child_started=False, reason=f"Claude launch failed: {exc}")
             raise
+        # One deadline from launch bounds prompt delivery and execution alike.
+        deadline = time.monotonic() + args.timeout
         launch_intent_update(args, "running")
-        # Popen succeeded.  Stage this fact in memory before touching stdin so
-        # a synchronous BrokenPipe is still recorded as a launched child by the
-        # terminal lifecycle update.  Keep the persisted sidecar at
-        # launch_intent until prompt delivery succeeds: a hard crash in this
-        # small window remains deliberately unknown.
-        lifecycle = getattr(args, "_lifecycle", None)
-        if lifecycle is not None:
-            lifecycle.update(phase="executing", child_started=True, child_pid=proc.pid,
-                             child_process_group=proc.pid, child_identity=None)
+        # Persist the launched PID/PGID before any I/O that can wait on the
+        # child, so a hard crash leaves a process group to prove stopped.
+        child_started_at = time.time()
+        lifecycle_update(args, phase="executing", child_started=True, child_pid=proc.pid,
+                         child_process_group=proc.pid, child_identity=None)
+        dump(run_dir / "child.json", {"pid": proc.pid, "process_group": proc.pid, "started_at": child_started_at,
+                                       "expected_session_id": resume_session or session, "identity": None})
         assert proc.stdin and proc.stdout
-        # Send the task before the full-process-table identity observation.
-        # A fast CLI can otherwise exit while ps runs, turning prompt delivery
-        # into BrokenPipe and leaving an unreaped zombie for exception cleanup.
-        proc.stdin.write(prompt(packet)); proc.stdin.close()
         child_identity = capture_process_identity(proc.pid, resume_session or session)
-        lifecycle_update(args, phase="executing", child_started=True, child_pid=proc.pid, child_process_group=proc.pid,
-                         child_identity=child_identity)
-        dump(run_dir / "child.json", {"pid": proc.pid, "process_group": proc.pid, "started_at": time.time(),
+        lifecycle_update(args, child_identity=child_identity)
+        dump(run_dir / "child.json", {"pid": proc.pid, "process_group": proc.pid, "started_at": child_started_at,
                                        "expected_session_id": resume_session or session, "identity": child_identity})
         activity(run_dir, "executing", "Claude child started", status="executing")
         selector = selectors.DefaultSelector()
         os.set_blocking(proc.stdout.fileno(), False)
+        os.set_blocking(proc.stdin.fileno(), False)
         selector.register(proc.stdout, selectors.EVENT_READ)
+        selector.register(proc.stdin, selectors.EVENT_WRITE)
         pending = b""
         stream_eof = False
+        prompt_delivery: dict[str, Any] = {"state": "sending", "bytes": len(payload), "written_bytes": 0}
+
+        def close_input(outcome: str, error: BaseException | None = None) -> None:
+            if prompt_delivery["state"] != "sending":
+                return
+            prompt_delivery["state"] = outcome
+            if error is not None:
+                prompt_delivery["error"] = f"{type(error).__name__}: {error}"
+            try:
+                selector.unregister(proc.stdin)
+            except (KeyError, ValueError):
+                pass
+            try:
+                proc.stdin.close()
+            except OSError:
+                pass
+
+        def send() -> None:
+            if prompt_delivery["state"] != "sending":
+                return
+            written = prompt_delivery["written_bytes"]
+            try:
+                written += os.write(proc.stdin.fileno(), payload[written:written + 65536])
+            except BlockingIOError:
+                return
+            except OSError as exc:
+                # BrokenPipe: the child closed stdin or exited before reading it all.
+                close_input("incomplete", exc)
+                return
+            prompt_delivery["written_bytes"] = written
+            if written >= len(payload):
+                close_input("complete")
+
+        # stdin and stdout share this loop so neither a child that never
+        # reads its prompt nor one that floods stdout first can stall the
+        # deadline, cancellation and cleanup checks.
         def drain(wait: float) -> None:
             nonlocal pending, stream_eof
-            for _, _ in selector.select(wait):
+            for key, _ in selector.select(wait):
+                if key.fileobj is proc.stdin:
+                    send()
+                    continue
+                if stream_eof:
+                    continue
                 chunk = os.read(proc.stdout.fileno(), 65536)
                 if not chunk:
                     stream_eof = True
                     selector.unregister(proc.stdout)
-                    return
+                    continue
                 pending += chunk
                 while b"\n" in pending:
                     line, pending = pending.split(b"\n", 1)
@@ -2140,7 +2443,6 @@ def _run(args: argparse.Namespace) -> int:
                                                     text=progress.get("phaseTitle"))
                         else:
                             append_activity(run_dir, "provider", "provider lifecycle event", status=str(subtype or item.get("type")))
-        deadline = time.monotonic() + args.timeout
         cancelled = timed_out = interrupted = False
         cleanup_error: str | None = None
         try:
@@ -2154,6 +2456,7 @@ def _run(args: argparse.Namespace) -> int:
             cancelled = True
             interrupted = True
             cleanup_error = terminate_group(proc)
+        close_input("incomplete")
         if cleanup_error:
             reason = "KeyboardInterrupt" if interrupted else ("cancelled run" if cancelled else "timed out run")
             return record_unconfirmed_cleanup(run_dir, packet, reason, cleanup_error, lane=lane)
@@ -2188,7 +2491,8 @@ def _run(args: argparse.Namespace) -> int:
         provider, meta = parse_stream(run_dir / "stream.jsonl", expected_session,
                                       packet["workflow"] if packet["role"] == "workflow_review" else None)
         coverage = hook_coverage(run_dir, meta.get("guarded_tool_uses", {}),
-                                 guard_all_tools=packet["role"] == "workflow_review")
+                                 guard_all_tools=packet["role"] == "workflow_review",
+                                 rejected_formatter_tool_uses=meta.get("rejected_formatter_tool_uses", {}))
         denied_hooks = hook_denials(run_dir, meta.get("guarded_tool_uses", {}), meta["permission_denials"])
         if denied_hooks:
             meta["permission_denials"].extend(denied_hooks)
@@ -2198,6 +2502,13 @@ def _run(args: argparse.Namespace) -> int:
                       f"in_provider_stream={item['in_provider_stream']} reason={item['reason']}", flush=True)
         unexpected_tools = ([] if packet["role"] == "workflow_review"
                             else unexpected_tool_uses(meta.get("guarded_tool_uses", {}), tools))
+        workflow_record = None
+        if packet["role"] == "workflow_review":
+            # The process group is proven stopped, so the provider can no
+            # longer write the output files being captured.
+            workflow_record = collect_workflow_delivery(run_dir, packet, meta, expected_session, workflow_root)
+            workflow_record["temp_root"]["cleanup"] = workflow_delivery.remove_root(workflow_root)
+            workflow_root = None
         after = workspace_snapshot(packet); dump(run_dir / "workspace_after.json", after)
         if packet["workspace_kind"] == "git":
             dump(run_dir / "git_after.json", after)
@@ -2227,6 +2538,9 @@ def _run(args: argparse.Namespace) -> int:
             final_status = "timeout"
         elif provider is None or meta_stream_warning:
             final_status = "failed"
+        elif prompt_delivery["state"] != "complete":
+            meta["prompt_delivery_error"] = "the task prompt was not fully delivered to the Claude child"
+            final_status = "failed"
         elif residual_process_group:
             meta["process_group_error"] = "direct Claude child exited while same-group descendants remained; descendants were stopped"
             final_status = "failed"
@@ -2242,17 +2556,27 @@ def _run(args: argparse.Namespace) -> int:
             final_status = structured["status"]
         else:
             meta.setdefault("result_validation_error", "provider result lacks structured_output object")
-        if packet["role"] == "workflow_review":
+        workflow_evidence_blocked = False
+        if workflow_record is not None:
             # The first tool result only confirms that a background workflow was
             # launched.  A completed task-notification tied to that same tool ID
-            # is required, and the accepted parent result must follow it.
+            # is required, its full output must be captured, and the accepted
+            # parent result must follow it.
             if not (meta.get("workflow_tool_result_success") and meta.get("workflow_completion_observed")):
                 meta["workflow_error"] = "expected named Workflow launch and completed task-notification were not observed"
+            elif meta["result_selection"]["final_stream_line"] is None:
+                meta["workflow_error"] = "no parent result in the expected session followed the Workflow completion"
             elif not meta.get("workflow_final_after_completion"):
                 meta["workflow_error"] = ("the final parent result preceded the Workflow completion notification; "
                                           "an interim launch result is not the Workflow report")
-            if meta.get("workflow_error") and final_status == "completed":
-                final_status = "blocked"
+            elif workflow_record["status"] != "delivered":
+                meta["workflow_error"] = ("the completed Workflow's full report was not collected: "
+                                          + ", ".join(workflow_record["reason_codes"]))
+            if meta.get("workflow_error"):
+                meta["workflow_error_codes"] = workflow_record["reason_codes"]
+                if final_status == "completed":
+                    final_status = "blocked"
+                    workflow_evidence_blocked = True
         scope_error = None
         invariant_error = None
         if requirements_after != requirements:
@@ -2281,13 +2605,20 @@ def _run(args: argparse.Namespace) -> int:
         cost = provider.get("total_cost_usd") if provider else None
         cost = cost if isinstance(cost, (float, int)) and not isinstance(cost, bool) and math.isfinite(cost) and cost >= 0 else None
         model_usage = provider.get("modelUsage") if provider else None
+        # A marker arriving after process exit but before final persistence wins.
+        if (run_dir / "cancel.json").exists() and final_status in {"completed", "blocked"}:
+            final_status = "cancelled"
+        # A Workflow evidence gap is the bridge's finding, not an executor refusal.
+        blocked_by = ("workflow_evidence" if workflow_evidence_blocked else "executor") if final_status == "blocked" else None
         result = {"workspace_kind": packet["workspace_kind"], "workspace_manifest": {"before": "workspace_before.json", "after": "workspace_after.json"},
                   "cli_identity": environment["cli_descriptor"],
                   "content_binding": content_store.binding_summary(content_binding),
                   "total_cost_usd": cost, "model_usage": model_usage if isinstance(model_usage, dict) else None,
                   "usage_report": usage_scope.usage_report(provider, result_events=meta.get("result_event_count", 0),
                                                            resumed=resume_session is not None),
-                  "blocked_by": "executor" if final_status == "blocked" else None,
+                  "blocked_by": blocked_by,
+                  "prompt_delivery": prompt_delivery, "prompt_delivery_error": meta.get("prompt_delivery_error"),
+                  "result_selection": meta.get("result_selection"),
                   "budget": packet["budget"], "budget_enforcement": "provider_enforced" if packet["budget"] else "not_requested",
                   "provider_subtype": subtype, "provider_exit_code": proc.returncode, "requested_model": packet["model"],
                   "initialized_model": meta.get("initialized_model"), "cli_resolved_model": meta.get("initialized_model"),
@@ -2301,6 +2632,7 @@ def _run(args: argparse.Namespace) -> int:
                   "scope_error": scope_error, "invariant_error": invariant_error, "stream_warning": meta_stream_warning,
                   "result_validation_error": meta.get("result_validation_error"), "session_error": meta.get("session_error"),
                   "hook_guard_preflight": policy_evidence, "hook_guard_coverage": coverage,
+                  "rejected_formatter_tool_uses": meta.get("rejected_formatter_tool_uses", {}),
                   "hook_guard_error": meta.get("hook_guard_error"), "hook_denial_error": meta.get("hook_denial_error"),
                   "tool_policy_error": meta.get("tool_policy_error"),
                   "process_group_error": meta.get("process_group_error"),
@@ -2314,10 +2646,8 @@ def _run(args: argparse.Namespace) -> int:
                   "workflow_final_after_completion": meta.get("workflow_final_after_completion"),
                   "workflow_interim_result_count": meta.get("workflow_interim_result_count"),
                   "workflow_background_wait_ceiling_ms": workflow_wait_ceiling_ms,
-                  "workflow_error": meta.get("workflow_error")}
-        # A marker arriving after process exit but before final persistence wins.
-        if (run_dir / "cancel.json").exists() and final_status in {"completed", "blocked"}:
-            final_status = "cancelled"
+                  "workflow_error": meta.get("workflow_error"), "workflow_error_codes": meta.get("workflow_error_codes"),
+                  "workflow_delivery": workflow_record}
         result["report_evidence"] = {
             "state": report_state, "claimed_status": structured["status"] if structured else None,
             "run_status": final_status, "accepted": False,
@@ -2327,7 +2657,7 @@ def _run(args: argparse.Namespace) -> int:
         dump(run_dir / "result.json", result)
         receipt_status = "reported" if final_status == "completed" else ("blocked" if final_status == "blocked" else final_status)
         dump(run_dir / "receipt.json", {"status": receipt_status, "task_id": packet["task_id"], "revision": packet["revision"],
-                                          "blocked_by": "executor" if receipt_status == "blocked" else None,
+                                          "blocked_by": blocked_by,
                                           "note": "reported is not accepted; Codex must verify evidence and workspace state.",
                                           **plugin_identity.receipt_fields(run_dir)})
         state(run_dir, final_status, provider_exit_code=proc.returncode)
@@ -2370,8 +2700,44 @@ def _run(args: argparse.Namespace) -> int:
                     handle.close()
                 except OSError:
                     pass
+        # Without a launched child the provider root is empty.  After a launch
+        # it is removed only once its output was captured above; otherwise it
+        # is kept (see workflow-temp-root.json) because the child may live.
+        if workflow_root is not None and proc is None:
+            workflow_delivery.remove_root(workflow_root)
         if lock is not None:
             lock.close()
+
+
+def collect_workflow_delivery(run_dir: Path, packet: dict[str, Any], meta: dict[str, Any], session: str,
+                              root: dict[str, Any] | None) -> dict[str, Any]:
+    """Capture each bound call's provider output and derive the one per-invocation delivery record."""
+    invocations: list[dict[str, Any]] = []
+    for item in meta.get("workflow_invocations", []):
+        item = dict(item)
+        terminal = item.get("terminal") or {}
+        if terminal.get("source") == "system_task_notification" and not terminal.get("conflict"):
+            # Failed or cancelled tasks are captured too: their output is evidence.
+            binding = {"run_id": run_dir.name, "session_id": session, "tool_use_id": item["tool_use_id"],
+                       "task_id": item.get("task_id"), "terminal_status": terminal.get("status"),
+                       "workflow": {key: packet["workflow"][key] for key in ("name", "path", "sha256")}}
+            item["collection"] = workflow_delivery.capture(
+                root, session_id=session, task_id=item.get("task_id"),
+                output_file=(item.get("output_reference") or {}).get("output_file"),
+                run_dir=run_dir, index=item["index"], binding=binding)
+        else:
+            item["collection"] = {"status": "not_attempted", "reason_code": None,
+                                  "detail": "no unambiguous structured task notification names an output file"}
+        item["reason_codes"] = workflow_delivery.invocation_reasons(item)
+        invocations.append(item)
+    verdict = workflow_delivery.evaluate(
+        invocations, final_after_completion=bool(meta.get("workflow_final_after_completion")),
+        final_result_observed=meta["result_selection"]["final_stream_line"] is not None)
+    return {"schema_version": 1, "adapter": workflow_delivery.ADAPTER, **verdict, "invocations": invocations,
+            "temp_root": {"env": workflow_delivery.TMPDIR_ENV, "path": (root or {}).get("path")},
+            "stream_diagnostics": meta.get("workflow_stream_diagnostics"),
+            "note": ("Delivery means every bound Workflow call completed, its whole output file was captured from "
+                     "the run-owned provider root, and the parent result followed. It is not semantic acceptance.")}
 
 
 def status(run_dir: Path) -> int:

@@ -21,6 +21,7 @@ sys.path.insert(0, str(BRIDGE_SCRIPTS))
 from runtime import Runtime
 import bridge
 import named_workflow
+import workflow_delivery
 from viewer import Viewer, read_artifact
 import workflow
 import routing
@@ -95,7 +96,7 @@ def compact_snapshot(snapshot):
                                                          "run_status": snapshot["status"]}
     result["decision_history_count"] = len(snapshot.get("decision_history") or [])
     result["response_detail"] = "compact"
-    result["evidence_access"] = "claude_result(run_id, artifact='result'|'decision_history'|'receipt'|'workspace_before'|'workspace_after'); compact=False for full status"
+    result["evidence_access"] = "claude_result(run_id, artifact='result'|'decision_history'|'receipt'|'workspace_before'|'workspace_after'|'workflow_report'); compact=False for full status"
     return result
 
 
@@ -105,6 +106,11 @@ async def decorate(snapshot, operation="execution_status", compact=False):
     result = {**(compact_snapshot(snapshot) if compact else snapshot), "operation_type": operation, "task_created": bool(snapshot.get("run_id")),
               "user_summary": f"执行记录 {snapshot.get('run_id', '')}：{execution}；状态 {snapshot.get('status', 'unknown')}。结果需由 Codex 核验。",
               "cli_maintenance": await asyncio.to_thread(maintenance_status)}
+    report = snapshot.get("result") if isinstance(snapshot.get("result"), dict) else {}
+    workflow_report = workflow_delivery.summary(report.get("workflow_delivery"))
+    if workflow_report is not None:
+        # The captured full Workflow output is separate from the parent summary and its preview.
+        result["workflow_report"] = workflow_report
     decision = snapshot.get("decision") or {}
     if isinstance(decision, dict) and decision.get("decision") in {"accepted", "returned"}:
         outcome = ("Claude 原报告未采纳，Codex 已补齐并记录完成" if decision.get("resolution") == "completed_by_codex" else
@@ -395,9 +401,10 @@ async def claude_details(run_id: str, compact: bool = False) -> dict:
 
 @mcp.tool(annotations=READ)
 @expected_errors
-async def claude_result(run_id: str, artifact: str = "result") -> dict:
-    """Inspect recorded evidence: result, receipt, packet, diff, environment, decision, decision_history, git_before, git_after, workspace_before, workspace_after, reconciliation or content_binding (the coordination content identity pinned for this run). result.usage_report separates the CLI session cumulative estimate (modelUsage/total_cost_usd, includes subagents) from the main agent's final usage. Diff is the recorded working-tree comparison, not proof of accepted work."""
-    return await asyncio.to_thread(read_artifact, require_runtime(), run_id, artifact)
+async def claude_result(run_id: str, artifact: str = "result", index: int = 0, offset: int = 0,
+                        limit: int = workflow_delivery.DEFAULT_PAGE_BYTES) -> dict:
+    """Inspect recorded evidence: result, receipt, packet, diff, environment, decision, decision_history, git_before, git_after, workspace_before, workspace_after, reconciliation or content_binding (the coordination content identity pinned for this run). result.usage_report separates the CLI session cumulative estimate (modelUsage/total_cost_usd, includes subagents) from the main agent's final usage. Diff is the recorded working-tree comparison, not proof of accepted work. For workflow_review, artifact='workflow_report' (exact string result or explicitly labelled object/array JSON representation) or 'workflow_envelope' (whole captured output file) returns invocation `index` in UTF-8-safe byte pages from `offset` (limit 4..262144 bytes); follow next_offset_bytes until end_of_artifact and check total_bytes/sha256. This full report is separate from the parent summary and is not accepted until Codex verifies it."""
+    return await asyncio.to_thread(read_artifact, require_runtime(), run_id, artifact, index=index, offset=offset, limit=limit)
 
 
 @mcp.tool(annotations=WRITE)

@@ -35,6 +35,7 @@ if a == ['--version']: print('2.1.284 (Claude Code)'); raise SystemExit
 if a == ['--help']: print('-p --model --effort --output-format --verbose --json-schema --session-id --resume --permission-mode --tools --allowedTools --disallowedTools --settings --strict-mcp-config --mcp-config --disable-slash-commands --no-session-persistence'); raise SystemExit
 if a == ['auth', 'status', '--json']: print(json.dumps({'loggedIn': True})); raise SystemExit
 session = a[a.index('--session-id') + 1]
+sys.stdin.buffer.read()
 target = os.environ.get('FAKE_WRITE')
 if target: pathlib.Path(target).write_text('written by fixture\\n')
 print(json.dumps({'type': 'system', 'subtype': 'init', 'session_id': session, 'model': 'fixture'}))

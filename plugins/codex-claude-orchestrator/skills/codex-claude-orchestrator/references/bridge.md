@@ -66,7 +66,25 @@
 
 inventory 从 `cwd` 向 Git 根枚举 `.claude/workflows`，并读取个人 Claude 配置目录的 `workflows`。项目条目按 Claude 的项目优先级覆盖同名个人条目；同一项目名歧义、符号链接、非普通文件或 hash 不匹配都会拒绝启动。历史 Claude session、历史 run 和详情页记录不是保存 Workflow，也不能用来绕过 inventory。
 
-bridge 仅允许 packet 精确绑定的 `Workflow(name[, args])`，不接受 inline script、`scriptPath`、其他 Workflow 或普通 review 作为替代。Workflow 脚本同样纳入 requirement source 身份核对。该模式仍需观察到匹配的 Workflow 工具调用、成功工具结果及完成事件，才可把 Claude 的结果交给主协调者核验；`reported` 仍不是 `accepted`。完成事件须是同一会话、同一 tool_use_id 的父会话通知（`task_started` 已绑定 task_id 时还须同一 task）；被采用的结果必须出现在该完成事件之后，之前的结构化结果只算启动阶段的中间结果，即使随后出现完成事件也判为 blocked（见 `workflow_final_after_completion`、`workflow_interim_result_count`）。bridge 只在该子进程环境设置 `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS` 为 `--timeout` 的毫秒数（最小 1000，不为 0），避免 `claude -p` 默认 10 分钟空闲上限提前停止 Workflow；外层超时、取消与进程组清理不变。
+bridge 仅允许 packet 精确绑定的 `Workflow(name[, args])`，不接受 inline script、`scriptPath`、其他 Workflow 或普通 review 作为替代。Workflow 脚本同样纳入 requirement source 身份核对。该模式仍需观察到匹配的 Workflow 工具调用、成功工具结果、完成事件和完整报告产物，才可把 Claude 的结果交给主协调者核验；`reported` 仍不是 `accepted`。完成事件须是同一会话、同一 tool_use_id 的父会话通知（`task_started` 已绑定 task_id 时还须同一 task；带 `task_type` 且不是 `local_workflow` 的 task_started 不绑定）；被采用的结果必须出现在该完成事件之后，之前的结构化结果只算启动阶段的中间结果，即使随后出现完成事件也判为 blocked（见 `workflow_final_after_completion`、`workflow_interim_result_count`）。bridge 只在该子进程环境设置 `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS` 为 `--timeout` 的毫秒数（最小 1000，不为 0），避免 `claude -p` 默认 10 分钟空闲上限提前停止 Workflow；外层超时、取消与进程组清理不变。
+
+以下 Workflow 交付、结果选择与 hook 复核为 0.6.1 之后、尚未发布的源码修订：
+
+- **最终报告只取父级 result**：只有期望会话中、无 `parent_tool_use_id` 的 `type=result` 事件可成为最终报告；随后出现的子代理 result 或其他事件不会覆盖它。其他会话的事件照常记为 `session_error`，`result_selection` 记录所选行号与被忽略的子代理/异会话 result 数。
+- **结构化事件优先**：同一调用有 `system/task_notification` 时以它为准。旧式父会话文本通知只读其开头的 `<task-notification>` 头部元素（task-id、tool-use-id、output-file、status），遇到 summary/result 等正文即停止；重复头部视为歧义，不跨通知拼字段，也不读报告正文里的标签。文本通知只能证明完成，不能提供报告产物。
+- **每个调用一条证据**：`workflow_delivery.invocations` 逐个记录 tool_use_id、确认结果、task_id、终止状态/来源/行号、output 引用与收集结果；既有布尔字段由它派生。终止状态为 failed/stopped 等、同一调用的重复通知内容冲突、通知早于启动确认，都不算完成。
+- **完整报告产物**：bridge 为本轮 Claude 子进程单独创建私有临时根，仅通过文档化的 `CLAUDE_CODE_TMPDIR` 传给该子进程，不改账号、配置或登录。只接受 `<根>/claude-<uid>/<cwd 编码>/<本会话>/tasks/<本 task>.output` 这一观察到的布局；逐级拒绝符号链接、非本用户所有、硬链接别名、非普通文件和超过 8 MiB 的文件，读取前后核对文件身份与大小不变，要求 UTF-8 JSON 对象且 `result` 为非空白字符串、对象或数组。进程组确认停止后，原样快照整份信封到 `workflow-output/<n>.envelope.json`、`result` 的文本表示到 `workflow-output/<n>.report.txt`（只读；字符串标记 `representation=exact_text`，对象/数组标记 `representation=json_value` 并用有限 JSON 编码，原始信封始终逐字节保留），记录 SHA-256、字节数、run/session/tool/task/Workflow 绑定与收集状态，再删除该临时根。布局不同时记明确的 unsupported/missing 状态，不猜其他路径；模型不需要也不允许读取这些临时文件。
+- **未交付不等于其他失败**：任一绑定调用缺少完成、产物缺失/无效/不匹配，或父级 result 不在全部完成之后，`workflow_delivery.status=not_delivered` 并给出稳定原因码（如 `workflow_invocation_missing`、`workflow_acknowledgement_failed`、`workflow_notification_before_acknowledgement`、`workflow_terminal_pending`、`workflow_terminal_failed`、`workflow_final_before_completion`、`workflow_report_transport_missing`、`workflow_report_not_collected` 加具体收集码）。它只把原本 completed 的 run 改为 blocked，且 `blocked_by=workflow_evidence`（不是 executor）；failed、cancelled、timeout 保持原状态，已取得的产物照样保留为证据。父级 summary 不能代替完整报告。
+- **读取完整报告**：`claude_result(run_id, artifact="workflow_report"|"workflow_envelope", index, offset, limit)` 与详情页按 UTF-8 字节偏移分页（每页 4..262144 字节，不切断字符），每页重新核对整份文件的大小和 SHA-256，不一致时不返回内容；沿 `next_offset_bytes` 拼接即可还原报告文本；`representation` 与 `value_type` 区分原始字符串和结构化 JSON 表示，后者可解码后与原始信封的 result 值核对。旧 run 和普通角色没有该记录，读取返回 `not_recorded`。
+- **执行前的格式化拒绝**：只有完整无效 JSON 包装、同会话父级唯一调用和随后唯一 error tool_result 共同证明的 `StructuredOutput` 才单列为 `rejected_formatter_tool_uses`，不计作已执行但缺失 hook 的调用；保留字节长、摘要与 stream 行号。已有 hook 记录或 provider 拒绝优先，其他工具、歧义事件、缺少身份或错误证明仍要求审计，最终结构化报告仍独立校验。
+- **hook 复核分层**：每次文件类 hook 只复核本轮已冻结 packet 与绑定脚本（仍在有效 workflow 目录、非符号链接、同一字节 hash 与 meta.name），不再枚举无关脚本；派单时与实际 `Workflow` 调用时仍做完整 inventory，因此新出现的同名遮蔽脚本或其他 inventory 问题会拒绝该调用。
+- **meta 解析**：inventory 只解析文件开头（可有注释）的第一个 `export const meta = {...}` 纯字面量，支持单行/多行、注释和字符串中的括号；拒绝重复键、计算键、展开、简写、方法、调用/引用、模板插值和非法名称，从不扫描脚本正文找替代名称，也从不执行脚本。
+
+完整报告的收集只证明来源、形状与字节完整，不证明 Workflow 的推理正确或覆盖充分；内容仍由 Codex 核验。若子进程停止无法确认（unknown），临时根保留以免删除仍在写入的文件，`workflow-temp-root.json` 记录其位置。
+
+### 文件边界说明
+
+提示中的 `scope` 由已验证 packet 推出：Git 模式下 cwd 内可用 Read/Glob/Grep；cwd 外只有精确的 requirement source 文件，可用 Read 或把 Grep 的 path 设为该文件；artifacts 模式只列出精确文件；`workflow_review` 另给出唯一允许的 `Workflow` 输入（含精确 args）。搜索这些文件的父目录会被拒绝，拒绝原因列出至多 3 个应改用的精确文件，但不授予父目录、不改写搜索目标、不删除拒绝记录，拒绝仍使本轮 failed。说明只是提示，不能保证模型或已保存 Workflow 的子代理不犯错；保存脚本的子代理提示应自行传递这些边界（见 guide.md 的 Workflow 作者说明）。
 
 历史记录：早期版本曾在 Claude CLI 2.1.276、2.1.277 和 2.1.278 上用真实 MCP 只读夹具观察过该模式：放行结构校验后的输出工具，并以同一 session、同一 Workflow tool_use_id 的 system/task_notification completed 作为完成证据。这不是当前版本的准入名单；其他版本同样以每轮观察到的完成证据为准。启动回执不算完成。仅涉及该受限模式，不覆盖任意脚本或完整审查策略。
 
@@ -141,6 +159,8 @@ python3 <skill>/scripts/bridge.py run --packet /absolute/packet-002.json --run-d
 
 Runtime 先验证执行模块身份，再在 Bridge Popen 前写执行目录之外的 `runtime_pre_spawn` 回执，并通过 `--startup-nonce` 交接。Bridge 核对 nonce、代码身份、输入和 lane 后接管，再记录 `pre_dispatch`、`launch_intent`、`executing` 与 `terminal`。这些是 Runtime/Bridge 产生的证据，不是协调者可手填的 packet 字段。
 
+未发布修订：hook 策略预检、guard 自检、CLI 描述符与代码身份核对之后、发布 launch intent 之前，再次检查 run_dir 与 Runtime 两处取消标记；此时已有取消即按“启动前取消”记录（`child_started=false`），不启动 Claude。Popen 成功后立即持久化 PID/PGID（`child.json` 与 lifecycle，进程身份随后补写），之后在同一个非阻塞监督循环里分块写入提示词并读取 stdout；执行时限从启动起算，提示词尚未送完时超时与取消同样生效。提示词未完整送达（子进程提前关闭 stdin 或退出）记 `prompt_delivery.state=incomplete` 并使 run failed；取消、超时保持原状态。启动后才到达的取消走原有进程组清理。
+
 Bridge 从有效的 Runtime 状态目录启动；Claude 仍使用任务 cwd。Runtime 的 `bridge_spawn_cwd` 和诊断的 `bridge_startup` 可分别检查启动位置与代码身份。`doctor` 仅在未指定 `--cwd` 时解析当前目录；父目录已删除时，显式 cwd 和其他子命令不因无关的当前目录求值提前崩溃。
 
 ## 阅读回执
@@ -150,7 +170,7 @@ Bridge 从有效的 Runtime 状态目录启动；Claude 仍使用任务 cwd。Ru
 - `stream.jsonl`、`stderr`：实际 provider 输出和诊断；不把原始大日志全部塞回协调者上下文。
 - `workspace_before.json`、`workspace_after.json`：通用输入身份与 workspace_digest；Git 模式同时保留 `git_before.json`、`git_after.json`。`requirements.json` 保存要求内容身份。
 - `plugin-identity.json`：每轮 bridge 创建 run-dir 后立即冻结、之后不再改写的插件身份，由 `plugin_identity.py` 按自身文件位置（不是被审仓 cwd）解析。含插件 `plugin_version`、`bridge_contract_id`、来源 `source` 和 `code_digest`。`source.kind=git` 时给 HEAD revision，`state` 为 clean / dirty / unknown（范围是插件根目录，dirty 时附至多 20 个路径；git status 失败则 unknown，不推断）；`release_manifest`（ZIP 分发的 RELEASE-MANIFEST.json）只作来源说明：`provenance_only=true`、`verification=not_performed`、`state=unknown`，不说明当前文件等于当时构建的内容；既非 Git 也无 manifest 时为 `kind=unknown`、revision 为空。`code_digest` 是插件根下可分发后缀文件的路径 + 字节 SHA-256（`scope` 字段写明范围，含被 Git 忽略的同后缀文件），不能用 revision 代替。
-- `result.json`：provider 结束状态、实际 session/model、结构化内容、权限拒绝，以及同一份 `plugin_identity`。最终报告与 run 成败分开解析：失败、取消、超时的 run 只要有最终报告，仍保留 `structured`（或 `result_validation_error`），不会因此改变失败状态；`report_evidence` 给出 `state`（structured / validation_error / absent）、模型自述的 `claimed_status`、`run_status` 和 `accepted=false`。`permission_denials` 只保存实际被拒绝的条目（工具、tool_use_id、原因、路径类输入，长度有界），不嵌套整条 result、报告或 usage，原始事件仍在 `stream.jsonl`；还包含本 run `activity.jsonl` 中 PreToolUse hook 记录的拒绝（`source: bridge_pretooluse_hook`，含工具、tool_use_id、原因及是否出现在父级 stream）；Workflow 子代理的调用可能不进父级 stream，任何一条 hook 拒绝都会使 run 失败（`hook_denial_error`）。`hook_guard_coverage` 中，与 provider tool_use 的 id 和工具名都匹配的 allowed、denied 事件都算已审计，分别列出 `allowed_*`、`denied_*` 与 `missing_tool_use_ids`；未知 status 或工具名不符的事件不计。denied 不放宽 guard，仍使 run failed。
+- `result.json`：provider 结束状态、实际 session/model、结构化内容、权限拒绝，以及同一份 `plugin_identity`。最终报告与 run 成败分开解析：失败、取消、超时的 run 只要有最终报告，仍保留 `structured`（或 `result_validation_error`），不会因此改变失败状态；`report_evidence` 给出 `state`（structured / validation_error / absent）、模型自述的 `claimed_status`、`run_status` 和 `accepted=false`。`permission_denials` 只保存实际被拒绝的条目（工具、tool_use_id、原因、路径类输入，长度有界），不嵌套整条 result、报告或 usage，原始事件仍在 `stream.jsonl`；还包含本 run `activity.jsonl` 中 PreToolUse hook 记录的拒绝（`source: bridge_pretooluse_hook`，含工具、tool_use_id、原因及是否出现在父级 stream）；Workflow 子代理的调用可能不进父级 stream，任何一条 hook 拒绝都会使 run 失败（`hook_denial_error`）。`hook_guard_coverage` 中，与 provider tool_use 的 id 和工具名都匹配的 allowed、denied 事件都算已审计，分别列出 `allowed_*`、`denied_*` 与 `missing_tool_use_ids`；未知 status 或工具名不符的事件不计。denied 不放宽 guard，仍使 run failed。结构化报告的形状规则是 summary 非空白、evidence/checks/unresolved 中没有空白项（同一规则也写进 `--json-schema`）；简短的“无发现”报告合法，内容是否充分仍由 Codex 判断。未发布修订另记 `prompt_delivery`（提示词字节数、已写字节、complete/incomplete）、`result_selection`（最终报告的选取规则与被忽略的 result 计数），`workflow_review` 另有 `workflow_delivery`、`workflow_error_codes`；普通角色的 `workflow_delivery` 为 null。
 - `receipt.json`、`state.json`：运行结果，receipt 同样直接带 `plugin_identity`（预检 blocked、取消、unknown、bridge 失败回执也带；旧 run 没有该字段，读取方按缺失处理，冻结文件不可读时写 `status=unavailable` 而不掩盖原运行错误）。`reported` 需要主协调者核验，不是 accepted；`claude_decide` 仅适用于未被 superseded 的 `reported` run，其他终态由 Codex 在既有 PROGRESS 独立记录处置。
 
 structured 内容中的 `checks` 是 Claude 自报；本工具集没有 shell，因此不能凭自报说真实构建/测试已运行。由 Codex 执行和登记实际检查。
@@ -166,6 +186,8 @@ structured 内容中的 `checks` 是 Claude 自报；本工具集没有 shell，
 先持久化恢复证据，再提交 registry，最后仅清理本轮匹配的 marker。外置回执已经写入而 registry 提交失败时，重试必须匹配同一事实，不能覆写第一次原因与证据。缺少 child.json 本身不证明未启动；损坏绑定、launch_intent 启动不确定或历史证据不足时仍阻断。
 
 恢复只解除已核验占用，不把旧 unknown 改为 accepted/reported。后续必须 fresh 且新 revision，不自动重试。保留旧回执与恢复证据，不通过人工删锁或 marker 绕过判断。
+
+未发布修订：已经以可信终态（reported/blocked/failed/cancelled/timeout）结束的 run，若清理自己的 lane marker 时遇到瞬时 I/O 或权限错误，终态保持不变，registry 记录 `admission_cleanup.state=pending` 与错误，不再另发 unknown marker，也不为套用 reconcile 而改成 unknown。同一 worktree 的下一次派单或 Runtime 重启会在独占 lane 下重试：只有 packet/CLI 绑定、lifecycle 终态仍可信且 bridge 与 Claude 进程组确认停止时，才删除该 run 自己的 marker 并记 `completed`；其他 run 或格式异常的 marker、证明缺失或进程组仍在时继续阻断。`claude_recovery` 对这类 run 仍报告 “run is not unknown”，并附 `admission_cleanup` 与说明。
 
 bridge 在启动 Claude 之前，会先在系统临时目录的 `codex-claude-cwd-unknown/` 下发布本 run 的 launch intent marker，记录原 cwd、lane、run_id、run_dir 和 lifecycle 文件位置。只有 Claude 进程组确认停止或确认从未启动、且回执已写入后，bridge 才删除这个 marker。如果 Runtime 与 bridge 都已崩溃，marker 会继续阻止其他状态目录和独立 bridge 在同一 worktree 派发。这时到 marker 记录的原状态目录执行 `claude_recovery`/`claude_reconcile`；独立 bridge 的 run 需人工核实进程和工作区。marker 检查在 lane 锁内进行：lane 仍被占用时报告 active run；lane 空闲而 marker 仍在时，新 run-dir 记录 failed 回执，Claude 不会启动。
 

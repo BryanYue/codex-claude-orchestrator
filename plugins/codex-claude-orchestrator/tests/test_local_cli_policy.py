@@ -83,6 +83,7 @@ if a == ['--version']: print('9.9.999'); raise SystemExit
 if a == ['--help']: print('-p --model --effort --output-format --verbose --json-schema --session-id --resume --permission-mode --tools --allowedTools --disallowedTools --settings --strict-mcp-config --mcp-config --disable-slash-commands --no-session-persistence'); raise SystemExit
 if a == ['auth', 'status', '--json']: print(json.dumps({'loggedIn': True})); raise SystemExit
 session = a[a.index('--session-id') + 1]
+sys.stdin.buffer.read()
 tool = os.environ.get('FAKE_TOOL', 'StructuredOutput')
 print(json.dumps({'type': 'system', 'subtype': 'init', 'session_id': session, 'model': 'fixture'}))
 print(json.dumps({'type': 'assistant', 'session_id': session, 'message': {'model': 'fixture', 'content': [

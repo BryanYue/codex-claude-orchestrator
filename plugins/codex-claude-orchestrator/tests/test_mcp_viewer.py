@@ -34,6 +34,82 @@ class CompactReportTests(unittest.TestCase):
         self.assertEqual(value["result_preview"]["summary"], "done")
 
 
+class WorkflowArtifactViewerTests(unittest.TestCase):
+    """The captured full Workflow output is paged from the run record, apart from the parent summary."""
+
+    def setUp(self):
+        sys.path.append(str(ROOT / "skills/codex-claude-orchestrator/scripts"))
+        import workflow_delivery
+        self.delivery_module = workflow_delivery
+        self.temp = tempfile.TemporaryDirectory()
+        self.folder = Path(self.temp.name) / "run-workflow"
+        self.folder.mkdir()
+        root = workflow_delivery.create_root()
+        self.addCleanup(lambda: workflow_delivery.remove_root(root))
+        session, task = "session-1", "task-1"
+        tasks = Path(root["path"]) / f"claude-{os.getuid()}" / "-repo" / session / "tasks"
+        tasks.mkdir(parents=True)
+        self.report = "完整报告第一行\n" + "finding line\n" * 3000 + "最后一行"
+        output = tasks / f"{task}.output"
+        output.write_text(json.dumps({"summary": "s", "result": self.report}, ensure_ascii=False), encoding="utf-8")
+        collection = workflow_delivery.capture(root, session_id=session, task_id=task, output_file=str(output),
+                                               run_dir=self.folder, index=0, binding={"run_id": "run-workflow"})
+        self.assertEqual(collection["status"], "collected")
+        delivery = {"status": "delivered", "reason_codes": [], "invocations": [{"index": 0, "collection": collection}]}
+        folder = self.folder
+
+        class Records:
+            def snapshot(self, run_id):
+                if run_id == "run-workflow":
+                    return {"run_id": run_id, "run_dir": str(folder), "status": "reported",
+                            "result": {"structured": {"summary": "parent summary"}, "workflow_delivery": delivery}}
+                if run_id == "run-legacy":
+                    return {"run_id": run_id, "run_dir": str(folder), "status": "reported",
+                            "result": {"structured": {"summary": "old"}}}
+                raise ValueError("Unknown run")
+        self.records = Records()
+        self.delivery = delivery
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def test_read_artifact_pages_reconstruct_the_report_and_old_runs_have_none(self):
+        text, offset = "", 0
+        while offset is not None:
+            page = read_artifact(self.records, "run-workflow", "workflow_report", index=0, offset=offset, limit=4096)
+            self.assertTrue(page["available"], page)
+            text += page["content"]
+            offset = page["next_offset_bytes"]
+        self.assertEqual(text, self.report)
+        envelope = read_artifact(self.records, "run-workflow", "workflow_envelope", limit=262144)
+        self.assertEqual(json.loads(envelope["content"])["result"], self.report)
+        legacy = read_artifact(self.records, "run-legacy", "workflow_report")
+        self.assertEqual((legacy["available"], legacy["state"]), (False, "not_recorded"))
+        with self.assertRaises(ValueError):
+            read_artifact(self.records, "run-workflow", "workflow_report", offset=1)
+        summary = self.delivery_module.summary(self.delivery)
+        self.assertEqual(summary["reports"][0]["total_bytes"], len(self.report.encode()))
+
+    def test_viewer_endpoint_serves_bounded_pages(self):
+        view = Viewer(self.records).start()
+        try:
+            base = view.url().split("#")[0]
+            headers = {"Authorization": "Bearer " + view.token}
+            with urlopen(Request(base + "api/artifact?run_id=run-workflow&name=workflow_report&index=0&offset=0&limit=64",
+                                 headers=headers), timeout=5) as response:
+                page = json.load(response)
+            self.assertTrue(page["available"])
+            self.assertLessEqual(page["page_bytes"], 64)
+            self.assertTrue(self.report.startswith(page["content"]))
+            self.assertEqual(page["total_bytes"], len(self.report.encode()))
+            for query in ("offset=1", "limit=0", "limit=999999", "offset=x"):
+                with self.subTest(query=query), self.assertRaises(HTTPError) as error:
+                    urlopen(Request(base + f"api/artifact?run_id=run-workflow&name=workflow_report&{query}", headers=headers), timeout=5)
+                self.assertEqual(error.exception.code, 400)
+        finally:
+            view.close()
+
+
 class ViewerTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

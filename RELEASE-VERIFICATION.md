@@ -1,10 +1,127 @@
+# Current main verification — 2026-10-02
+
+Full source build: `0.6.1+codex.20261002030356`; base version remains `0.6.1`.
+This is the post-release Workflow/lifecycle repair on `main`, with no new tag or
+GitHub Release. The fixed `v0.6.1` release below remains unchanged and does not
+include these repairs. Use the source commit and distribution manifest to
+identify a build; the base version alone is insufficient.
+
+## Repair and architecture scope
+
+The existing ownership remains: MCP exposes the interface, Runtime owns
+admission and run lifecycle, Bridge supervises one Claude process, Claude
+provides analysis, and Codex verifies and records acceptance. This repair adds
+no daemon, parallel state machine, automatic paid retry or permission bypass.
+It fixes supervised prompt delivery and cancellation, evidence-bound terminal
+marker cleanup, complete Workflow report capture and paging, parent result
+selection, scope revalidation, literal metadata parsing and content capability
+checks. The demand list defaults to descending start time of each demand's
+latest execution; polling, completion and acceptance do not reorder it.
+See [CHANGELOG](CHANGELOG.md) for individual behavior changes.
+
+## Offline regression evidence
+
+Three repository suites passed, totaling **590 test methods**: plugin **385**,
+Bridge **176**, distribution **29**. These are separate suite runs, not one
+combined invocation. Existing assertions, deadlines and recovery proof
+requirements were retained. Reproduce the repository checks with:
+
+```bash
+uv run --project plugins/codex-claude-orchestrator --frozen python plugins/codex-claude-orchestrator/scripts/run_tests.py --suite all
+uv run --project plugins/codex-claude-orchestrator --frozen python -m unittest discover -s tools/tests
+```
+
+Independent controls were rerun separately and are not added to that total:
+Runtime supervision/recovery **25**, Workflow transport **18**, metadata and
+parent result selection **25**, content compatibility **4**, artifact paging
+and path safety **7**, actual UI renderer ordering **8**, and termination
+**4**. The earlier release's **7 startup scenarios** and **16 recovery
+adversarial scenarios** also passed against the repaired source. They include
+a deleted parent cwd, a Bridge dying before a run directory exists, proven
+recovery followed by a fresh successful run, corrupted binding evidence,
+uncertain launch intent, and preserving an immutable recovery receipt across
+a registry-write failure. The adversarial comparison uses the actual frozen
+`v0.6.0` reader/Bridge, not the now-modified working tree.
+
+The first revalidation failures remain in the task evidence. Ordinary success
+fakes previously reported before consuming stdin; the new supervision correctly
+recorded incomplete prompt delivery. Those fakes now consume input before
+success. The double-crash fixture now proves it has passed its initial stdout
+write before its owner and Bridge are killed: a PID record alone allowed the
+fake to exit with BrokenPipe before entering the intended live-child scenario.
+The diagnostic fake uses the current test interpreter instead of ambient PATH.
+No production code, assertion or timeout was changed in this revalidation
+follow-up. One separate cold-start diagnostic still timed out at its original
+0.3-second limit; the interpreter change is not a guarantee of startup latency.
+The complete Bridge suite passed with that limit unchanged.
+
+## Real Claude execution and identity
+
+Real tests used Apple Silicon macOS, the user's existing Claude CLI **2.1.287**,
+and native `claude_*` MCP calls. The independently accepted source review used
+Claude Opus 5.5; the following read-only execution tests actually used Sonnet
+5.5 at medium effort, with provider exit 0:
+
+| Native case | Checked outcome |
+| --- | --- |
+| Ordinary review, fresh revalidation `run-RZq3mNzephQ_bjf5` | Same two-file fixture and packet contract as the original release smoke, except task ID. All four source lines and arithmetic checked; 1/1 guarded file operation, no denials/errors, unchanged inputs, both process groups absent. |
+| Long Workflow `run-gbcHAjXhEY7tX_8w` | One acknowledged and completed Workflow; 576,068-byte exact-text report and 589,045-byte original envelope, nine pages each. All 12,000 Unicode rows and boundaries checked; report bytes equal envelope result encoded as UTF-8. |
+| Short Workflow `run-lsanWW_2J34foFMn` | One acknowledged and completed Workflow; 79-byte JSON-value report and 1,081-byte original envelope, one page each. Whole projected value equals the envelope result and the expected fixture object. |
+
+Both Workflow runs had 2/2 executed guarded operations with no denials or
+missing audit. Each also contained a separately proved formatter parse
+rejection before execution; it does not exempt executed tools from guards.
+Codex independently checked artifacts, page offsets/hashes, unchanged fixture
+files and both stopped process groups before accepting the reports.
+
+These native tests used installed build `0.6.1+codex.20261002001100`.
+The later `20261002030356` source build changes packaged test fixtures and the
+build label, with **identical executable modules**. The long/short evidence is
+therefore reused explicitly; it is not described as another pair of paid runs
+on a different installed package. Source/install comparison confirms:
+
+- Executable startup identity: `84a43660108e1d57b8fdd92391d45cb2dddb1fa50e08bc63bcd99b1423ea23f4`.
+- Bridge contract digest: `932ad8634c840bd434f8d4095d0d2747cf96197e80fea77c75dea1f6d374aca8`.
+- Current source whole-plugin digest (85 files): `6a8339bd432ac107811a78c8b7eee71dfde0abc477d39b5c7a6de40685bf2d87`.
+- Native-tested installed whole-plugin digest: `8947a82b1b0b1e3b39560a307e291bc4557324b3700df95b215f7feb88c7df48`.
+
+Whole-plugin digests include tests and bundled documentation; they must not be
+compared as if they were executable-only identities. The installation used for
+native acceptance matched all 85 packaged plugin files, and all 101 package
+file hashes were verified. Fourteen other installed plugins were unchanged.
+A source push does not hot-reload an existing MCP process or replace a fixed
+release installation; a fresh connection must prove its loaded identity.
+
+## Evidence boundaries
+
+Task-local evidence preserves the full logs (`push-regression-plugin-complete.log`,
+`push-regression-all-final.log` for Bridge, the final distribution log),
+independent control outputs, `push-old-bootstrap.json`, `push-old-recovery.json`,
+`push-final-identities.json`, and root checks of all three native reports.
+Earlier failed/blocked runs remain failed/blocked and are not accepted or
+rewritten. An earlier sandbox cleanup failure lacks enough original diagnostic
+detail to prove its precise cause; the 25 host controls passed separately.
+Decoder-depth handling was verified by fault injection, not a claimed native
+failure at a universal nesting threshold.
+
+This establishes the tested transport, supervision and recovery behavior; it
+does not establish every report's semantic quality, every CLI version, Intel
+Mac support or full Dynamic Workflow Review. Unknown historical records without
+adequate evidence stay blocked. CLI installation, login and account settings
+were not changed. Bundled coordination content `2026.10.02.4` declares the two
+Workflow report capabilities; the locally reviewed active `2026.10.02.1`
+remained pinned during native tests. Uploading source neither approves nor
+activates new dynamic content.
+
+---
+
 # 0.6.1 verification and supported scope
 
 Full plugin version: `0.6.1+codex.20261001182536`. Published fixed ref: `v0.6.1`.
 Release commit: `871818a9fabc297e53b8ca398ab317cd6470461f`.
 [GitHub release and artifacts](https://github.com/BryanYue/codex-claude-orchestrator/releases/tag/v0.6.1).
 This section is updated with the completed delivery checks. Its code and
-package digests identify that immutable release, not later documentation-only
+package digests identify that immutable release, not later source or documentation
 commits on `main`; the packaged copy retains its publication-time wording.
 Verified on 2026-10-02 (Asia/Shanghai), Apple Silicon macOS, Codex desktop CLI
 0.159.0 and the user's existing Claude CLI 2.1.285. Older sections below are

@@ -34,7 +34,7 @@ Small tasks can stay with Codex. You can also choose who handles a particular ta
 | Follow the work | A shared workbench shows tasks, execution rounds, reports and verification results. |
 | Continue or correct a task | Add instructions in the same conversation; Codex checks existing progress before proceeding. |
 
-This page describes the published **v0.6.1** plugin. Documentation on `main` can be corrected independently; release tags and packages remain frozen. Coordination guidance has a separate content version and takes effect only after Codex reviews it; it does not upgrade plugin code. See [release verification](RELEASE-VERIFICATION.md) for the fixed release identity and completed installation checks.
+The installation commands below select the published **v0.6.1** release. `main` also contains later fixes for Workflow report delivery, recovery and task ordering, identified by full build `0.6.1+codex.20261002030356`. These changes have no new release tag or GitHub Release; an installation pinned to `v0.6.1` will not receive them. See the [changelog](CHANGELOG.md) and [verification record](RELEASE-VERIFICATION.md) for their scope and evidence. Coordination guidance has a separate content version and takes effect only after Codex reviews it; it cannot upgrade plugin code.
 
 ## Get started
 
