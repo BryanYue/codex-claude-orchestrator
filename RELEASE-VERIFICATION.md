@@ -28,6 +28,50 @@ publication-time document snapshot.
 - Previous package/whole-plugin digests below identify their own builds; the
   0.6.2 metadata produces a different whole-plugin digest.
 
+
+## Completed release installation checks
+
+Verified on 2026-10-02 on Apple Silicon macOS, using desktop Codex CLI 0.159.0
+and the user's unchanged Claude CLI 2.1.287. The fixed `v0.6.2` tag resolves
+to `fe464ee41cb40ce2b9dc0235c00e3ed9106b0fde`.
+
+- Final committed-tree distribution tests passed **29/29**. The release contains
+  100 source files plus its generated release manifest; all **101** manifest
+  entries and ZIP file bytes matched. The package and installed whole-plugin
+  digest is `f1267247ae9aae8ccf5b1efd5895f0f3c4f215a6665a0b44626a64c9d0129086`.
+- ZIP SHA-256: `0242dcc837e8fee5c0e6cb91103741c6e42657dc2c92e7361294d57a382f48d6`.
+  The uploaded ZIP, checksum file and RELEASE-MANIFEST.json were downloaded
+  from GitHub and compared byte-for-byte with the verified build.
+- The official marketplace remove/add/plugin-add sequence fetched the remote
+  `v0.6.2` Git tag and installed `0.6.2+codex.20261002042337`. All **85 plugin
+  files** matched the package and fetched source; all **23 other installed
+  plugin entries** remained unchanged against this release's immediate
+  pre-install snapshot. Earlier counts below refer to their own snapshots.
+- A fresh native MCP connection reported this complete version, with loaded
+  and on-disk identities matching the startup executable identity listed above.
+  Native ordinary
+  smoke `run-nOJOdWsnc_OiAWB5` actually used **Sonnet 5.5 / medium**, returned
+  provider exit **0**, delivered all **2,534 prompt bytes**, and reproduced all
+  four fixture lines and the required arithmetic correctly.
+- Codex independently checked **1/1 audited Read**, zero denials/missing guards
+  or scope/session/invariant/tool-policy errors, unchanged input hashes and
+  terminal lifecycle. Both recorded process groups were absent in Recovery
+  and an independent host process check. One malformed formatter input was
+  rejected before execution and then corrected within the same Claude run;
+  its original proof was retained separately. Codex accepted the run only
+  after checking these original records.
+- The previous long/short Workflow tests remain evidence for the identical
+  supervision/delivery modules. They were not repeated under a new run ID just
+  for the version change. The final native receipt records an unknown Git
+  source revision in the copied cache; the remote commit association is
+  established by the separate fetched-source/package/cache byte comparison.
+
+No Claude CLI, login, account or active coordination-content setting was
+changed. Installation and fresh-connection verification do not hot-reload an
+older connection. This `main` document records completed release installation
+checks; the fixed tag and release archive retain their publication-time source
+and documentation snapshot.
+
 ---
 
 # Pre-release repair verification — 2026-10-02

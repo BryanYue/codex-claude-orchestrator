@@ -205,7 +205,7 @@ uv run --project plugins/codex-claude-orchestrator --frozen --no-dev python tool
 
 自动回归、真实 Claude 调用、原生宿主接入和浏览器观察分别记录；小夹具通过不证明生产长任务零偏差。整体结构为：用户 → 主 Codex + Skill/规格 → 原生 Codex 监督席 → MCP Runtime → Claude；证据原路返回，由主 Codex 核验。
 
-验证记录区分隔离夹具、MCP 协议、浏览器和安装各层证据。v0.6.2 复用相同执行模块的修复验收，并单独记录最终版本打包与发布标签复装；v0.6.1 的验收保留在历史段，没有因此重做全部浏览器或冷机验收。具体身份与覆盖见 [RELEASE-VERIFICATION.md](../RELEASE-VERIFICATION.md)，不将历史版本的通过数当作本版证据。普通请求在新桌面任务中从路由到委派的完整自动入口，需要在目标宿主正常权限下走查；本机 MCP 直连不替代这项验收。
+验证记录区分隔离夹具、MCP 协议、浏览器和安装各层证据。v0.6.2 已完成最终版本打包、远程固定标签复装、新原生连接和真实 Claude 只读审阅；长短 Workflow 复用相同执行模块的修复验收，v0.6.1 的验收保留在历史段，没有因此重做全部浏览器或冷机验收。具体身份与覆盖见 [RELEASE-VERIFICATION.md](../RELEASE-VERIFICATION.md)，不将历史版本的通过数当作本版证据。普通请求在新桌面任务中从路由到委派的完整自动入口，需要在目标宿主正常权限下走查；本机 MCP 直连不替代这项验收。
 
 源码与 Git marketplace 由个人仓库 BryanYue/codex-claude-orchestrator 维护，使用固定发布 ref 安装。具体取源、升级、回退步骤见 [Git marketplace 说明](../docs/git-marketplace.md)，实际验证范围见 [发布验证](../RELEASE-VERIFICATION.md)。问题请通过仓库 Issues 提交，并去除凭据、viewer token 与业务代码。当前未指定开源许可证。
 
