@@ -1,3 +1,91 @@
+# 0.7.0 release verification
+
+Full plugin version: `0.7.0+codex.20261003090000`. Fixed release ref: `v0.7.0`.
+[Release and artifacts](https://github.com/BryanYue/codex-claude-orchestrator/releases/tag/v0.7.0).
+
+The implementation was frozen in source commit
+`bfdc68dc2a699f4654992f80463ba6e0b895cd53`, based on `a0787c5` (v0.6.2).
+The subsequent release-record commit changes only this document. The final
+archive's `RELEASE-MANIFEST.json` identifies its exact packaging commit;
+`FILE-SHA256.json` and the adjacent ZIP checksum identify the shipped bytes.
+Earlier tags and release assets remain unchanged.
+
+## Executed checks
+
+- **379 plugin tests passed** in one full invocation (119.489 seconds).
+- **208 Bridge tests passed** in the same test-runner invocation (89.403 seconds).
+- **29 distribution tests passed** against the committed source (14.960 seconds).
+- **616 total test methods passed**, with no skips reported in these runs.
+- Ruff `F` rules passed for plugin and tooling Python. Strict Mypy passed for
+  five explicitly selected pure modules; this is not whole-project type coverage.
+- `git diff --check` passed. The bundled Workflow JavaScript was executed with a
+  deterministic Node agent mock, including failed/missing dimension retention.
+- The real local Claude Code **2.1.287** answered `--version` and `--help`.
+  No model-generation request was sent, and Claude did not review or implement
+  this release. Real-provider review/Workflow and installed-cache reload are
+  **not verified for 0.7.0**. Older real-Claude results below remain historical.
+
+The source runner is `scripts/run_tests.py`, using throwaway coordination and
+legacy state roots. Tests exercise fake CLI processes, actual stdio MCP, local
+HTTP and real macOS `sandbox-exec`. Twenty workspace tests include real OS
+write-denial checks; six end-to-end isolated-review tests cover full report
+capture, missing/FIFO reports, missing hook evidence, dynamic Workflow completion,
+repeated resume and rejection of forged Runtime decisions.
+
+## Behavior and acceptance boundaries
+
+- New MCP Git reviews carrying `user_request` default to an independent writable
+  copy. Original request, review scope and mode remain frozen during resume.
+  Legacy packets retain strict mode; non-Git artifact review remains strict.
+- OS protection denies writes to declared original sources, Git metadata,
+  executing plugin source, current parent-collected evidence, earlier resumed
+  run evidence and Runtime/coordination controls. Copy writes and hook activity
+  remain available. The tests cover overwrite, unlink, rename and hardlink
+  attempts. This is not a host-wide, credential or network sandbox.
+- The canonical complete JSON report retains findings even when the parent
+  projection omits them. UTF-8 pagination rechecks the captured size and hash.
+  Observed Workflow invocations require corresponding completion before the
+  final result. Agent/check coverage and report correctness still require Codex
+  verification; neither JSON shape nor a successful exit is semantic acceptance.
+- All reported findings require individual coordinator dispositions; rejected
+  or downgraded findings need reasons. Original findings and decisions remain
+  inspectable. Returned and unknown working copies are retained, never
+  automatically discarded. No new public automatic-cleanup endpoint is claimed.
+- Isolated mode needs macOS `sandbox-exec`. Unsupported layouts (including
+  external source links, hardlinks, submodules and sparse/unmerged indexes)
+  fail explicitly; strict review remains available. Ignored dependencies are
+  not copied, and tests in a copy do not prove original-repository or device
+  acceptance.
+- Durable plus legacy locks remain held across Runtime/Bridge handoff; dual
+  unknown markers preserve compatibility and owner-specific recovery. A real
+  child-process fixture confirms both locks survive the Runtime's hard exit.
+- Fresh coordination text is bundled with the plugin. Removed online-update
+  tools cannot activate content; historical verified bindings remain readable.
+
+## Scope of simplification
+
+Measured against `a0787c5`, excluding Python tests and environment caches:
+production Python decreased from **13,537 to 11,157 lines** (2,380 fewer), while
+adding isolated review, full-report transport and migration support. The retired
+CLI acquisition/qualification chain accounts for 3,009 removed production lines.
+`_run` decreased from 539 to 99 lines, `parse_stream` from 193 to 17, and
+`Runtime.start` from 213 to 64. Extracted modules have explicit process, parsing,
+workspace, result, lock, identity and filesystem responsibilities.
+
+`SKILL.md` plus `guide.md` decreased from **20,984 to 7,331 characters** (65.1%).
+These are source characters/lines, not model tokens or an automatic quality score.
+The frozen formal orchestration protocol was not changed.
+
+Tests for removed CLI acquisition/activation and online content activation were
+retired with those APIs. Historical read/cancel, source and process protection,
+report and recovery assertions remain. Dual-lock tests now assert both physical
+markers and owner identity; they do not relax termination or recovery proof.
+An initial integrated run exposed stale deleted-API mocks and single-marker
+fixtures. Those failures were corrected before the fully passing invocation
+above; they are not presented as a passing initial run.
+
+---
+
 # 0.6.2 release verification
 
 Full plugin version: `0.6.2+codex.20261002042337`. Fixed release ref: `v0.6.2`.
