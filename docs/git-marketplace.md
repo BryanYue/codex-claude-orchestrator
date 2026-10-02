@@ -11,13 +11,13 @@ No open-source license has been selected.
 - Publisher: BryanYue.
 - Marketplace: `codex-claude-team`.
 - Plugin: `codex-claude-orchestrator` (display name: Codex–Claude 协作).
-- Release ref: `v0.6.1`. Use a published fixed tag or full commit SHA; do not
+- Release ref: `v0.6.2`. Use a published fixed tag or full commit SHA; do not
   move a release tag after publishing it.
-- Release boundary: `v0.6.1` adds stable bridge startup, startup code identity checks
-  and evidence-bound early-failure recovery to the user-local CLI policy, reviewed
-  Markdown content updates and execution-evidence fixes. `v0.5.0` remains
-  immutable and retains its historical behavior. Refreshing that fixed ref
-  does not install 0.6.1; use the explicit version-switching steps below.
+- Release boundary: `v0.6.2` includes complete Workflow report delivery, bounded
+  prompt delivery and lifecycle recovery, content compatibility checks, and
+  latest-execution-start task ordering. Older tags, including `v0.6.1`, remain
+  immutable. Refreshing an older fixed ref does not install 0.6.2; use the
+  explicit version-switching steps below.
 - The marketplace entry resolves `./plugins/codex-claude-orchestrator` relative
   to the fetched repository root. The Git market and ZIP catalog share the
   same plugin identity; do not install renamed duplicates to switch sources.
@@ -43,7 +43,7 @@ need no token. An SSH URL still requires working SSH authentication;
 For a machine without an existing `codex-claude-team` marketplace:
 
 ```bash
-codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v0.6.1
+codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v0.6.2
 codex plugin add codex-claude-orchestrator@codex-claude-team
 codex plugin marketplace list --json
 codex plugin list --json
@@ -55,7 +55,7 @@ ref from these list outputs: compare `git -C /market/root rev-parse HEAD` with
 the selected published commit (or inspect the persisted marketplace ref
 read-only). A plugin entry may still say `source=local` because it points into
 the fetched Git snapshot; the marketplace source establishes its Git origin.
-The base MCP version is 0.6.1; full plugin versions also contain a
+The base MCP version is 0.6.2; full plugin versions also contain a
 cache-refresh suffix.
 
 Before opening a new Codex task, prepare the locked Python dependencies from
@@ -120,7 +120,9 @@ Version, provenance and byte identity are separate fields.
 
 [RELEASE-VERIFICATION.md](../RELEASE-VERIFICATION.md) distinguishes actual
 remote installation, upgrade/rollback and MCP protocol checks from source
-checks, synthetic UI tests and real Claude execution. On 2026-10-02, the
+checks, synthetic UI tests and real Claude execution. The current 0.6.2
+packaging and published-tag checks are recorded there. The following is
+historical 0.6.1 installation evidence: on 2026-10-02, the
 published `v0.6.1` tag resolved to
 `871818a9fabc297e53b8ca398ab317cd6470461f`. After candidate acceptance it was
 fetched and reinstalled through the normal Git marketplace commands. All
@@ -130,14 +132,14 @@ assets also matched the reproducible build. This is a single-host result,
 not a cold second-machine or every-provider qualification.
 
 The 2026-09-29 upgrade, rollback, invalid-ref and pinned-refresh experiments
-remain historical v0.5.0 evidence. They do not prove every v0.6.1 rollback
+remain historical v0.5.0 evidence. They do not prove every later-version rollback
 or failure path. When rolling back, restore the source and fixed ref actually
 recorded before your update. The predecessor `v0.6.0` still points to
 `7dd38ca9bf40f092884e6a81d1a39981bff4c595`; the older tested v0.5.0 preview
 SHA remains in the historical verification section rather than being the
 default rollback target for all installations.
 
-Documentation corrections on `main` do not move `v0.6.1` or replace its ZIP.
+Documentation corrections on `main` do not move a published tag or replace its ZIP.
 Versioned Markdown under `references/` can update through the reviewed content
 channel; it does not update executable code or an already-running MCP process.
 

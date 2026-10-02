@@ -1,4 +1,4 @@
-# Codex–Claude 协作 · 0.6.1
+# Codex–Claude 协作 · 0.6.2
 
 **简体中文** · [English](README.en.md)
 
@@ -34,7 +34,7 @@
 | 随时知道进展 | 在协作工作台查看任务、执行轮次、报告和核验结果。 |
 | 继续或纠正工作 | 在原对话里补充要求，让 Codex 核对已有进度后继续处理。 |
 
-下面的安装命令使用正式发布版 **v0.6.1**。`main` 已包含后续 Workflow 报告交付、运行恢复和需求排序修复，完整构建标识为 `0.6.1+codex.20261002030356`；这些改动尚未创建新的发布标签或 Release，固定安装 `v0.6.1` 不会取得它们。源码变化见[更新记录](CHANGELOG.md)，验证范围见[验证记录](RELEASE-VERIFICATION.md)。动态协调说明另有内容版本，审查后生效，但不能升级插件代码；详见[版本与文档的对应关系](docs/advanced-usage.zh-CN.md#版本与文档的对应关系)。
+下面的安装命令使用 **v0.6.2**，完整构建标识为 `0.6.2+codex.20261002042337`。本版包含 Workflow 报告交付、运行恢复和需求排序修复；旧发布标签与包保持冻结。变化见[更新记录](CHANGELOG.md)，实际验证范围见[验证记录](RELEASE-VERIFICATION.md)。动态协调说明另有内容版本，审查后生效，但不能升级插件代码；详见[版本与文档的对应关系](docs/advanced-usage.zh-CN.md#版本与文档的对应关系)。
 
 ## 开始使用
 
@@ -51,13 +51,13 @@
 在终端中依次执行：
 
 ```bash
-codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v0.6.1
+codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v0.6.2
 codex plugin add codex-claude-orchestrator@codex-claude-team
 ```
 
 第一条添加插件来源，第二条安装插件。仓库公开，无需 GitHub 邀请或登录。
 
-> **关于版本：** `v0.6.1` 修复已删除父工作目录导致的桥接启动失败，增加启动代码身份核验及有证据的早期失败恢复。旧 `v0.5.0` 和 `v0.6.0` 标签保持不变；固定在旧标签的安装需按[版本切换步骤](docs/git-marketplace.md#change-a-fixed-ref-or-migrate-from-zip)改到 `v0.6.1`，刷新 marketplace 不会自动跨标签升级。
+> **关于版本：** `v0.6.2` 包含 Workflow 完整报告交付、运行监督与恢复修复，并将需求列表默认按最新执行开始时间倒序。旧 `v0.5.0`、`v0.6.0`、`v0.6.1` 标签保持不变；固定在旧标签的安装需按[版本切换步骤](docs/git-marketplace.md#change-a-fixed-ref-or-migrate-from-zip)改到 `v0.6.2`，刷新 marketplace 不会自动跨标签升级。
 
 **首次安装还需要准备依赖，再打开新 Codex 任务。** 不熟悉终端、遇到 `codex: command not found`，或以前装过本地版本，都可以按[一步一步的安装指南](docs/getting-started.zh-CN.md)操作；里面也有可以直接交给 Codex 的安装请求。
 

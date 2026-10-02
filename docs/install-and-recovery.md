@@ -4,7 +4,7 @@ This covers the two install paths for `codex-claude-orchestrator` and the
 first-use preparation both share. See [git-marketplace.md](git-marketplace.md)
 for the Git-specific commands and identity, and [RELEASE-VERIFICATION.md](../RELEASE-VERIFICATION.md) for
 which of the steps below have actually been exercised for the current version.
-The current release is `v0.6.1`; the completed candidate and published-tag
+The current release is `v0.6.2`; the completed candidate and published-tag
 reinstall checks are recorded there separately from older experiments.
 
 ## Two install paths
@@ -168,9 +168,9 @@ automatic browser reuse, a cold second machine or another user's credentials.
 Failure recovery is tested only where explicitly recorded; do not infer that
 every interruption or permission failure was exercised.
 
-## 0.6.1 startup recovery
+## Startup recovery (since 0.6.1)
 
-A fresh 0.6.1 MCP connection launches its bridge from a valid state directory,
+A fresh 0.6.1-or-later MCP connection launches its bridge from a valid state directory,
 even when the MCP process inherited a deleted working directory. The Claude
 process still uses the task's approved working directory. Diagnostics expose
 bridge startup readiness separately from CLI authentication.

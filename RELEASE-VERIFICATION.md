@@ -1,9 +1,41 @@
-# Current main verification — 2026-10-02
+# 0.6.2 release verification
+
+Full plugin version: `0.6.2+codex.20261002042337`. Fixed release ref: `v0.6.2`.
+[Release and artifacts](https://github.com/BryanYue/codex-claude-orchestrator/releases/tag/v0.6.2).
+
+The release packages the independently reviewed and regression-tested repair
+from source commit `e570676cf1fabc5dad02e9924d1e0593a1c02885`. The release delta
+updates plugin/MCP/project/lockfile version metadata and current installation
+documentation. Supervision and report-delivery code, dependency versions,
+permissions and acceptance requirements are unchanged. Existing tags and
+assets remain immutable.
+
+The repair evidence below records 385 plugin, 176 Bridge and 29 distribution
+test methods, plus the independent controls and actual native Claude runs.
+The final 0.6.2 environment ran all 385 plugin methods: the only failing
+method contained two README subcases missing explicit old-tag migration
+examples. Restoring that documentation passed all 16 methods in the affected
+regression file, with no test changes. This is composite coverage of the 385
+methods, not a claim of one green full invocation. The original failure log is
+retained. Pre-release evidence does not itself prove a published-tag reinstall.
+The package's FILE-SHA256.json and RELEASE-MANIFEST.json bind all shipped bytes
+to the exact release commit. Post-publication installation and native checks
+are appended to this record on `main`; the release archive keeps its
+publication-time document snapshot.
+
+- Startup executable identity: `84a43660108e1d57b8fdd92391d45cb2dddb1fa50e08bc63bcd99b1423ea23f4`.
+- Bridge contract digest: `932ad8634c840bd434f8d4095d0d2747cf96197e80fea77c75dea1f6d374aca8`.
+- Previous package/whole-plugin digests below identify their own builds; the
+  0.6.2 metadata produces a different whole-plugin digest.
+
+---
+
+# Pre-release repair verification — 2026-10-02
 
 Full source build: `0.6.1+codex.20261002030356`; base version remains `0.6.1`.
-This is the post-release Workflow/lifecycle repair on `main`, with no new tag or
-GitHub Release. The fixed `v0.6.1` release below remains unchanged and does not
-include these repairs. Use the source commit and distribution manifest to
+This records the Workflow/lifecycle repair before its 0.6.2 packaging. At this
+checkpoint it had no new tag or GitHub Release. The fixed `v0.6.1` release below
+remains unchanged and does not include these repairs. Use the source commit and distribution manifest to
 identify a build; the base version alone is insufficient.
 
 ## Repair and architecture scope

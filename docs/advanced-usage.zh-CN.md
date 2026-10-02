@@ -4,14 +4,14 @@
 
 这里保留本机 CLI 准入、运行记录、权限边界和开发验证等细节。首次使用请先看[快速开始](getting-started.zh-CN.md)。本页为中文技术参考；[安装与恢复](install-and-recovery.md)及[Git 分发](git-marketplace.md)另有英文说明。
 
-本页区分正式发布版 **v0.6.1** 与 `main` 的后续源码修订；未发布行为会单独标注。下面的 ZIP 安装器命令只适用于完整构建包；Git marketplace 用户继续使用所选 Git 来源。
+本页按 **v0.6.2** 维护，历史机制保留首次引入版本。下面的 ZIP 安装器命令只适用于完整构建包；Git marketplace 用户继续使用所选 Git 来源。
 
 ## 版本与文档的对应关系
 
 | 内容 | 身份与更新方式 |
 | --- | --- |
-| 插件代码与安装包 | 当前发布 `v0.6.1`，完整版本 `0.6.1+codex.20261001182536`；固定标签、提交和发布包不可因文档修订而替换 |
-| `main` 后续源码修订 | 完整构建 `0.6.1+codex.20261002030356`，基础版本仍为 0.6.1；包含 Workflow 交付、监督恢复和默认排序修复，未创建新标签或 Release；验证范围见 [验证记录](../RELEASE-VERIFICATION.md) |
+| 插件代码与安装包 | 当前版本 `v0.6.2`，完整版本 `0.6.2+codex.20261002042337`；发布标签、提交和资产固定，文档修订不替换发布包 |
+| 旧版本 | `v0.6.1` 的完整版本 `0.6.1+codex.20261001182536` 保持冻结；不会自动取得 v0.6.2 的报告交付、监督恢复和默认排序修复 |
 | README、docs、发布验证 | `main` 保存当前源码说明与验收事实；旧标签和 ZIP 内保留各自发布时的文档快照，不能把新源码能力归给旧安装 |
 | `references/` 动态协调说明 | 由 `manifest.json` 的 `content_version` 与文件哈希独立标识；只更新内容版本，不要求提升插件版本，仍须 Codex 检查和审查后激活 |
 | 历史变更与设计 | CHANGELOG 的旧版本、RELEASE-VERIFICATION 的历史段和 UI 设计提案保留原时间/基线；不能当作当前功能或新版本验收 |
@@ -205,7 +205,7 @@ uv run --project plugins/codex-claude-orchestrator --frozen --no-dev python tool
 
 自动回归、真实 Claude 调用、原生宿主接入和浏览器观察分别记录；小夹具通过不证明生产长任务零偏差。整体结构为：用户 → 主 Codex + Skill/规格 → 原生 Codex 监督席 → MCP Runtime → Claude；证据原路返回，由主 Codex 核验。
 
-验证记录区分隔离夹具、MCP 协议、浏览器和安装各层证据。v0.6.1 已完成候选安装与正式 Git 标签复装后的原生 MCP/真实 Claude 只读 smoke；没有因此重做全部浏览器或冷机验收。具体身份与覆盖见 [RELEASE-VERIFICATION.md](../RELEASE-VERIFICATION.md)，不将历史版本的通过数当作本版证据。普通请求在新桌面任务中从路由到委派的完整自动入口，需要在目标宿主正常权限下走查；本机 MCP 直连不替代这项验收。
+验证记录区分隔离夹具、MCP 协议、浏览器和安装各层证据。v0.6.2 复用相同执行模块的修复验收，并单独记录最终版本打包与发布标签复装；v0.6.1 的验收保留在历史段，没有因此重做全部浏览器或冷机验收。具体身份与覆盖见 [RELEASE-VERIFICATION.md](../RELEASE-VERIFICATION.md)，不将历史版本的通过数当作本版证据。普通请求在新桌面任务中从路由到委派的完整自动入口，需要在目标宿主正常权限下走查；本机 MCP 直连不替代这项验收。
 
 源码与 Git marketplace 由个人仓库 BryanYue/codex-claude-orchestrator 维护，使用固定发布 ref 安装。具体取源、升级、回退步骤见 [Git marketplace 说明](../docs/git-marketplace.md)，实际验证范围见 [发布验证](../RELEASE-VERIFICATION.md)。问题请通过仓库 Issues 提交，并去除凭据、viewer token 与业务代码。当前未指定开源许可证。
 

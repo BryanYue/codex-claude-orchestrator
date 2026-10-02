@@ -1,4 +1,4 @@
-# Codex–Claude Collaboration · 0.6.1
+# Codex–Claude Collaboration · 0.6.2
 
 [简体中文](README.md) · **English**
 
@@ -34,7 +34,7 @@ Small tasks can stay with Codex. You can also choose who handles a particular ta
 | Follow the work | A shared workbench shows tasks, execution rounds, reports and verification results. |
 | Continue or correct a task | Add instructions in the same conversation; Codex checks existing progress before proceeding. |
 
-The installation commands below select the published **v0.6.1** release. `main` also contains later fixes for Workflow report delivery, recovery and task ordering, identified by full build `0.6.1+codex.20261002030356`. These changes have no new release tag or GitHub Release; an installation pinned to `v0.6.1` will not receive them. See the [changelog](CHANGELOG.md) and [verification record](RELEASE-VERIFICATION.md) for their scope and evidence. Coordination guidance has a separate content version and takes effect only after Codex reviews it; it cannot upgrade plugin code.
+The installation commands below select **v0.6.2**, full build `0.6.2+codex.20261002042337`. It includes the Workflow report delivery, recovery and task ordering repairs; earlier tags and packages remain frozen. See the [changelog](CHANGELOG.md) and [verification record](RELEASE-VERIFICATION.md) for changes and tested scope. Coordination guidance has a separate content version and takes effect only after Codex reviews it; it cannot upgrade plugin code.
 
 ## Get started
 
@@ -51,13 +51,13 @@ This release has been checked on an **Apple Silicon Mac**. Intel Macs have not b
 Run these commands in your terminal, one at a time:
 
 ```bash
-codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v0.6.1
+codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v0.6.2
 codex plugin add codex-claude-orchestrator@codex-claude-team
 ```
 
 The first adds the plugin source; the second installs the plugin. The repository is public, so no GitHub invitation or sign-in is needed.
 
-> **About versions:** `v0.6.1` fixes bridge startup from a deleted parent directory and adds startup code identity checks and evidence-bound early-failure recovery. The old `v0.5.0` and `v0.6.0` tags remain unchanged. Use the [version-switching steps](docs/git-marketplace.md#change-a-fixed-ref-or-migrate-from-zip) to select `v0.6.1`; refreshing a fixed ref does not advance it to another tag.
+> **About versions:** `v0.6.2` fixes complete Workflow report delivery, supervision and recovery, and sorts demands by their latest execution start time. Existing `v0.5.0`, `v0.6.0` and `v0.6.1` tags remain unchanged. Use the [version-switching steps](docs/git-marketplace.md#change-a-fixed-ref-or-migrate-from-zip) to select `v0.6.2`; refreshing a fixed ref does not advance it to another tag.
 
 **On first installation, prepare the dependencies before opening a new Codex task.** If you prefer help with the terminal, see `codex: command not found`, or have an older local installation, follow the [step-by-step guide](docs/getting-started.en.md). It also includes an installation request you can paste into Codex.
 
