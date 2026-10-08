@@ -8,6 +8,12 @@
 
 版本标签 [`v1.0.0`](https://github.com/BryanYue/codex-claude-orchestrator/releases/tag/v1.0.0)，完整构建 `1.0.0+codex.20261007165220`，发布日期 **2026-10-08**。本版依据对 0.7.x 的架构审查断代重构：派单配置会让需求变形，实现任务缺少执行能力，插件门禁替 Codex 把已交回完整报告的运行判为失败。验证范围见[发布验证](RELEASE-VERIFICATION.md)。
 
+**正式发布验收**
+
+- 从固定提交构建 macOS 安装包，两次构建哈希一致；发布 ZIP、ZIP 校验和、逐文件清单及源提交清单。
+- 本机两套 Codex 配置均从远程固定标签 0.7.1 升级到 1.0.0，安装文件与发布包逐字节一致，新 MCP 连接确认版本和 10 个工具。
+- 安装版通过真实 Claude CLI 的“实现 → 合入 → Codex 修正 → 记录 applied → 重连 → 续接 → 再合入”验收，最终原仓库 9 个测试通过；只读分析、工作台接口与副本清理也通过。完整证据与未验证范围见发布验证记录。
+
 **任务书与需求保真**
 
 - 派单改为 1.0 packet：`kind=implement|analyze`、`user_messages`（逐字原话，标明 human/relayed，缺失时须写 `no_user_words_reason`）、`inputs`（原件按字节冻结，可为目录）、`brief`（Codex 的理解）、`constraints`/`done_when`（每条标 `origin=user|doc|coordinator`）、`focus`、`write_hint`/`protected`、`verify`、`web`、`timeout_seconds`（必填）。旧字段直接拒绝并提示新字段名。

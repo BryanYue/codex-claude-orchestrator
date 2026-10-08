@@ -11,11 +11,11 @@ archive's `RELEASE-MANIFEST.json` identifies its exact source commit;
 `FILE-SHA256.json` and the ZIP checksum bind the distributed bytes. Existing
 release tags and assets stay unchanged.
 
-At this packaging checkpoint, fixed-ref installation and final-build real CLI
-acceptance are pending. Their results are appended to this record on `main`
-after publishing the immutable tag; documentation updates do not move the tag
-or replace its archive. Earlier real CLI checks below are candidate evidence,
-not evidence for the final installed build.
+Release source commit: `376fe8063c6adf31e0ec0519bb82d995fcccaf16`.
+The fixed tag and ZIP contain the pre-installation packaging checkpoint; this
+`main` record adds the subsequent installation and real CLI evidence. These
+documentation-only updates do not move the tag or replace its archive. The
+final installed plugin files match the tagged release byte for byte.
 
 The uncommitted 0.7.1 "workflow reliability" candidate (stage checkpoints,
 interim closure, `workflow_requirement`, source-freeze hints, invariant notes)
@@ -31,6 +31,64 @@ strict Mypy for 12 modules and `git diff --check` passed. The reviewed runtime
 and tests were byte-identical to the release source; only release documentation
 changed afterwards. The real CLI and fixed-ref installation checks are a
 separate acceptance stage, not included in these totals.
+
+## Published artifact and installation acceptance (2026-10-08)
+
+- The reviewed branch was committed and fast-forwarded into `main`; both it and
+  the annotated `v1.0.0` tag were pushed. Two builds from the same clean source
+  commit produced an identical 1,507,471-byte ZIP. All 74 entries in its file
+  hash manifest were verified, and the ZIP integrity check passed.
+- ZIP SHA-256:
+  `e503c1e89a3d69f817c3cf14c885472d46b7e2d0fc69631a060a121c43cbc9a1`.
+  Plugin file digest:
+  `c8cd1fc705ffe5509ab8768fbc8d3dae399368d5448f0f4ecacc1cbfc613a118`.
+- Both existing local Codex profiles (`~/.codex` and `~/.codex-company`) were
+  upgraded from Git ref `v0.7.1` to `v1.0.0` using the documented remove/add/
+  install sequence. Each inventory reported the plugin installed and enabled
+  at the full version above; each marketplace checkout resolved to the source
+  commit above. Every installed plugin file matched the artifact manifest.
+- Locked dependencies were prepared separately in both profiles. New stdio MCP
+  connections launched from their installed cache directories reported server
+  version **1.0.0** and exactly **10 tools**; local Claude readiness passed in
+  both. Unrelated marketplace/plugin config entries and the legacy 0.7.x run
+  registry were checked unchanged. Already-open chats were not restarted.
+- The Git installation path was exercised on this host. The ZIP was built and
+  integrity-checked; the final ZIP installer was not run against the live Git
+  installation, since that would switch its source back to a local catalog.
+
+## Final installed-build real Claude CLI acceptance (2026-10-08)
+
+Codex tested the installed plugin through its actual stdio MCP endpoint, using
+isolated temporary Git repositories and an isolated run-state root. Local
+Claude Code was **2.1.293**, requested model `sonnet`, observed model
+**claude-sonnet-5-5**, effort `low`. Claude was the product under test on a
+small calculator fixture; it did not implement or review the release itself.
+The user's normal Claude instructions and hooks remained in use.
+
+| Run | Profile | Independently verified result | CLI estimate |
+| --- | --- | --- | --- |
+| `run-ztL_0Lx_qY1O9PIw` | implement / copy | Added multiplication; original unchanged before applying the suggested delivery patch; 4 tests and independent assertions passed in copy and original | $0.1506072, session cumulative |
+| `run-gwfLGMJVcSkmzL3q` | implement / copy, continued | After Codex applied round 1, changed the signature to `multiply(*values)`, recorded `applied=true`, and reconnected MCP, the new copy inherited that correction and the full decision; the same Claude session resumed, added `power`, and delivered only the new work; 9 tests and independent assertions passed in copy and original, whose task files matched exactly | $0.1992424, same session cumulative including round 1 |
+| `run-F4tMg4JQNQe6D9F_` | analyze / readonly | Correctly described zero/one/three-argument multiplication coverage, wrote no source changes, and returned its report through structured output | $0.0623828, separate session |
+
+The implementation runs ended `ok` with no warnings. Readonly analysis ended
+`ok` with `not_verified_present`: it accurately stated that it had not run
+tests or inspected the Git diff, as requested. Codex checked its report against
+the source and the independently executed tests. The authenticated workbench
+`/api/runs` returned HTTP 200 with the real run records. Explicit cleanup
+removed the implementation copy and retained the reports, decisions and
+`delivery.patch`.
+
+The final two-session estimate was **$0.2616252** (about **$0.26**), counting the
+implementation session only once. This is a Claude CLI client-side estimate,
+not an actual charge. It excludes the earlier candidate runs below.
+
+Two temporary acceptance-script assumptions were corrected during execution:
+MCP SDK 2 uses snake_case response attributes, and the rendered brief contains
+Chinese decision labels rather than raw English verdict enums. The assertions
+were corrected against the SDK and actual brief/decision evidence; no product
+code changed, and completed model runs were reused. All required behavioral
+checks above then completed.
 
 ## Executed checks
 
@@ -140,7 +198,10 @@ cost the CLI did not report. Not a bill.
   can still reach the network. Credentials and other local paths are not
   isolated (unchanged from 0.7.x isolated review).
 - `source_not_read` sees only reads in the main session stream.
-- Migration from 0.7.x (old runs, adopted-project files) was not exercised.
+- Fixed-ref upgrade, dependency preparation, new MCP startup and preservation
+  of the legacy registry were exercised as described above. Continuing old
+  tasks is unsupported; manual cleanup of adopted-project files and switching
+  while an old task is actively executing were not exercised.
 
 # 0.7.1 release verification
 
