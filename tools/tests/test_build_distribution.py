@@ -21,12 +21,9 @@ import build_distribution as bd  # noqa: E402
 
 VERSION = "0.5.0"
 
-IDENTITY_DECLARATION = json.loads((ROOT.parent / bd.CODE_IDENTITY_RELATIVE).read_bytes())
-CONTRACT_SOURCES = {relative: f"# {relative}\n" for relative in
-                    sorted(set().union(*(bd.identity_paths({bd.CODE_IDENTITY_RELATIVE: json.dumps(IDENTITY_DECLARATION).encode()}, purpose)
-                                        for purpose in ("contract", "startup"))))
-                    if relative != "code-identity.json"}
-CONTRACT_SOURCES["code-identity.json"] = json.dumps(IDENTITY_DECLARATION)
+PLUGIN_SOURCES = {relative: f"# {relative}\n" for relative in (
+    "skills/codex-claude-orchestrator/scripts/bridge.py", "skills/codex-claude-orchestrator/scripts/runtime.py",
+    "skills/codex-claude-orchestrator/SKILL.md")}
 
 
 def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess:
@@ -67,7 +64,7 @@ class RepositoryFixture:
               'version = 1\nrequires-python = ">=3.11"\n\n'
               '[[package]]\nname = "codex-claude-orchestrator"\n'
               f'version = "{version}"\nsource = {{ virtual = "." }}\n')
-        for relative, content in CONTRACT_SOURCES.items():
+        for relative, content in PLUGIN_SOURCES.items():
             _write(self.root / "plugins/codex-claude-orchestrator" / relative, content)
         _write(self.root / "docs/git-marketplace.md", "# Git marketplace\n")
         _write(self.root / "docs/install-and-recovery.md", "# Install and recovery\n")
@@ -101,7 +98,7 @@ class BuildDistributionTests(unittest.TestCase):
         self.assertEqual(first["sha256"], second["sha256"])
         self.assertEqual(first["version"], VERSION)
         self.assertEqual(first["source_commit"], commit)
-        self.assertEqual(first["contract_digest"], second["contract_digest"])
+        self.assertEqual(first["plugin_code_digest"], second["plugin_code_digest"])
 
         for relative in bd.EXECUTABLE_RELATIVE_PATHS:
             self.assertEqual((Path(first["directory"]) / relative).stat().st_mode & 0o777, 0o755)
@@ -236,19 +233,6 @@ class BuildDistributionTests(unittest.TestCase):
         repo.commit()
         with self.assertRaisesRegex(bd.BuildError, "Unrecognized artifact"):
             bd.build(source_root=repo.root, output=self.base / "out")
-
-    def test_contract_digest_matches_the_live_compatibility_algorithm(self):
-        # Guards against tools/build_distribution.py's duplicated file list and
-        # hashing algorithm drifting from skills/.../compatibility.py, without
-        # this build tool importing (and thus depending on) that runtime module.
-        real_repo_root = Path(__file__).resolve().parents[2]
-        skills_scripts = real_repo_root / "plugins/codex-claude-orchestrator/skills/codex-claude-orchestrator/scripts"
-        sys.path.insert(0, str(skills_scripts))
-        import compatibility  # noqa: E402
-
-        commit = bd.run_git(real_repo_root, "rev-parse", "HEAD").strip()
-        blobs, _ = bd.tracked_blobs(real_repo_root, commit)
-        self.assertEqual(bd.contract_digest(blobs), compatibility.bridge_contract_id())
 
     def test_ignored_files_never_enter_distribution(self):
         repo = RepositoryFixture(self.base / "repo")

@@ -28,7 +28,7 @@ class TestRunnerTests(unittest.TestCase):
     def test_all_uses_one_child_only_tmpdir_and_removes_it_after_both_children(self):
         observed = []
         parent_tmp = os.environ.get("TMPDIR")
-        parent_coordination = os.environ.get("CODEX_CLAUDE_COORDINATION_ROOT")
+        parent_state = os.environ.get("CLAUDE_ORCHESTRATOR_STATE_DIR")
 
         def execute(command, *, cwd, env, check):
             observed.append((command, cwd, dict(env), check))
@@ -42,11 +42,11 @@ class TestRunnerTests(unittest.TestCase):
         self.assertEqual(len(observed), 2)
         child_tmp = Path(observed[0][2]["TMPDIR"])
         self.assertEqual(observed[1][2]["TMPDIR"], str(child_tmp))
-        self.assertEqual(observed[0][2]["CODEX_CLAUDE_COORDINATION_ROOT"], str(child_tmp / "durable-coordination"))
-        self.assertEqual(observed[1][2]["CODEX_CLAUDE_COORDINATION_ROOT"], str(child_tmp / "durable-coordination"))
+        self.assertEqual(observed[0][2]["CLAUDE_ORCHESTRATOR_STATE_DIR"], str(child_tmp / "state"))
+        self.assertEqual(observed[1][2]["CLAUDE_ORCHESTRATOR_STATE_DIR"], str(child_tmp / "state"))
         self.assertFalse(child_tmp.exists())
         self.assertEqual(os.environ.get("TMPDIR"), parent_tmp)
-        self.assertEqual(os.environ.get("CODEX_CLAUDE_COORDINATION_ROOT"), parent_coordination)
+        self.assertEqual(os.environ.get("CLAUDE_ORCHESTRATOR_STATE_DIR"), parent_state)
         self.assertEqual(observed[0][0][0], sys.executable)
 
     def test_failure_still_runs_remaining_suite_and_cleans_owned_directory(self):

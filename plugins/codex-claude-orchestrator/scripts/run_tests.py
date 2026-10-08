@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
-"""Run plugin regressions with throwaway legacy and durable coordination roots.
+"""Run plugin regressions with a throwaway TMPDIR and state root.
 
-Production Runtime and bridge processes retain their legacy coordination paths.
 This entrypoint changes only the environment passed to fresh test subprocesses,
-so test-created lane locks and unknown markers cannot accumulate in the user's
-normal TMPDIR or persistent coordination root.
+so nothing a test creates can land in the user's TMPDIR or plugin state.
 """
 from __future__ import annotations
 
@@ -42,17 +40,16 @@ def run_suites(root: Path, suite: str, *, execute: Callable[..., subprocess.Comp
                temporary_directory: Callable[..., str] = tempfile.mkdtemp) -> int:
     """Run selected suites, preserving output and waiting for every child.
 
-    Coordination paths are copied into the child environment only. The runner does not
-    mutate ``os.environ`` and never deletes a production coordination directory.
+    Paths are copied into the child environment only. The runner does not
+    mutate ``os.environ`` and never deletes a production state directory.
     """
     root = root.resolve()
-    isolated_tmp = Path(temporary_directory(prefix="codex-claude-test-coordination-"))
+    isolated_tmp = Path(temporary_directory(prefix="codex-claude-test-"))
     first_failure = 0
     try:
         environment = dict(os.environ)
         environment["TMPDIR"] = str(isolated_tmp)
-        environment["CODEX_CLAUDE_COORDINATION_ROOT"] = str(isolated_tmp / "durable-coordination")
-        environment["CLAUDE_ORCHESTRATOR_CLI_ROOT"] = str(isolated_tmp / "cli-store")
+        environment["CLAUDE_ORCHESTRATOR_STATE_DIR"] = str(isolated_tmp / "state")
         for name in selected_suites(suite):
             try:
                 completed = execute(command_for(root, name), cwd=root, env=environment, check=False)

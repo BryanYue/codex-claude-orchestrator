@@ -1,3 +1,147 @@
+# 1.0.0 release verification
+
+Full plugin version: `1.0.0+codex.20261007165220`. Fixed release ref: `v1.0.0`.
+Release date: **2026-10-08**.
+[Release and artifacts](https://github.com/BryanYue/codex-claude-orchestrator/releases/tag/v1.0.0).
+
+The source was independently reviewed on `codex/workflow-reliability-20261007`,
+based on `06936d0`, including the final 24-case delivery invariant test. The
+release keeps that reviewed implementation and full build identity. The
+archive's `RELEASE-MANIFEST.json` identifies its exact source commit;
+`FILE-SHA256.json` and the ZIP checksum bind the distributed bytes. Existing
+release tags and assets stay unchanged.
+
+At this packaging checkpoint, fixed-ref installation and final-build real CLI
+acceptance are pending. Their results are appended to this record on `main`
+after publishing the immutable tag; documentation updates do not move the tag
+or replace its archive. Earlier real CLI checks below are candidate evidence,
+not evidence for the final installed build.
+
+The uncommitted 0.7.1 "workflow reliability" candidate (stage checkpoints,
+interim closure, `workflow_requirement`, source-freeze hints, invariant notes)
+was not merged; its full diff was kept outside the repository before the
+rewrite.
+
+## Final pre-release checks (2026-10-08)
+
+Codex independently reran the reviewed final source: **65 plugin tests**
+(15.020 s), **105 Bridge tests** (147.071 s, including all 24 delivery invariant
+combinations), and **28 distribution tests** (7.979 s), with no skips. Ruff,
+strict Mypy for 12 modules and `git diff --check` passed. The reviewed runtime
+and tests were byte-identical to the release source; only release documentation
+changed afterwards. The real CLI and fixed-ref installation checks are a
+separate acceptance stage, not included in these totals.
+
+## Executed checks
+
+- **65 plugin tests**, **105 Bridge tests** and **28 distribution tests** passed
+  (`scripts/run_tests.py` and `tools/tests`), with no skips on this macOS host.
+  The suites are much smaller than 0.7.1's (389/243/29) because the tests of the
+  removed features were deleted with them; the 34 copy-isolation tests (hardlinks,
+  symlinks, submodules, sparse index, alternates, sandbox profile, descendant
+  writes) were kept and adapted.
+- End-to-end tests run Runtime, the real bridge and the real `sandbox-exec` with a
+  fake CLI: patch contents (add/modify/delete/binary, ignored build output left
+  out), writes to the original repository, its `.git` and the plugin registry
+  denied, brief bytes equal to what the CLI received, timeout and cancel keeping
+  written output, crash without result, not-logged-in never launching, continue
+  with `--resume` and fresh-session fallback, residual background processes,
+  a SIGKILLed bridge settled as `lost` by a new Runtime, decision rules and copy
+  cleanup, readonly profile through structured output.
+- A Codex review of the rewrite found six defects, all reproduced here before
+  fixing: a wrongly typed result field left the run `running` forever and broke
+  Runtime start; cleanup could delete a copy while a continuation started;
+  continuing an older round reused the newer copy without the newer user words;
+  only the first 50 protected paths needed confirmation; the suggested
+  `git apply --3way` failed over uncommitted original edits; implement fell back
+  to readonly without a sandbox. Each has a regression test
+  (`test_review_findings.py`); the review's own repro script now shows refusals
+  or a settled run for these cases. A second review found that a cleanup killed
+  midway left the copy in `removing` forever; cleanups now record their process,
+  a later cleanup takes over once that process has exited, and a copy whose
+  deletion began is never made usable again (subprocess SIGKILL before and after
+  deletion, and an in-process partial deletion, are covered). A third review
+  traced multi-round flows and found four gaps: Codex's corrections did not
+  reach the next round's copy; after a rejected round the suggested patch missed
+  the earlier round; a first round that never started lost the delivery base;
+  item decisions did not reach the next brief. Every round now emits
+  `delivery.patch` (all work not yet applied) next to the round patch, Codex
+  records applied deliveries with `applied=true`, and all earlier decisions are
+  rendered into the next brief.
+  Two further reviews found boundary cases in how a continued round reused
+  its copy (an interrupted copy swap or delivery-record update, ignored task
+  files dropped after delivery, report files leaking into the patch after an
+  outbox name changed, retargeted symlinks, corrections reverted to the synced
+  state). They shared one cause: the copy was mutable state kept across rounds.
+  The copy is now disposable: every round rebuilds it from the original's
+  current files, replays the latest `delivery.patch` not recorded as applied,
+  and brings in files of applied deliveries even when ignored; each run keeps
+  its own baseline store. Only immutable per-run patches and decisions carry
+  over, so an interrupted round or a damaged copy cannot affect the next one.
+  A follow-up review found that ignored task files were only carried when the
+  merge was declared, not when it was detected, and that deciding again without
+  `applied` withdrew a recorded merge. Task files now come from every delivery
+  of the task, and an omitted `applied` keeps the recorded value.
+  The next review found that the task-file rule dropped a path on a pending
+  deletion, so the rebuilt copy lacked the file the deletion needed; the list
+  now keeps every path any delivery touched. To stop fixing these one at a time,
+  `test_delivery_invariants.py` checks one invariant over 24 combinations of
+  pending operation (add, modify, delete), merge state (pending, recorded,
+  detected) and when the original starts ignoring the operation's own target
+  (never, before the operation, after its patch; the test asserts the rule
+  matches): the next round starts, and after applying its `delivery.patch` the
+  original's task files equal the copy's. Adding a file that is already
+  ignored is excluded, since such a file is never delivered by design. It also exposed
+  that an empty `delivery.patch` came with apply commands that git rejects;
+  there are now no commands when nothing is pending.
+  `test_multi_round_delivery.py` (15 flows) covers the individual cases.
+- Brief tests assert the raw rendered text: user words verbatim exactly once,
+  no `\u` escapes, priority section first, no review dimensions in implement.
+- The workbench was exercised in Node against sample snapshots generated by the
+  backend and in headless Chrome under the real CSP.
+- Ruff `F`, `C901`, `PLR0912`, `PLR0915` passed with ceilings lowered to the 1.0
+  maxima (33/33/110, from 59/59/145). Strict Mypy passed for 12 modules (was 5).
+  `git diff --check` passed.
+
+## Earlier candidate real Claude CLI acceptance
+
+These checks preceded the final disposable-copy implementation. Names such as
+`cumulative.patch` and `copy_rebased` below describe those historical runs and
+are not current interfaces. Final installed-build checks are recorded separately.
+
+Local Claude Code **2.1.292**, model `sonnet` (stream reported
+`claude-sonnet-5-5`), effort `low`, disposable fixtures. The user's own
+`~/.claude` instructions and hooks were loaded, as in normal use.
+
+| Run | Kind / profile | Outcome | CLI cost estimate | Checked |
+| --- | --- | --- | --- | --- |
+| 1 | implement / copy | ok, claimed completed | $0.1478 | Claude ran `python3 -m unittest` itself (4 passed); report starts with the requirement table; patch applied cleanly with `git apply --check`; original unchanged; tools with outside effects and disallowed web tools absent from the session tool list |
+| 2 | implement / copy, continue | ok | $0.1851 | `--resume` reused the session; round patch held only the new function, cumulative patch both rounds; brief marked the appended words and the previous verdict |
+| 3 | analyze / readonly | ok, 5 items | $0.0669 | no sandbox wrapper; tools Read/Glob/Grep; report delivered through structured output; two questions surfaced as `questions_for_user` |
+| 4 | analyze / copy with Workflow | ok, 6 items | $0.5285 | built-in `codex-analyze` Workflow ran 5 agents in the background **without `--json-schema`**; the CLI waited for its completion and Claude wrote the deliverables afterwards; no output-enforcement message and no Stop-hook intervention appeared |
+
+After the multi-round fixes, one more real two-round flow: Claude added
+`multiply` (ok, $0.1430); Codex applied `delivery.patch` with the suggested
+commands, changed `multiply` to `multiply(*values)` in the original and recorded
+`applied=true`; the continued round ($0.1931) started from a copy rebuilt from
+the corrected original (`copy_rebased`), its brief carried the decision, Claude
+tested the variadic signature and added `power`, and the new `delivery.patch`
+(only that round's work, on top of the correction) applied to the original,
+where all 5 tests passed.
+
+Combined CLI client-side estimate **$1.2644** plus one connectivity probe whose
+cost the CLI did not report. Not a bill.
+
+## Limits
+
+- One real sample per scenario; the Workflow closure result is one small run,
+  not evidence for long reviews near the deadline.
+- `web=false` is an instruction plus removal of the web tools; Bash in the copy
+  can still reach the network. Credentials and other local paths are not
+  isolated (unchanged from 0.7.x isolated review).
+- `source_not_read` sees only reads in the main session stream.
+- Migration from 0.7.x (old runs, adopted-project files) was not exercised.
+
 # 0.7.1 release verification
 
 Full plugin version: `0.7.1+codex.20261003035940`. Fixed release ref: `v0.7.1`.

@@ -328,7 +328,7 @@ def main():
     print(json.dumps(registration, ensure_ascii=False, indent=2), flush=True)
     if backup:
         print(f"上次安装源保留在：{backup}")
-    print("插件版本和来源登记已核验。请打开一个新 Codex 任务加载更新。已有项目入口时直接提任务；首次项目可说‘这个项目以后采用 Codex–Claude 协作流程’。日常无需长口令。")
+    print("插件版本和来源登记已核验。请打开一个新 Codex 任务加载更新，然后直接说“让 Claude ……”即可。")
 
 
 if __name__ == "__main__":

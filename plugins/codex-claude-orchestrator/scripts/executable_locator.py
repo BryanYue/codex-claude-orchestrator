@@ -31,7 +31,6 @@ ZIP_PERSISTENCE_HINT = (
     "/absolute/path/to/claude; a Git marketplace checkout uses CLAUDE_BIN."
 )
 
-RETIRED_SELECTION_SOURCES =frozenset({"managed_native", "qualification"})
 
 
 def stale_setting_action(path: Path) -> str:

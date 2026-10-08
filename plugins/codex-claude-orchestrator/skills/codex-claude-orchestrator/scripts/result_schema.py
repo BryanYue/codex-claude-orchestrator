@@ -1,125 +1,119 @@
-"""Structured review reports and explicit coordinator finding decisions."""
+"""The result header Claude returns, and Codex's per-item decisions on it.
+
+The full answer lives in report.md; the header carries what Codex needs to
+triage: the claimed status, self-assessed acceptance, checks actually run,
+gaps, disputes and questions only the user can decide.  ``items`` is an
+optional appendix for findings or proposals.
+"""
 from __future__ import annotations
+
 from typing import Any
-from bridge_errors import BridgeError
 
-NONBLANK = r"\S"
-RESULT_SCHEMA: dict[str, Any] = {"type": "object", "required": ["status", "summary", "evidence", "checks", "unresolved"],
-                 "properties": {"status": {"enum": ["completed", "blocked"]},
-                                "summary": {"type": "string", "pattern": NONBLANK},
-                                "evidence": {"type": "array", "items": {"type": "string", "pattern": NONBLANK}},
-                                "checks": {"type": "array", "items": {"type": "string", "pattern": NONBLANK}},
-                                "unresolved": {"type": "array", "items": {"type": "string", "pattern": NONBLANK}}}}
+STATUSES = ("completed", "partial", "blocked")
+SELF_CHECKS = ("met", "not_met", "unverified")
+CONFIDENCE = ("verified", "inferred")
+DISPOSITIONS = ("accepted", "downgraded", "rejected")
 
 
-def result_payload(provider: dict[str, Any]) -> dict[str, Any]:
-    """Validate the structured report's schema: a non-blank summary and no blank list items.
-
-    This is shape, not adequacy: a short no-findings report is valid, and
-    whether its content is correct remains Codex's acceptance decision.
-    """
-    value = provider.get("structured_output")
-    if not isinstance(value, dict):
-        raise BridgeError("provider result lacks structured_output object")
-    if not isinstance(value.get("status"), str) or value["status"] not in {"completed", "blocked"} or not isinstance(value.get("summary"), str):
-        raise BridgeError("structured result has invalid status or summary")
-    if not value["summary"].strip():
-        raise BridgeError("structured result summary is blank")
-    for key in ("evidence", "checks", "unresolved"):
-        if not isinstance(value.get(key), list) or not all(isinstance(x, str) for x in value[key]):
-            raise BridgeError(f"structured result {key} must be an array of strings")
-        if not all(x.strip() for x in value[key]):
-            raise BridgeError(f"structured result {key} contains a blank item")
-    validate_findings(value)
-    return value
+def _strings() -> dict[str, Any]:
+    return {"type": "array", "items": {"type": "string"}}
 
 
-
-REVIEW_SCOPES = {"defects", "quality", "full"}
-CATEGORIES = {"defect", "design", "maintainability", "test", "documentation"}
-CONFIDENCES = {"reproduced", "code_confirmed", "probable", "subjective"}
-FINDING_SCHEMA: dict[str, Any] = {
-    "type": "object", "required": ["id", "category", "confidence", "summary", "evidence"],
-    "properties": {
-        "id": {"type": "string", "pattern": NONBLANK},
-        "category": {"enum": sorted(CATEGORIES)}, "confidence": {"enum": sorted(CONFIDENCES)},
-        "summary": {"type": "string", "pattern": NONBLANK},
-        "evidence": {"type": "array", "items": {"type": "string", "pattern": NONBLANK}},
-        "severity": {"enum": ["P0", "P1", "P2", "P3"]},
-        "location": {"type": "string", "pattern": NONBLANK},
-        "suggestion": {"type": "string", "pattern": NONBLANK},
-    },
+RESULT_PROPERTIES: dict[str, Any] = {
+    "status": {"type": "string", "enum": list(STATUSES)},
+    "summary": {"type": "string"},
+    "acceptance": {"type": "array", "items": {
+        "type": "object", "required": ["criterion", "self_check"], "additionalProperties": False,
+        "properties": {"criterion": {"type": "string"}, "self_check": {"type": "string", "enum": list(SELF_CHECKS)},
+                       "evidence": {"type": "string"}}}},
+    "tests_run": {"type": "array", "items": {
+        "type": "object", "required": ["command", "outcome"], "additionalProperties": False,
+        "properties": {"command": {"type": "string"}, "exit_code": {"type": ["integer", "null"]},
+                       "outcome": {"type": "string"}}}},
+    "not_verified": _strings(),
+    "disputes": _strings(),
+    "questions": _strings(),
+    "items": {"type": "array", "items": {
+        "type": "object", "required": ["id", "title", "confidence"], "additionalProperties": False,
+        "properties": {"id": {"type": "string"}, "title": {"type": "string"}, "severity": {"type": "string"},
+                       "confidence": {"type": "string", "enum": list(CONFIDENCE)}, "evidence": {"type": "string"},
+                       "location": {"type": "string"}}}},
 }
-FINDING_SCHEMA["allOf"] = [{"if": {"properties": {"confidence": {"enum": ["reproduced", "code_confirmed"]}}},
-                             "then": {"properties": {"evidence": {"minItems": 1}}}}]
-RESULT_SCHEMA["properties"]["findings"] = {"type": "array", "items": FINDING_SCHEMA}
-RESULT_SCHEMA["properties"]["coverage"] = {"type": "array", "items": {"type": "string", "pattern": NONBLANK}}
-RESULT_SCHEMA["properties"]["simplifications"] = {"type": "array", "items": {
-    "type": "object", "required": ["summary", "risk", "maintenance_cost", "suggestion"],
-    "properties": {key: {"type": "string", "pattern": NONBLANK}
-                   for key in ("summary", "risk", "maintenance_cost", "suggestion")}}}
 
 
-def validate_findings(value: dict[str, Any]) -> None:
-    if "simplifications" in value:
-        entries = value["simplifications"]
-        if not isinstance(entries, list) or not all(isinstance(item, dict) and all(
-                isinstance(item.get(key), str) and item[key].strip()
-                for key in ("summary", "risk", "maintenance_cost", "suggestion")) for item in entries):
-            raise BridgeError("simplifications require summary, risk, maintenance_cost and suggestion")
-    if "coverage" in value and (not isinstance(value["coverage"], list)
-            or not all(isinstance(x, str) and x.strip() for x in value["coverage"])):
-        raise BridgeError("coverage must be an array of nonblank strings")
-    if "findings" not in value:
+def json_schema(*, with_report: bool) -> dict[str, Any]:
+    """The --json-schema for the readonly profile, which has no file tools to write report.md."""
+    properties = dict(RESULT_PROPERTIES)
+    required = ["status", "summary"]
+    if with_report:
+        properties["report_markdown"] = {"type": "string"}
+        required.append("report_markdown")
+    return {"type": "object", "required": required, "additionalProperties": False, "properties": properties}
+
+
+def _check(value: Any, schema: dict[str, Any], where: str, errors: list[str]) -> None:
+    kind = schema.get("type")
+    kinds: list[str] = [str(name) for name in kind] if isinstance(kind, list) else [str(kind)]
+    matches = {"object": isinstance(value, dict), "array": isinstance(value, list), "null": value is None,
+               "string": isinstance(value, str),
+               "integer": isinstance(value, int) and not isinstance(value, bool)}
+    if not any(matches.get(name, False) for name in kinds):
+        errors.append(f"{where} must be {' or '.join(kinds)}")
         return
-    findings = value["findings"]
-    if not isinstance(findings, list):
-        raise BridgeError("findings must be an array")
-    seen = set()
-    for finding in findings:
-        if not isinstance(finding, dict):
-            raise BridgeError("finding must be an object")
-        for key in ("id", "summary"):
-            if not isinstance(finding.get(key), str) or not finding[key].strip():
-                raise BridgeError(f"finding {key} must be nonblank")
-        if finding["id"] in seen:
-            raise BridgeError("finding IDs must be unique")
-        seen.add(finding["id"])
-        if (not isinstance(finding.get("category"), str) or finding["category"] not in CATEGORIES
-                or not isinstance(finding.get("confidence"), str) or finding["confidence"] not in CONFIDENCES):
-            raise BridgeError("finding has an invalid category or confidence")
-        evidence = finding.get("evidence")
-        if not isinstance(evidence, list) or not all(isinstance(x, str) and x.strip() for x in evidence):
-            raise BridgeError("finding evidence must be an array of nonblank strings")
-        if finding["confidence"] in {"reproduced", "code_confirmed"} and not evidence:
-            raise BridgeError("confirmed finding requires evidence")
-        if "severity" in finding and finding["severity"] not in ("P0", "P1", "P2", "P3"):
-            raise BridgeError("finding severity must be P0, P1, P2 or P3")
-        for key in ("location", "suggestion"):
-            if key in finding and (not isinstance(finding[key], str) or not finding[key].strip()):
-                raise BridgeError(f"finding {key} must be nonblank")
+    if "enum" in schema and value not in schema["enum"]:
+        errors.append(f"{where} must be one of {', '.join(schema['enum'])}")
+    if isinstance(value, dict):
+        for key in schema.get("required", []):
+            if key not in value:
+                errors.append(f"{where}.{key} is required")
+        properties = schema.get("properties", {})
+        for key, item in value.items():
+            if key in properties:
+                _check(item, properties[key], f"{where}.{key}", errors)
+            elif schema.get("additionalProperties") is False:
+                errors.append(f"{where}.{key} is not a known field")
+    if isinstance(value, list) and "items" in schema:
+        for index, item in enumerate(value):
+            _check(item, schema["items"], f"{where}[{index}]", errors)
 
 
-def finding_decisions(findings: list[dict[str, Any]], decisions: Any) -> list[dict[str, Any]]:
-    """Keep every original finding and require reasons for changed conclusions."""
-    if not isinstance(findings, list) or not all(isinstance(item, dict) and isinstance(item.get("id"), str)
-                                              and item["id"].strip() for item in findings):
-        raise ValueError("stored legacy findings have no stable IDs; use returned/completed_by_codex with independent evidence")
+def validate(value: Any, *, with_report: bool = False) -> list[str]:
+    """Return problems with a result header; an empty list means it is well-formed."""
+    errors: list[str] = []
+    _check(value, json_schema(with_report=with_report), "result", errors)
+    if isinstance(value, dict) and isinstance(value.get("items"), list):
+        ids = [item["id"] for item in value["items"] if isinstance(item, dict) and isinstance(item.get("id"), str)]
+        if len(ids) != len(set(ids)):
+            errors.append("result.items ids must be unique")
+    return errors[:50]
+
+
+def item_decisions(items: list[dict[str, Any]], decisions: Any) -> list[dict[str, str]]:
+    """Require exactly one decision per reported item; downgrades and rejections need a reason."""
+    ids: list[str] = [item["id"] for item in items if isinstance(item, dict) and isinstance(item.get("id"), str)]
+    if not ids:
+        if decisions:
+            raise ValueError("the report has no items to decide")
+        return []
     if not isinstance(decisions, list):
-        raise ValueError("finding_decisions must be an array with one {finding_id, disposition, reason} per reported finding")
-    known = {item["id"] for item in findings}
-    seen = set()
-    for item in decisions:
-        if not isinstance(item, dict) or not isinstance(item.get("finding_id"), str):
-            raise ValueError("finding decision requires finding_id")
-        fid = item["finding_id"]
-        if fid not in known or fid in seen:
-            raise ValueError("finding decision must reference a unique reported finding")
-        seen.add(fid)
-        if not isinstance(item.get("disposition"), str) or item["disposition"] not in {"accepted", "downgraded", "rejected"}:
-            raise ValueError("invalid finding disposition")
-        if item["disposition"] != "accepted" and (not isinstance(item.get("reason"), str) or not item["reason"].strip()):
-            raise ValueError("downgraded/rejected findings require a reason")
-    if seen != known:
-        raise ValueError("record a decision for every reported finding; none may be silently discarded")
-    return decisions
+        raise ValueError("item_decisions must cover every reported item: " + ", ".join(ids))
+    normalized: list[dict[str, str]] = []
+    for decision in decisions:
+        if not isinstance(decision, dict) or set(decision) - {"id", "disposition", "reason"}:
+            raise ValueError("each item decision is {id, disposition, reason}")
+        disposition = decision.get("disposition")
+        reason = decision.get("reason")
+        if decision.get("id") not in ids or disposition not in DISPOSITIONS:
+            raise ValueError("item decisions use reported ids and disposition accepted, downgraded or rejected")
+        if disposition != "accepted" and (not isinstance(reason, str) or not reason.strip()):
+            raise ValueError("downgraded and rejected items need a reason")
+        entry = {"id": str(decision["id"]), "disposition": str(disposition)}
+        if isinstance(reason, str) and reason.strip():
+            entry["reason"] = reason.strip()
+        normalized.append(entry)
+    decided = [entry["id"] for entry in normalized]
+    if sorted(decided) != sorted(ids):
+        missing = sorted(set(ids) - set(decided))
+        raise ValueError("item_decisions must decide each reported item exactly once"
+                         + (": missing " + ", ".join(missing) if missing else ""))
+    return normalized

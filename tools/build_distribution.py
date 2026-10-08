@@ -27,7 +27,6 @@ LAUNCHER_RELATIVE = PLUGIN_RELATIVE / "scripts/launch.sh"
 INSTALL_COMMAND_RELATIVE = Path("Install.command")
 EXECUTABLE_RELATIVE_PATHS = frozenset({INSTALL_COMMAND_RELATIVE, LAUNCHER_RELATIVE})
 
-CODE_IDENTITY_RELATIVE = PLUGIN_RELATIVE / "code-identity.json"
 
 OMIT_DIR_NAMES = {".venv", "__pycache__", ".uv-cache", ".git", "dist",
                   ".pytest_cache", "coverage", ".mypy_cache", ".ruff_cache"}
@@ -157,48 +156,8 @@ def require_marketplace_identity(blobs: dict[Path, bytes]) -> None:
         raise BuildError(f"Marketplace identity name mismatch: {marketplace.get('name')!r}")
 
 
-def identity_paths(blobs: dict[Path, bytes], purpose: str) -> tuple[str, ...]:
-    """Read the committed declaration, never import the target installation."""
-    if purpose not in {"contract", "startup"}:
-        raise BuildError("Unknown code identity purpose")
-    try:
-        declaration = json.loads(required_bytes(blobs, CODE_IDENTITY_RELATIVE))
-    except (ValueError, UnicodeError) as exc:
-        raise BuildError("Code identity declaration is malformed") from exc
-    if not isinstance(declaration, dict) or declaration.get("schema_version") != 1:
-        raise BuildError("Unsupported code identity declaration")
-    purposes = declaration.get("purposes")
-    paths = purposes.get(purpose) if isinstance(purposes, dict) else None
-    seen = {purpose}
-    while isinstance(paths, str) and isinstance(purposes, dict):
-        if paths not in {"contract", "startup"} or paths in seen:
-            raise BuildError("Code identity purpose alias is unknown or cyclic")
-        seen.add(paths)
-        paths = purposes.get(paths)
-    if (not isinstance(paths, list) or not paths
-            or any(not isinstance(path, str) for path in paths) or len(paths) != len(set(paths))):
-        raise BuildError("Code identity paths must be a nonempty unique list of strings")
-    for relative in paths:
-        path = Path(relative)
-        if path.is_absolute() or path.as_posix() != relative or any(part in {".", ".."} for part in path.parts):
-            raise BuildError("Code identity declaration contains an unsafe path")
-    if "code-identity.json" not in paths or "scripts/identity_manifest.py" not in paths:
-        raise BuildError("Code identity must include its declaration and reader")
-    return tuple(paths)
-
-
-def contract_digest(blobs: dict[Path, bytes]) -> str:
-    # A package must also carry every declared startup dependency, even when
-    # its startup purpose has additional files outside the contract purpose.
-    for relative in identity_paths(blobs, "startup"):
-        required_bytes(blobs, PLUGIN_RELATIVE / relative)
-    entries = sorted((relative, hashlib.sha256(required_bytes(blobs, PLUGIN_RELATIVE / relative)).hexdigest())
-                     for relative in identity_paths(blobs, "contract"))
-    return hashlib.sha256(json.dumps(entries, sort_keys=True).encode()).hexdigest()
-
-
 def plugin_code_digest(blobs: dict[Path, bytes]) -> str:
-    """Digest of the plugin files (path + byte SHA-256), as scripts/plugin_identity.code_digest computes it at run time."""
+    """Digest over every plugin file path and its byte SHA-256."""
     entries = sorted([path.relative_to(PLUGIN_RELATIVE).as_posix(), hashlib.sha256(content).hexdigest()]
                      for path, content in blobs.items() if path.is_relative_to(PLUGIN_RELATIVE))
     return hashlib.sha256(json.dumps(entries, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
@@ -254,7 +213,6 @@ def build(*, source_root: Path, output: Path | None = None) -> dict:
     full_version, base = read_manifest_version(blobs)
     require_matching_base_version(blobs, base)
     require_marketplace_identity(blobs)
-    digest = contract_digest(blobs)
     code_digest = plugin_code_digest(blobs)
 
     if output is None:
@@ -283,7 +241,6 @@ def build(*, source_root: Path, output: Path | None = None) -> dict:
             "plugin_version": full_version,
             "base_version": base,
             "source_commit": commit,
-            "contract_digest": digest,
             "plugin_code_digest": code_digest,
             "file_count": len(manifest),
         }
@@ -317,7 +274,7 @@ def build(*, source_root: Path, output: Path | None = None) -> dict:
         "bytes": archive_path.stat().st_size, "files": len(manifest),
         "sha256": archive_digest, "version": base,
         "plugin_version": full_version, "source_commit": commit,
-        "contract_digest": digest, "plugin_code_digest": code_digest,
+        "plugin_code_digest": code_digest,
     }
 
 

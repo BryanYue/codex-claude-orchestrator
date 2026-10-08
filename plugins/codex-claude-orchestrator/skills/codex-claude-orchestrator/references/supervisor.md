@@ -1,34 +1,19 @@
 # 原生 Codex 监督子代理
 
-这是 Skill 对原生子代理的派单约定，不是另一个 Claude 协调者，也不是插件注册的自定义模型。满足独立性、并行工作或上下文隔离需要，且客户端支持原生子代理时，使用实际 spawn/send/wait 工具；短任务可由主代理直接管理 MCP；不要用 create_thread 创建用户侧任务。
+监督子代理是主 Codex 派出的原生子代理，负责启动和看护一个 Claude run；它不是另一个协调者。短任务由主代理直接用 MCP 管理即可。
 
-## 派单
+## 主代理派单时给它
 
-主 Codex 发给一个监督席：本 Skill 绝对路径；任务目录与现有 PROGRESS；明确的 task/lane、cwd、revision；user_request 原话/原始来源/批准 delta/适用协议；review_scope、review_mode 与文件/资源范围；约束与验收；运行上限；模型/effort；本轮 packet 或构造它所需的完整材料；主代理保留的并行核验工作。规则明确的监督默认采用宿主适用的轻量模型路由，不静默更换用户指定型号。
+- 本 Skill 的绝对路径，以及完整的 packet（或构造 packet 所需的全部原件：用户原话逐字、原件路径、约束及其 origin、完成标准）。
+- 运行上限、模型与 effort、需要回传的时机。
+- 明确权限：它可以启动、等待、按要求取消 Claude run，并回传事实；它不改业务文件、不调用 `claude_decide`、不改变目标或范围、不再派嵌套子代理，也不调用 `open_in_codex`。
 
-说明唯一权限归属：监督席可启动/观察/按要求取消 Claude 和回传证据；不直接改业务文件，不改项目 PROGRESS，不批准 accepted，不改变目标、oracle 或 file scope。implementation 中 Claude 是本轮唯一获派业务写入者；isolated review 只在副本写入，原仓写入归属仍由主代理协调。主代理负责共享记录和验收。
+## 它的执行步骤
 
-## 执行
+1. 直接使用 `claude_*` MCP 工具；工具不可用就如实回报，不改用直接调用 CLI 或临时脚本冒充。
+2. `claude_start` 只调用一次，立即把 `run_id` 回传给主代理。
+3. 用 `claude_wait` 和游标等待；阶段变化、故障或结束时简短回传，无变化时不刷屏。
+4. 收到停止指令先 `claude_cancel`，等 run 结束后再回传。
+5. 结束后回传：run_id、`run_outcome`、`claimed_status`、警告清单（尤其 `questions_for_user` 原文）、报告和 patch 的位置、它自己未能核实的内容。
 
-1. 读取本 Skill、packet 和实际来源。包括审查插件自身在内，本轮委派通过插件建立；不要把禁止 Claude 递归派单解释为禁止 Codex 管理本轮。直接发现 `claude_*` MCP 工具；不可见时回报工具不可用，不自行反复安装、另起协调者或把 shell 后备伪称为原生 MCP 调用。
-2. 本地/必要在线预检后只启动一次，立即用父代理通信工具回传 run_id、cwd、task/revision、执行者、（本监督席的）details_url 与 run_dir，仅供参考。主代理不直接复用该 details_url；改用自己的 MCP 连接调用 `claude_details(run_id)` 取得本方链接，再按打开请求记账决定是否打开一次（`queued` 只表示排队）。监督席不负责操作主窗口，也不自行调用 `open_in_codex`。
-3. 用 claude_wait(compact=true) 与游标等待真实活动；start/status/details 也使用 compact=true，需要完整报告时按需 claude_result。阶段变化、重要工具/文件活动、故障或终态时发简短消息；普通无变化等待不刷屏。无需伪造总进度百分比。记录 `reported` 与接受结论的区别。
-4. 收到主代理停止消息，先 claude_cancel 再等终态回执；回传停止证据与残留变更。不要先结束自己的会话，让取消无法送达。当前 Runtime 允许非 owner 对已确认仍活动的 run 写持久取消请求；这不代表立即停止。终态、unknown 或无法确认活跃 Bridge 时请求仍可能被拒绝，应回传实际原因并协调原 owner 核查，不能猜 PID 或盲目重启。
-5. Claude 结束后读取 receipt/result、权限拒绝、Git 前后证据，回传摘要、问题/不确定性、原始记录路径。主代理亲自看文件和执行所需检查，仅对未被 superseded 的 reported 轮次调用 claude_decide，并更新任务记录。failed/cancelled/timeout/blocked/unknown 不调用该接口、不改原状态；主代理独立完成任务时，在既有 PROGRESS 记录 run_id、原状态、完成者 Codex、completion_summary、reason、evidence 和未完成事项。
-
-插件升级后先确认本席实际加载版本；旧连接失败不能靠直接 CLI 补位，新连接成功也不能证明主代理旧连接已更新。
-
-MCP 连接/监督任务结束会影响本地详情服务；主代理需要继续查看时用自己的 claude_details 重新获取入口。不要把一次 session 的 token URL 写成永久文档入口，持久记录使用 run_id/run_dir。
-
-## 纠正
-
-主代理保持该监督席作为明确运行 owner，给出本轮修正的原要求、反例、finding_id 与次数。局部已完成纠正可 resume；结构/方向变化须停止受影响写入、核查部分产物、fresh。监督席不自行“再试一轮”。完整 v2.9 的同一 finding 一轮自修后由主代理裁决，换执行者不清零。
-
-## 必须回传
-
-- 实际路径：原生 Codex 监督席 → MCP → Claude；MCP 不可用时如实报告未派发。
-- run_id / task / revision / cwd / 实际 session 和模型。
-- 本轮输入来源、文件证据、真实检查与未运行检查。
-- 当前状态、必要纠正/需主代理决定的问题、详情入口。
-
-主代理仍是唯一面对用户交付、接受结果和调整工作方向的协调者。
+主代理用自己的 `claude_status(run_id)` 取得工作台链接，亲自核验后调用 `claude_decide`，并负责对用户交付。

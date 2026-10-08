@@ -273,7 +273,7 @@ class InstallationTests(unittest.TestCase):
                'auth': {'status': 'not_logged_in', 'email': 'private@example.test', 'token': 'PRIVATE'},
                'cli': {'version': 'test'}, 'raw': 'PRIVATE'}
         with patch.object(diagnostics, 'codex_cli', return_value=None), \
-                patch.object(diagnostics.bridge, 'check_environment', return_value=env), \
+                patch.object(diagnostics.cli_env, 'check', return_value=env), \
                 patch.object(diagnostics.shutil, 'which', return_value=None):
             report = diagnostics.collect(str(self.base))
         encoded = json.dumps(report)
@@ -305,7 +305,7 @@ class InstallationTests(unittest.TestCase):
                'cli': {'version': '2.1.277', 'profile': {'status': 'tested'}}}
         with patch.object(diagnostics, 'codex_cli', return_value=str(fake)), \
                 patch.object(diagnostics, 'host_source', return_value='path'), \
-                patch.object(diagnostics.bridge, 'check_environment', return_value=env), \
+                patch.object(diagnostics.cli_env, 'check', return_value=env), \
                 patch.object(diagnostics, 'locate_claude', return_value={'path': '/fixture/claude', 'source': 'PATH', 'configured': False, 'candidate': 'claude'}), \
                 patch.object(diagnostics.shutil, 'which', return_value='/fixture/uv'):
             report = diagnostics.collect(str(self.base))

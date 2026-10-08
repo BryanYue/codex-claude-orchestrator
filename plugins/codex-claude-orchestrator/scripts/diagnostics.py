@@ -11,13 +11,8 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "skills/codex-claude-orchestrator/scripts"))
-import bridge
-import cli_store
-import startup_protocol
-import cli_validation
-from executable_locator import locate_claude
-
-import cli_updates
+import cli_env  # noqa: E402
+from executable_locator import locate_claude  # noqa: E402
 
 
 def _host_candidates() -> list[tuple[str, str]]:
@@ -60,81 +55,7 @@ def host_source(cli: str | None) -> str | None:
     return next((source for candidate, source in _host_candidates() if Path(candidate).resolve() == resolved), 'path')
 
 
-def _recent_real_provider_call(runs: list[dict] | None) -> dict:
-    """Require a response witness; CLI initialization alone is not a model call."""
-    initialization_seen = False
-    for run in runs or []:
-        if not isinstance(run, dict):
-            continue
-        initialization_seen |= isinstance(run.get("session_id"), str)
-        if run.get("provider_response_observed") is not True and run.get("execution_evidence") != "provider_event":
-            continue
-        environment = run.get("environment") if isinstance(run.get("environment"), dict) else {}
-        source = run.get("actual_model_source")
-        models = [name for name in run.get("actual_models", []) if isinstance(name, str) and name] if isinstance(run.get("actual_models"), list) else []
-        if not models and source and isinstance(run.get("actual_model"), str):
-            models = [run["actual_model"]]
-        return {
-            "status": "recorded",
-            "at": run.get("updated_at") or run.get("started_at"),
-            "cli_version": environment.get("cli_version"),
-            "actual_model": models[0] if len(models) == 1 else None,
-            "actual_models": models,
-            "actual_model_source": source,
-            "run_status": run.get("status"),
-            "omitted_fields": ["run_id", "session_id"],
-            "detail_note": "Raw run and session identifiers are available only in the corresponding run details.",
-        }
-    if initialization_seen:
-        return {"status": "unconfirmed", "note": "A CLI session is recorded, but these records do not establish a provider response. Initialization or missing legacy evidence is not a confirmed model call."}
-    return {"status": "not_recorded", "note": "No persisted supervised provider response is available."}
-
-
-def _legacy_records() -> dict:
-    """Retained managed-CLI history; read without hashing, locks or writes."""
-    try:
-        value = cli_store.legacy_records()
-        return value if isinstance(value, dict) else {"status": "unavailable", "reason": "legacy CLI records had an invalid shape"}
-    except (OSError, RuntimeError, ValueError) as exc:
-        return {"status": "unavailable", "reason": str(exc)}
-
-
-def _validation_status(job_id: str | None) -> dict | None:
-    """Retired validation history is read without locks, reconciliation or writes."""
-    if job_id is None:
-        return None
-    try:
-        value = cli_validation.read_status(job_id)
-        return value if isinstance(value, dict) else {"status": "unavailable", "reason": "validation status had an invalid shape"}
-    except (OSError, RuntimeError, ValueError) as exc:
-        return {"status": "unavailable", "job_id": job_id, "reason": str(exc)}
-
-
-def _maintenance_status() -> dict:
-    """Read the local CLI status; version management itself is retired."""
-    try:
-        value = cli_updates.status()
-        return value if isinstance(value, dict) else {"state": "unavailable", "reason": "local CLI status had an invalid shape"}
-    except Exception as exc:
-        return {"state": "unavailable", "reason": f"{type(exc).__name__}: {exc}"}
-
-
-def _bridge_startup(supplied: dict | None) -> dict:
-    """Bridge startability is its own dimension; it never changes CLI login or readiness."""
-    if isinstance(supplied, dict):
-        return supplied
-    try:
-        script = Path(bridge.__file__).resolve()
-        loaded = startup_protocol.loaded_identity(startup_protocol.plugin_root(script))
-        value = startup_protocol.startup_readiness(loaded, script)
-        value['runtime_state'] = 'not_supplied'
-        return value
-    except Exception as exc:
-        return {'ready': False, 'status': 'unavailable', 'reason': f'{type(exc).__name__}: {exc}'}
-
-
-def collect(cwd: str, *, recent_runs: list[dict] | None = None, job_id: str | None = None,
-            bridge_startup: dict | None = None) -> dict:
+def collect(cwd: str) -> dict:
     folder = Path(cwd)
     if not folder.is_absolute() or not folder.is_dir():
         raise ValueError('cwd must be an existing absolute directory')
@@ -153,63 +74,16 @@ def collect(cwd: str, *, recent_runs: list[dict] | None = None, job_id: str | No
                 host['desktop_compatibility'] = 'verified'
         except (OSError, subprocess.TimeoutExpired):
             host['error'] = 'host_check_unavailable'
-    environment = bridge.check_environment(folder, verify=False)
+    environment = cli_env.check(folder)
     discovery = locate_claude()
-    legacy = _legacy_records()
-    validation = _validation_status(job_id)
-    maintenance = _maintenance_status()
-    # Intentionally exclude the account identifier and full environment payload.
+    # Only selected fields: never the account identifier or the full environment payload.
     claude = {key: environment.get(key) for key in ('ready', 'status') if key in environment}
     claude['version'] = (environment.get('cli') or {}).get('version')
-    claude['version_policy'] = 'diagnostic_only'
     claude['auth_status'] = (environment.get('auth') or {}).get('status')
     claude['credential_validity'] = (environment.get('auth') or {}).get('credential_validity')
-    claude['compatibility'] = {key: value for key, value in (environment.get('compatibility') or {}).items()
-                               if key in ('status', 'evidence', 'behavior_verified', 'missing_flags', 'missing_groups')}
-    claude['discovery'] = {
-        key: discovery.get(key) for key in ('path', 'source', 'configured', 'candidate', 'settings_path')
-    }
-    installation = environment.get("installation") if isinstance(environment.get("installation"), dict) else {
-        "status": "installed" if (environment.get("cli") or {}).get("installed") else "missing",
-        "path": (environment.get("cli") or {}).get("path"),
-    }
-    auth = environment.get("auth") if isinstance(environment.get("auth"), dict) else {"status": "not_checked"}
-    probe = environment.get("probe") if isinstance(environment.get("probe"), dict) else {"status": "not_requested"}
-    compatibility = environment.get("compatibility") if isinstance(environment.get("compatibility"), dict) else {
-        "status": "unknown",
-        "capabilities": (environment.get("cli") or {}).get("capabilities", {}),
-        "unavailable_capabilities": (environment.get("cli") or {}).get("unavailable_capabilities", []),
-    }
-    active = {
-        "path": (environment.get("cli") or {}).get("path"),
-        "source": (environment.get("cli") or {}).get("source"),
-        "version": (environment.get("cli") or {}).get("version"),
-        "version_policy": "diagnostic_only",
-        "dispatch_ready": bool(environment.get("ready")),
-        "status": environment.get("status"),
-        "compatibility": compatibility,
-    }
-    for key in ("version_probe", "help_probe"):
-        if isinstance((environment.get("cli") or {}).get(key), dict):
-            active[key] = environment["cli"][key]
-    cli_management = {
-        "schema_version": 2,
-        "policy": "user_local_cli",
-        "version_management": "retired",
-        "active": active,
-        "legacy_records": legacy,
-        "validation": validation,
-        "maintenance": maintenance,
-        "dimensions": {
-            "installation": installation,
-            "login": {key: auth.get(key) for key in ("status", "credential_validity", "cleanup_status") if key in auth},
-            "probe": {key: probe.get(key) for key in ("status", "checked_at", "requested_model", "cleanup_status") if key in probe},
-            "recent_real_provider_call": _recent_real_provider_call(recent_runs),
-            "compatibility": compatibility,
-        },
-        "note": ("Dispatch uses only this local CLI. Retained managed records and historical validation jobs are "
-                 "observational and never select or block an executable."),
-    }
+    claude['missing_flags'] = (environment.get('cli') or {}).get('missing_flags') or []
+    claude['sandbox_available'] = (environment.get('sandbox') or {}).get('available')
+    claude['discovery'] = {key: discovery.get(key) for key in ('path', 'source', 'configured', 'candidate', 'settings_path')}
     uv_ready = shutil.which('uv') is not None
     steps = []
     if host['desktop_compatibility'] != 'verified':
@@ -217,16 +91,12 @@ def collect(cwd: str, *, recent_runs: list[dict] | None = None, job_id: str | No
     if not uv_ready:
         steps.append('安装 uv 后重新运行安装检查：https://docs.astral.sh/uv/getting-started/installation/')
     if not environment.get('ready'):
-        steps.append(environment.get('action') or '在 Codex 中说“检查 Claude 安装、登录与版本兼容情况”，按检查结果处理。')
+        steps.append(environment.get('action') or '在 Codex 中说“检查 Claude 安装和登录”，按检查结果处理。')
     if discovery.get('action') and discovery.get('action') not in steps:
         steps.append(discovery['action'])
-    return {'schema_version': 2, 'plugin': {'name': manifest['name'], 'version': manifest['version']},
+    return {'schema_version': 3, 'plugin': {'name': manifest['name'], 'version': manifest['version']},
             'platform': {'system': platform.system(), 'machine': platform.machine()},
             'codex': host, 'uv_installed': uv_ready, 'claude': claude,
-            'bridge_startup': _bridge_startup(bridge_startup),
-            'cli_management': cli_management,
-            'cli_maintenance': maintenance,
             'ready': bool(host['desktop_compatibility'] == 'verified' and uv_ready and environment.get('ready')),
-            'next_steps': steps,
-            'remote_credentials_verified': False,
+            'next_steps': steps, 'remote_credentials_verified': False,
             'data_policy': 'Local diagnostics omit credentials, account identity, prompts and task artifacts; no telemetry is sent.'}

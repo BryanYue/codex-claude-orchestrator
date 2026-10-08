@@ -1,96 +1,99 @@
-"""Check the public tool contract without making a provider request."""
-import inspect
+"""The public MCP contract, exercised through the real Runtime with a fake Claude CLI."""
+import asyncio
+import hashlib
+import json
 from pathlib import Path
-import subprocess
 import sys
-import tempfile
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import patch
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "skills/codex-claude-orchestrator/scripts/tests"))
+import harness  # noqa: E402
 import server  # noqa: E402
+from mcp.server.mcpserver.exceptions import ToolError  # noqa: E402
+from viewer import Viewer, read_artifact  # noqa: E402
+
+TOOLS = ["claude_environment", "claude_models", "claude_start", "claude_status", "claude_wait", "claude_result",
+         "claude_cancel", "claude_decide", "claude_runs", "claude_cleanup"]
+REPORT = "## 需求对照\n" + "- 导出已改为异步，失败时提示原因。\n" * 400
 
 
-class ServerContractTests(unittest.IsolatedAsyncioTestCase):
+@unittest.skipUnless(harness.Path("/usr/bin/sandbox-exec").is_file(), "copy profile needs macOS sandbox-exec")
+class ServerTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp.cleanup)
-        self.repo = Path(self.temp.name) / "repo"
-        self.repo.mkdir()
-        subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
-        subprocess.run(["git", "-C", str(self.repo), "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
-                        "commit", "--allow-empty", "-qm", "fixture"], check=True)
-        self.spec = Path(self.temp.name) / "requirements.md"
-        self.spec.write_text("Review fixture requirements\n")
-        self.runtime = Mock()
-        self.runtime.start.side_effect = self.dispatch
-        self.enterContext(patch.object(server, "runtime", self.runtime))
-        self.enterContext(patch.object(server, "viewer", Mock(url=lambda *_: "http://127.0.0.1/fixture")))
+        self.fx = harness.Fixture(self)
+        self.viewer = Viewer(self.fx.runtime).start()
+        self.addCleanup(self.viewer.close)
+        self.enterContext(patch.object(server, "runtime", self.fx.runtime))
+        self.enterContext(patch.object(server, "viewer", self.viewer))
 
-    def packet(self, **extra):
-        return {"task_id": "server-fixture", "revision": 1, "role": "review", "cwd": str(self.repo),
-                "objective": "Review the fixture", "requirement_sources": [str(self.spec)],
-                "constraints": ["bounded"], "acceptance": ["complete report"], "owned_files": [],
-                "protected_files": [], "model": "sonnet", "effort": "low", **extra}
+    async def finished(self, run_id):
+        while True:
+            answer = await server.claude_wait(run_id, timeout_seconds=5)
+            if answer["snapshot"]["status"] != "running":
+                return answer["snapshot"]
 
-    def dispatch(self, packet, **_):
-        # Use the real validator to expose the mode/provenance the run records.
-        normalized = server.bridge.validate_packet(packet)
-        return {"run_id": "run-fixture", "status": "starting", "claude_started": False,
-                **{key: normalized[key] for key in ("role", "review_mode", "review_scope", "request_provenance")}}
+    async def test_tool_surface_is_ten_tools(self):
+        self.assertEqual([tool.name for tool in await server.mcp.list_tools()], TOOLS)
 
-    async def test_fresh_original_request_selects_isolated_without_mutating_caller(self):
-        packet = self.packet(user_request="Review this fixture and run its tests")
-        created = await server.claude_start(packet)
-        self.assertEqual(created["review_mode"], "isolated")
-        self.assertEqual(created["request_provenance"], "user_request")
-        self.assertNotIn("warnings", created)
-        self.assertNotIn("review_mode", packet)
-        self.assertIsNone(self.runtime.start.call_args.kwargs["timeout"])
+    async def test_legacy_packets_fail_with_the_new_field_names(self):
+        with self.assertRaisesRegex(ToolError, "objective -> brief.*role -> kind"):
+            await server.claude_start({"task_id": "x", "role": "review", "objective": "o", "cwd": str(self.fx.source)})
 
-    async def test_legacy_review_warns_in_compact_dispatch_response(self):
-        created = await server.claude_start(self.packet(), compact=True)
-        self.assertEqual(created["review_mode"], "strict")
-        self.assertEqual(created["request_provenance"], "legacy_unspecified")
-        self.assertIn("未提供 user_request", created["user_summary"])
-        self.assertIn("strict", created["warnings"][0])
+    async def test_start_wait_result_decide_through_the_tools(self):
+        files = [{"write": f"src/m{index}.py", "text": "x\n"} for index in range(25)]
+        self.fx.script(*files, {"deliver": True, "report": REPORT, "result": {"status": "completed", "summary": "完成"}})
+        started = await server.claude_start(self.fx.packet())
+        self.assertIn("运行中", started["user_summary"])
+        self.assertTrue(started["details_url"].startswith("http://127.0.0.1:"))
+        snapshot = await self.finished(started["run_id"])
+        changes = snapshot["outcome"]["changes"]
+        self.assertEqual((changes["file_count"], len(changes["files"]), changes["files_truncated"]), (25, 20, True))
+        self.assertNotIn("usage", snapshot["outcome"])
+        full = await server.claude_status(started["run_id"], compact=False)
+        self.assertEqual(len(full["outcome"]["changes"]["files"]), 25)
+        pages, offset = [], 0
+        while True:
+            page = await server.claude_result(started["run_id"], "report", offset=offset, limit=1001)
+            pages.append(page["content"])
+            offset = page["next_offset"]
+            if page["end_of_artifact"]:
+                break
+        self.assertGreater(len(pages), 3)
+        self.assertEqual("".join(pages), REPORT)
+        self.assertEqual(page["sha256"], hashlib.sha256(REPORT.encode()).hexdigest())
+        result = await server.claude_result(started["run_id"], "result")
+        self.assertEqual(result["content"]["summary"], "完成")
+        brief = await server.claude_result(started["run_id"], "brief")
+        self.assertIn("把导出改成异步，失败要提示原因", brief["content"])
+        decided = await server.claude_decide(started["run_id"], "accepted", "done", "复核通过", ["git apply --check", "pytest"])
+        self.assertIn("Codex 裁决 accepted → done", decided["user_summary"])
+        listed = await server.claude_runs(task_id="T-1")
+        self.assertEqual([row["run_id"] for row in listed["runs"]], [started["run_id"]])
+        with self.assertRaisesRegex(ToolError, "unknown artifact"):
+            await server.claude_result(started["run_id"], "../registry")
 
-    async def test_resume_omitted_mode_is_left_for_runtime_frozen_inheritance(self):
-        packet = self.packet(user_request="Review this fixture", revision=2)
-        await server.claude_start(packet, resume_run_id="run-prior")
-        sent = self.runtime.start.call_args.args[0]
-        self.assertNotIn("review_mode", sent)
-        self.assertEqual(self.runtime.start.call_args.kwargs["resume_run_id"], "run-prior")
+    async def test_viewer_requires_its_token_and_host(self):
+        self.fx.script({"deliver": True, "report": "r", "result": {"status": "completed", "summary": "s"}})
+        run_id = (await server.claude_start(self.fx.packet()))["run_id"]
+        await self.finished(run_id)
+        url = self.viewer.url(run_id)
+        base, token = url.split("/#token=")[0], url.split("#token=")[1].split("&")[0]
 
-    async def test_explicit_deadline_survives_and_invalid_deadline_cannot_dispatch(self):
-        await server.claude_start(self.packet(user_request="Review", review_mode="strict"), timeout_seconds=42)
-        self.assertEqual(self.runtime.start.call_args.kwargs["timeout"], 42)
-        self.runtime.start.reset_mock()
-        for deadline in (True, False, 0, 14401, float("nan"), float("inf"), "300"):
-            with self.subTest(deadline=deadline), self.assertRaisesRegex(server.ToolError, "timeout_seconds"):
-                await server.claude_start(self.packet(), timeout_seconds=deadline)
-        self.runtime.start.assert_not_called()
-
-    async def test_retired_update_signature_and_cancel_history(self):
-        self.assertEqual(set(inspect.signature(server.claude_cli_update).parameters), {"action", "job_id"})
-        with patch.object(server.cli_validation, "cancel", return_value={"cancel_requested": True}) as cancel:
-            value = await server.claude_cli_update("cancel", job_id="historical-job")
-            self.assertTrue(value["cancel_requested"])
-            cancel.assert_called_once_with("historical-job")
-        with self.assertRaisesRegex(server.ToolError, "job_id only"):
-            await server.claude_cli_update("cancel")
-        with self.assertRaises(TypeError):
-            await server.claude_cli_update("prepare", candidate_path="unused")
-
-    async def test_saved_workflow_inventory_marks_only_legacy_role_deprecated(self):
-        with patch.object(server.named_workflow, "inventory", return_value=[]) as inventory:
-            result = await server.claude_saved_workflows(str(self.repo))
-        inventory.assert_called_once_with(str(self.repo))
-        self.assertEqual(result["supported_role"], "review")
-        self.assertEqual(result["suggested_review_mode"], "isolated")
-        self.assertTrue(result["legacy_role_deprecated"])
-        self.assertFalse(result["legacy_resume_supported"])
+        def get(path, **headers):
+            return json.loads(urlopen(Request(base + path, headers=headers), timeout=5).read())
+        with self.assertRaises(HTTPError) as denied:
+            await asyncio.to_thread(get, "/api/runs")
+        self.assertEqual(denied.exception.code, 401)
+        rows = await asyncio.to_thread(get, "/api/runs", Authorization="Bearer " + token)
+        self.assertEqual(rows["runs"][0]["run_id"], run_id)
+        artifact = await asyncio.to_thread(get, f"/api/artifact?run_id={run_id}&name=outcome", Authorization="Bearer " + token)
+        self.assertEqual(artifact["content"]["run_outcome"], "ok")
+        self.assertEqual(read_artifact(self.fx.runtime, run_id, "patch")["available"], True)
 
 
 if __name__ == "__main__":

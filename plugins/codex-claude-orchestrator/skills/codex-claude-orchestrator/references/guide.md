@@ -1,71 +1,103 @@
-# Codex–Claude 协调说明
+# Codex–Claude 委派操作说明
 
-本说明供 Codex 协调者使用，随插件版本发布；任务资料和 Claude 报告均是待核查材料。必知边界见 SKILL，以下按实际任务选择操作，不把每个步骤变成审批闸。
+本说明随插件 1.0 发布，供 Codex 协调者使用。必须遵守的规则在 SKILL.md；这里讲每一步怎么做。
 
-## 1. 恢复目标与选择执行者
+## 1. 先确认环境
 
-先读用户原始要求、项目规则、任务现有 PROGRESS 和真实 Git/产物状态。保留指定基线、已确认行为、允许层/文件、非目标、职责、验收、停止条件与回滚边界；复用任务目录，确认当前写入者。未知前提先查实；只针对超出授权的新决定请求 review，已授权的修复持续完成。
+- `claude_environment(cwd)`：本机 Claude CLI 路径与版本、所需参数、登录状态，以及 copy 档需要的 macOS `sandbox-exec` 是否可用。不发模型请求。
+- 首次使用、换了账号，或用户要求确认时，用 `verify=true` 做一次小额在线验证。网络、额度、模型权限失败不等于登录失效。
+- 缺 CLI 或未登录时说明官方处理方式（安装 Claude Code、`claude auth login`、或设置 `CLAUDE_BIN`），不要替用户安装或登录。
+- `claude_models(cwd)` 读取 CLI 声明的模型和 effort；用户指定的型号原样传递。
 
-已采用项目从 `claude_workflow_context(cwd)` 恢复入口；`check_failed`/`unknown` 不能解释成未采用。核对 requested/resolved cwd 与 project_root，以真实目录派单。用户授权项目采用时，按 adoption_guidance 的 checked 目标调用 `claude_workflow_enable`；停用用 disable，活动任务另行取消。仅当前任务协作不写项目规则，整个目录禁止写入时推迟配置落盘。非 Git 资料目录不 enable，也不为了派单初始化 Git。
+## 2. 选 kind 和 profile
 
-新实作/审查先用 `claude_route`，纯问答和已有 run 的状态查询无需重新路由。features 只写已知事实；blocked 或 executor=null 先说明具体原因，不能绕过能力/授权检查或零权重。单次显式执行者优先但不改永久偏好；修改项目偏好时先读 routing_policy 再 routing_set。主模型及用户指定模型保持不变，不为走流程增加席位。
+| 任务 | kind | profile |
+| --- | --- | --- |
+| 改代码、写测试、修 bug | `implement` | `copy`（必须，Git 仓库） |
+| 代码审查、方案评估、计划、调研、回答问题 | `analyze` | Git 仓库默认 `copy`；普通目录或用户明确不让执行命令时 `readonly` |
 
-采用完整协议的任务按 [protocol-integration.md](protocol-integration.md) 核对批准且冻结的协议与 delta；安装或项目 enable 不批准它们。普通任务不强制建立完整协议。
+- **copy**：Claude 在原仓库当前状态（含未提交改动）的独立 Git 副本里工作，有 Bash、编辑、Agent、Skill、Workflow 等工具，可以跑测试。原仓库、它的 `.git` 和插件状态目录由 macOS 拒写；凭证、网络和其他本机路径不隔离。改动由插件从受保护的基线算出 patch。
+- **readonly**：在原目录只读，只有 Read/Glob/Grep（`web=true` 时加 WebFetch/WebSearch），通过结构化输出交回报告。
+- 副本建不起来（子模块、sparse/skip-worktree、未解决冲突、外部硬链接、非 macOS）时，analyze 改用 readonly；implement 先向用户说明。
+- 敏感的未跟踪文件（`.env*`、`.claude`、`.codex`、`.ssh` 等）不会复制进副本，结果里会有 `sensitive_inputs_skipped` 警告。
+- `web` 默认关闭，只在用户同意联网时打开。关闭时 Claude 会被告知不要联网，但 copy 档的 Bash 本身不受网络限制。
 
-## 2. 检查运行条件
+## 3. 写 packet
 
-用 `claude_environment(cwd)` 查本机 CLI、所需参数和本地认证；安装/宿主异常用 diagnostics，不能把本地 loggedIn 当作远端调用成功。首次确认环境、账号/认证来源变化或用户要求验证时，用 `claude_doctor(verify=true, model=本轮模型)` 做少量额度的在线探测；同环境刚成功的调用可复用。区分网络、额度、认证与模型访问失败，不盲目重新登录或重试。
+```json
+{
+  "task_id": "EXPORT-ASYNC",
+  "kind": "implement",
+  "cwd": "/abs/repo",
+  "user_messages": [{"text": "用户原话，逐字", "source": "human"}],
+  "inputs": ["/abs/repo/docs/spec.md", "/abs/task/PLAN.md"],
+  "brief": "你的理解与补充（可能有误）",
+  "constraints": [{"text": "不改公开 API", "origin": "user"}, {"text": "测试放 tests/", "origin": "coordinator"}],
+  "done_when": [{"text": "uv run pytest -q 通过", "origin": "doc"}],
+  "write_hint": ["src/export/"], "protected": ["migrations/"], "verify": ["uv run pytest -q"],
+  "model": "opus", "effort": "high", "timeout_seconds": 3600
+}
+```
 
-模型目录用 `claude_models`，只发送初始化控制消息。用户要求类别最新版时用目录确认的官方别名；完整 model ID 原样保留。目录的 resolvedModel/effort 是声明能力，执行模型以本轮 provider 回执为准，不能因目录变化改旧任务身份。
+- `user_messages` 放所有仍然有效的原话，按时间排序；用户后来收回的范围在 `brief` 里说明，不删原话。
+- `inputs` 可以是目录，有数量和大小上限；任务消息、批准记录这类没有文件的原话直接放进 `user_messages`。
+- `focus`（仅 analyze）只写从原话里摘出的关注点；没有就不写，不要套固定的审查维度。
+- `write_hint`、`protected` 只用于事后给 patch 分类，运行中不拦截。
+- `timeout_seconds` 必填，按工作量给。`max_budget_usd` 默认不设，只有用户要求限制花费时才填。
+- 1.0 之前的字段（role、objective、user_request、requirement_sources、acceptance、owned_files 等）会被拒绝，报错里给出新字段名。
 
-MCP 缺失或启动失败时，先核对安装版本与实际错误。Git marketplace 不运行 Install.command；从插件根执行 `bash scripts/launch.sh --prepare-dependencies` 可准备 uv、Python>=3.11 与锁定依赖，不发 Claude 请求。缺 CLI、uv 或登录时说明官方处理路径，不静默安装或修改宿主。Git 来源保留 source/ref，不用本地 catalog 安装器补救。升级后在新原生 MCP 连接验证实际加载版本；保留旧 run_id，连接重建不解除 unknown。
+## 4. 启动与等待
 
-预检状态、CLI 身份、启动交接与离线开发入口详见 [bridge.md](bridge.md)。工具能力缺失时明确未派单；不得用旁路执行冒充插件验收。
+- `claude_start(packet)` 立即返回 `run_id` 和 `details_url`。说明任务目标、kind/profile 和真实状态；不要声称 Claude 已开始工作，等 `claude_wait` 里出现执行活动。
+- 用 `claude_wait(run_id, after=next_cursor)` 增量等待（每次最多 25 秒），不要高频轮询或重新派单。同一 task_id 同时只能有一个活动 run。
+- 用户要求停止或改向：`claude_cancel(run_id, reason)`，再等到 run 结束。取消后已写下的报告和改动仍会收回。
+- MCP 重启不影响正在运行的任务：新连接用原 `run_id` 查询即可。bridge 异常退出时，插件会停止残留的 Claude 进程，把 run 记为 `lost`，并收回已有产出。
 
-## 3. 派单保持原始范围
+## 5. 读结果
 
-packet 必填 task_id、revision、role、cwd、objective、requirement_sources、constraints、acceptance、owned_files、protected_files、model、effort；新审查另传 user_request 原话。baseline_commit 和 budget 可选。来源可以是文件、任务消息或批准记录；派单摘要不能改写或缩窄原要求，相关决策与已否定方案随材料传递，不能只给测试名。
+`claude_status(run_id)` 的 `outcome` 是插件记录的事实：
 
-`review_scope=defects|quality|full` 默认 full；`user_request` 原样保留，objective 仅是摘要。完整审查核对正确性/安全、架构职责、复杂度/重复/死代码、测试、文档和提示词，并报告实际覆盖与未完成项。设计建议说明证据、权衡和适用条件，缺陷说明触发、实际/预期行为与责任层。允许某维度无发现，不要求凑问题或删除配额。结构化 findings 可辅助追溯，不能替代完整报告和来源核对。
+- `run_outcome`：ok / timeout / cancelled / crashed / not_started / lost，只描述进程怎么结束。
+- `claimed_status`：Claude 在 result.json 里的自评（completed / partial / blocked），只是它的说法。
+- `warnings`：事实性警告，不改变 run_outcome。重点处理：
+  - `questions_for_user`：原样转告用户，由用户决定。
+  - `disputes_present`：Claude 认为约束、原件或你的说明与原话冲突，逐条核对。
+  - `protected_touched`：patch 改了 protected 路径，裁决时必须在 `protected_confirmed` 里逐条确认。
+  - `original_changed_during_run`：Claude 工作期间原仓库被改过，应用 patch 前先 `--check`。
+  - `carried_already_in_original`：上一轮尚未记录为已合入的改动其实已经原样在原仓库里；以后合入时记得写 `applied=true`。
+  - `undelivered_files_now_ignored`：重新放上的待交付文件被原仓库新的忽略规则匹配；它们仍在 delivery.patch 里，确认是否还应交付。
+  - `source_not_read`、`tool_denied`、`workflow_incomplete`、`report_missing`、`result_malformed` 等：核验时据此判断报告的可信度。
+- `changes`：两份 patch。
+  - `patch`（changes.patch）：只含本轮改动，用来审；`files` 是本轮文件清单（in_scope / outside_hint / protected）和行数。
+  - `delivery_patch`（delivery.patch）：所有还没应用到原仓库的改动，包括此前没有合入的轮次，用来合入；`delivery_files` 是它的文件清单。`check_hint`、`apply_hint` 针对的就是这一份；没有待交付的改动时这两个字段为空，不需要合入。
 
-独立审查在可写副本中开展复现、测试和所需工具工作；必须确认原仓库的 OS 写保护实际生效，缺失则阻断依赖此保护的运行。不能以删除 remote、提示词禁令或事后快照代替。外部 MCP 始终关闭，本版无继承开关，联网、安装和外部副作用仍受用户授权/宿主权限约束。`review_mode=strict` 保留工具与精确来源边界；带 user_request 的新 MCP Git review 默认 isolated，缺原话的旧调用仍 strict。implementation 明确 owned_files，初次编辑要求干净候选，不能 stash/覆盖已有合法改动。
+用 `claude_result(run_id, artifact)` 分页读原文（跟着 `next_offset` 读到 `end_of_artifact`，核对 `sha256`）：`report`（第一节是需求对照）、`result`、`patch`、`brief`（Claude 实际收到的任务书）、`final_message`、`inputs`、`instruction_layer`（本次会话加载的用户/项目 CLAUDE.md、rules 和 hooks）、`stream`、`stderr` 等。
 
-副本不复制ignored依赖；外部硬链接/链接和某些index状态会明确拒绝。嵌套macOS sandbox可能失败（如SwiftPM）；报告所有skip，必要时只在受保护副本里关闭内层构建沙箱。不要让后台进程脱离：停止证据只覆盖进程组及标记可见/已观察后代，不是主机级进程封闭。
+## 6. 核验与裁决
 
-非 Git 资料使用 artifacts 与明确 input_files、requirement_sources，仅支持声明的 UTF-8 文本；不支持编辑、resume、正式 Git protocol_binding 或旧命名 Workflow。非 Git 源码先按 [source-snapshot.md](source-snapshot.md) 生成带来源、行号和哈希的文本快照；核验时回对原文件。Word/PDF/表格等先由 Codex 用相应工具准备资料，分别验收原生格式与文本审查。
+- 对照用户原话和 `done_when`，逐条核对报告里的“需求对照”。自己运行必要的测试；区分 Claude 自报、你实际运行的结果和推断。
+- 合入改动：执行最新一轮的 `check_hint`（`git -C <repo> apply --check delivery.patch`），通过后执行 `apply_hint`。delivery.patch 以原仓库工作区内容（含未提交改动）为基线，直接作用于工作区，不要加 `--3way` 或 `--index`。检查不通过多半是原仓库在运行期间又改过（见 `original_changed_during_run`），先手工合并冲突，不要用副本里的整文件覆盖新内容。合入之后你可以继续在原仓库里修正。
+- `claude_decide(run_id, verdict, next, note, evidence, item_decisions?, protected_confirmed?, applied?)`：
+  - `verdict`：accepted / accepted_with_corrections（你修正了部分内容后采纳）/ rejected。
+  - `next`：done / next_round（再派一轮）/ codex_finishes（你自己完成剩余部分）。
+  - result.json 有 `items` 时，`item_decisions` 要逐条给出 accepted / downgraded / rejected，后两者写原因。
+  - `applied=true`：你已把这一轮的 delivery.patch 应用到原仓库（之后再修正也算）。只能用于最新一个产生过改动的轮次。没合入就不要写；如果合入后忘了写，可以重新裁决补上。再次裁决时不写 `applied` 会沿用之前记录的值，只有明确写 `false` 才撤销。
+  - 任何结束状态（包括 timeout、crashed、lost）只要进程已停止都可以裁决；再次裁决会追加历史。
+- 交付给用户时说清：完成了什么、你实际验证了什么、哪些只是 Claude 自报、还有什么没做、需要用户决定的问题。
 
-Runtime 自动给每轮独立 run-dir；同任务 task_id 保持、revision 递增。用 `claude_start` 传 packet、有界 timeout_seconds 和必要 resume_run_id；旧任务还须沿原 content_binding 与执行身份核对。按工作量给预算，不能缺预算 flag 时默默忽略。父会话按本轮 review_report_path 写完整 JSON（通常在副本 `.codex-review`，冲突时改用独立目录），用 result 的 review_report 读取；新Workflow走isolated review，旧workflow_review已弃用但兼容。省略时限时 isolated full 为3600秒，其余300秒；可传1..14400秒，并按成本设置 max_budget_usd。续跑省略mode/scope会继承旧包，不能改变原话。
+## 7. 续接与纠正
 
-需要原生监督席时先读 [supervisor.md](supervisor.md)，传完整输入并立即接收真实 run_id；主代理保留裁决和共享记录写入。短任务直接管理 MCP。
+- 同一任务的下一轮用 `continue_from=<最新一轮的 run_id>`（只能接最新一轮，不能从更早的轮次分叉）：kind、profile、task_id 不变；`user_messages` 必须原样包含上一轮的全部原话，只能在后面追加新的原话。
+- copy 档的代码基线：每一轮都按原仓库的当前状态重新建立副本，再放上最近一份尚未记录为已合入的 delivery.patch（`outcome.carried` 说明来自哪一轮）；这个任务任何一次交付涉及过、现在仍存在于原仓库的文件，即使被忽略规则匹配也会带入（还没合入的删除，也会先带入原文件再由 patch 删除）。副本是一次性的，上一轮中断或副本残缺都不影响下一轮。被忽略的依赖和构建产物（如 `.venv`、`node_modules`）不会跨轮保留，需要时 Claude 会重新安装。
+- 已经合入、但没有用 `applied=true` 记录的改动，如果原样还在原仓库里，会被自动识别（`carried_already_in_original`）；如果你合入后又修正过，必须先记录 `applied=true`，否则这一轮以 not_started 结束并说明冲突文件，补记后再续接即可。
+- 插件会尽量用 `--resume` 接上原会话；接不上时自动开新会话并给出 `resume_fallback` 警告，任务书仍是完整的。
+- 方向变了或需求结构变了，就不用 `continue_from`，开一个新的 task_id。
+- 此前各轮的裁决（结论、下一步、说明、逐项结论和理由，以及 decision.json 路径）都会写进下一轮任务书，并注明效力高于原报告，不需要再手抄。
 
-## 4. 监督同一 run
+## 8. 清理
 
-start/status/wait/details/decide 常规用 compact=true，证据按需 result 或 compact=false。取得 run_id 后说明任务目标、范围、请求模型与真实状态；执行记录创建不等于进程已启动。沿该 ID 和 next_cursor 用 `claude_wait` 增量等待，不用 latest，不重新 start，不高频轮询或编造无变化进度。
+任务的最后一轮裁决之后，`claude_cleanup(run_id)` 删除该任务的副本（patch、报告、任务书和裁决都保留）。删除后不能再续接。清理一旦开始，副本就不再可续接；如果清理被中断（进程退出或删除出错），再调用一次 `claude_cleanup` 会接管并完成删除，原清理进程仍在运行时会被拒绝。
 
-工作台链接与一次打开遵守 SKILL 的记账；重新连接后用主代理自己的 details 取链接。Viewer 依赖 MCP 存活，长期记录 run_id/run_dir，不把 token URL 当永久入口。公开工具活动、执行、报告、核验是不同事实；原生节点是 Codex 监督席，不是 Claude，不能承诺宿主卡片样式或展示私有思考。
+## 9. 监督子代理
 
-用户要求停止或改向时，先 `claude_cancel(run_id, reason)`，继续等回执和停止证据。其他 owner 也可请求取消，但请求送达不证明进程停止。只暂停受影响工作，未受影响的授权工作继续。
-
-## 5. 核验报告与逐项裁决
-
-先读 receipt 的运行状态、会话/实际模型、权限拒绝、输入/插件身份、工作区证据，再读完整报告、result 与必要事件。unknown/provenance_only 不表示身份已验证。failed/cancelled/timeout 中保存的 structured 仍是未验收报告，模型自称 completed、正常退出和合法 JSON 都不证明任务完成。
-
-逐项核对 finding 的原始来源、代码路径、行为、复现与覆盖；对可证实缺陷验证反例，对设计建议评估收益、代价和契约影响。保留原 finding 及接受、退回、合并或待确认的理由和实际证据，不删除核验失败项。搜索无命中不证明文件不存在，应核精确路径；无法安全核验则明确未确认。文档还须沿默认值、生成文件名与消费路径检查一致性。
-
-isolated 的hook缺口、失败/未完成Workflow保留审计警告，不能代替内容核验；strict门禁不变。无效schema原文仍可读取。亲自执行必要检查或核对可信既有结果的版本身份，区分 Claude 自报、真实命令输出、源码、构建、模拟、真机/设备结果。缺席位/维度记未完成；某维度零发现可接受。工作区前后差异与开始前已有改动分开；缺快照记 unknown，变化也不能仅凭先后顺序归因 Claude。Git 快照不覆盖任意 ignored、中途写回和仓外副作用。
-
-有 findings 时，finding_decisions 必须覆盖每个 finding_id，disposition 为 accepted/downgraded/rejected；后两者必须有 reason。仅对未被 superseded 的 reported run 调用 `claude_decide`，带原因与核验出处。原报告退回但 Codex 已补齐且验证完成时可 returned + completed_by_codex，记录真实 completion_summary；需修订用 revision_requested。其他失败/阻断/unknown 状态不写 decision、不变造回执：由 Codex 在原 PROGRESS 追加 run_id、原状态、独立完成者、实际补齐结果、原因、证据与未完成项。结果记录不自动合入或发布。
-
-accepted或returned/completed_by_codex且确认停止后，可调用 claude_cleanup_review(run_id) 删除副本；保留报告、tracked patch/status和裁决，不归档全部untracked产物。待修订/unknown不清理。
-
-用量只读 usage_report：cli_session 是含子代理且可能含前轮的会话累计估算，main_agent_final 只含主代理最终回报；两者不加、累计结果不跨轮相加，缺项记未知。CLI 费用不是实际扣费或订阅剩余额度。
-
-## 6. 纠正、恢复与交付
-
-用户纠正时保留原话、反例、被否定原因和受影响范围。局部错误在原契约、输入、文件范围和可执行身份匹配且上轮停止后，可精确 resume；结构/职责错误或目标变化先停旧写入、检查残留，再 fresh。CLI 升级、会话未持久化或兼容身份变化不能猜 session，改用 fresh。相同 finding 的修复次数不因换 run/agent 清零；完整 v2.9 按一轮自修后裁决，其他任务按适用规则停止无信息增量循环。
-
-unknown 用 `claude_recovery` 核对真实进程与工作区；只有停止、lane 空闲、绑定与 digest 一致才 `claude_reconcile(reason,evidence,expected_workspace_digest)`。核对失败报告具体缺口，不手工删 marker/改 registry；恢复只解除占用，旧 unknown 不变成功，之后新 revision fresh。早期失败、终态清理重试和 Workspace 保留细节见 [runtime-design.md](runtime-design.md)、bridge。
-
-Runtime 排他不能约束未接入插件的 Codex/外部工具；交接写入者由主代理协调。压缩或跨工具恢复后重读原要求、规则、原 PROGRESS、决策和真实文件状态，先查已有 run，避免重复执行。更新现有任务记录的结果、证据与下一步。
-
-交付说明完成结果、真实验证、版本/输入、未完成边界和关键 run/文件路径。夹具仅证明覆盖的调用闭环；真实 CLI、安装、业务设备与正式验收分别记录。文档随发布固定，历史内容可按原 digest 阅读，但新说明不会升级旧 Runtime、改变原协议或补造历史证据。
+只有在并行或上下文隔离确有收益时，才按 [supervisor.md](supervisor.md) 派一个原生 Codex 监督子代理。主代理保留裁决和对用户的交付。

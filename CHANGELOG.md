@@ -4,6 +4,45 @@
 
 以下为版本变更记录，保留实现与验证细节。首次使用见[快速开始](docs/getting-started.zh-CN.md)，实际验证范围见[发布验证](RELEASE-VERIFICATION.md)。
 
+## 1.0.0：需求保真、副本执行与 Codex 单一裁决
+
+版本标签 [`v1.0.0`](https://github.com/BryanYue/codex-claude-orchestrator/releases/tag/v1.0.0)，完整构建 `1.0.0+codex.20261007165220`，发布日期 **2026-10-08**。本版依据对 0.7.x 的架构审查断代重构：派单配置会让需求变形，实现任务缺少执行能力，插件门禁替 Codex 把已交回完整报告的运行判为失败。验证范围见[发布验证](RELEASE-VERIFICATION.md)。
+
+**任务书与需求保真**
+
+- 派单改为 1.0 packet：`kind=implement|analyze`、`user_messages`（逐字原话，标明 human/relayed，缺失时须写 `no_user_words_reason`）、`inputs`（原件按字节冻结，可为目录）、`brief`（Codex 的理解）、`constraints`/`done_when`（每条标 `origin=user|doc|coordinator`）、`focus`、`write_hint`/`protected`、`verify`、`web`、`timeout_seconds`（必填）。旧字段直接拒绝并提示新字段名。
+- 发给 Claude 的不再是 JSON 转储，而是按角色渲染的 UTF-8 Markdown 任务书：原话只出现一次且不转义，写明优先级（原话与原件 > 约束 > 协调者说明 > 方法建议）和冲突处理，实现任务给出实施指令，不再附审查维度和 findings schema。任务书原样落盘为 `brief.md` 并记 sha256。
+- 报告第一节固定为“需求对照”；结果头改为 `status`、`acceptance` 自评、`tests_run`、`not_verified`、`disputes`、`questions`、可选 `items`。
+- 宿主指令层可见：记录本次会话会加载的用户/项目 `CLAUDE.md`、rules 与 hooks，并在任务书里声明与任务书冲突时以任务书为准；不隔离也不修改它们。
+- 移除项目采用（`.agents/codex-claude`、AGENTS 管理块）及其对 v2.9 编排协议的自动注入，移除执行者路由打分。
+
+**执行**
+
+- 实现任务和 Git 项目中的分析任务默认在独立副本中运行（copy 档），给 Bash、编辑、Agent、Skill、Workflow 等工具；排除推送通知、远程触发、定时任务、发消息等有外部副作用或需要人应答的工具。原仓库、Git 元数据、插件状态与代码由 macOS `sandbox-exec` 拒写；凭证、网络和其他路径不隔离。
+- 改动由插件在受保护的基线对象库里记录起止树，生成 `changes.patch`（本轮改动，用来审）和 `delivery.patch`（所有尚未应用到原仓库的改动，含此前没合入的轮次，用来合入）。`check_hint`/`apply_hint` 针对 delivery.patch，直接作用于原仓库工作区（不用 `--3way`）。`claude_decide(..., applied=true)` 表示 Codex 已合入（之后可再修正），再次裁决时省略 `applied` 会沿用已记录的值。原仓库在运行期间可以继续修改，变化只作为警告。
+- readonly 档用于普通目录或不允许执行命令时：只有 Read/Glob/Grep（经授权可加 Web），用结构化输出交回报告。删除 PreToolUse 路径守卫，读取不再限于精确文件。
+- 敏感的未跟踪文件（`.env*`、`.claude`、`.codex`、`.ssh` 等）跳过并列出，不再整单拒绝。
+- 续接用 `continue_from`：只能接该任务最新的一轮，原话只能追加。副本是一次性的：每一轮都按原仓库当前状态重新建立，再放上最近一份尚未记录为已合入的 delivery.patch，这个任务任何一次交付涉及过、仍存在于原仓库的文件即使被忽略也会带入；没有待交付改动时不给合入命令；跨轮保留的只有各轮不可变的 patch 和裁决，中断或残缺副本不影响下一轮。被忽略的依赖目录不跨轮保留。放上的文件即使被新的忽略规则匹配也继续计入交付并给出警告。此前各轮的完整裁决（含逐项结论和理由）写进下一轮任务书，效力高于原报告；优先 `--resume` 原会话，接不上时自动开新会话并给出警告。可从任何已停止的结束状态续接。续接的准入与副本清理在同一把跨进程注册表锁内判断；清理记录执行者，中断后再次清理会在原执行者退出后接管完成，删除开始后的副本不会再被续接。
+- 内置 Workflow 改为可选的参数化模板 `codex-analyze`：按 `focus` 分别审查、独立核验，最后先回答原问题；各 agent 读同一份任务书。
+
+**回传与裁决**
+
+- 插件只报告事实：`run_outcome`（ok/timeout/cancelled/crashed/not_started/lost）、Claude 自称的 `claimed_status` 和事实性 `warnings`（如 `protected_touched`、`questions_for_user`、`original_changed_during_run`、`source_not_read`、`tool_denied`、`workflow_incomplete`），不再因观察到的变化把运行判为 failed。
+- 结果头字段类型不对时只记 `result_malformed`，运行照常结束；结果汇总出错时也会写出带 `finalize_error` 的 outcome，单个损坏的运行不会阻止 MCP 启动。
+- `claude_decide` 改为 `verdict`（accepted / accepted_with_corrections / rejected）与 `next`（done / next_round / codex_finishes）两个字段；任何结束状态只要进程已停止都可裁决；有 `items` 时逐条决定，碰到受保护路径时须按完整改动清单逐条确认；裁决意见进入下一轮任务书。
+- MCP 工具从 27 个减到 10 个：environment、models、start、status、wait、result、cancel、decide、runs、cleanup。
+
+**运行时**
+
+- 移除 lane 锁、unknown 标记、对账（recovery/reconcile）、启动 nonce、代码身份、内容绑定、CLI 身份钉住和旧派单兼容表。运行以 `outcome.json` 是否存在区分活动与结束；MCP 重启后仍在运行的 bridge 继续被观察，异常退出的 bridge 由插件停止残留 Claude 进程组并记为 `lost`，同时收回已写下的产出。同一任务同时只允许一个活动运行。
+- 运行记录改存 `~/.codex/claude-orchestrator/v1`；0.7.x 及更早的记录保留在原位置供查阅，不能续接。
+- 移除托管 CLI 历史、CLI 维护状态、协调内容在线管理、非 Git 源码快照与 artifacts 工作区、命名 Workflow 审查（workflow_review）和阶段文件采集。
+- 工作台按新模型重写，分开显示运行事实、Claude 自称和 Codex 裁决，可查看 Claude 实际收到的任务书。
+
+**Codex 侧规则**
+
+- SKILL 精简为一页：原话逐字转交；原件优先于转述；Codex 自加的约束标 coordinator；用户没要求的“保留兼容、不放宽门禁”不得写成约束；需要用户决定的事交给用户。
+
 ## 0.7.1：审查链路实测修复与隔离边界补齐
 
 版本标签 `v0.7.1`，完整构建 `0.7.1+codex.20261003035940`。本轮核对 0.7.0 审查反馈，并在临时仓库实测本机 Claude CLI；失败记录与实际验收边界见[发布验证](RELEASE-VERIFICATION.md)。

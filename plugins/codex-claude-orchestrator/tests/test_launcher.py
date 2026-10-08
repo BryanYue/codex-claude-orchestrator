@@ -14,9 +14,8 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 from executable_locator import NVM_ACTION, cli_environment, configure_claude_bin, locate_claude, settings_path  # noqa: E402
-import cli_store  # noqa: E402
 sys.path.insert(0, str(ROOT / "skills/codex-claude-orchestrator/scripts"))
-import bridge  # noqa: E402
+import cli_env  # noqa: E402
 
 
 class LauncherTests(unittest.TestCase):
@@ -85,8 +84,6 @@ esac
         environment = self.env(CODEX_HOME=str(self.base / ".codex"))
         saved = configure_claude_bin(str(self.nvm_claude), environment)
         self.assertEqual(saved, settings_path(environment))
-        self.assertFalse(cli_store.store_root(environment).exists(),
-                         "configuring the local CLI must not create or change retired managed state")
         found = locate_claude(environment)
         self.assertEqual(found["path"], str(self.nvm_claude))
         self.assertEqual(found["source"], "plugin_settings")
@@ -94,7 +91,7 @@ esac
     def test_bridge_uses_selected_nvm_symlink_parent_for_every_preflight_command(self):
         environment = self.env(CLAUDE_BIN=str(self.nvm_claude))
         with patch.dict(os.environ, environment, clear=True):
-            report = bridge.check_environment(self.base)
+            report = cli_env.check(self.base)
         self.assertTrue(report["ready"], report)
         self.assertEqual(report["cli"]["version"], "9.9.999")
         self.assertEqual(report["cli"]["path"], str(self.nvm_claude))
@@ -104,7 +101,7 @@ esac
         environment = self.env(CODEX_HOME=str(self.base / ".codex"))
         configure_claude_bin(str(self.nvm_claude), environment)
         with patch.dict(os.environ, environment, clear=True):
-            report = bridge.check_environment(self.base)
+            report = cli_env.check(self.base)
         self.assertTrue(report["ready"], report)
         self.assertEqual(report["cli"]["path"], str(self.nvm_claude))
         self.assertEqual(report["cli"]["source"], "plugin_settings")

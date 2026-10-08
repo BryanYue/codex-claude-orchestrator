@@ -7,7 +7,7 @@ import unittest
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPTS))
-import bridge  # noqa: E402
+import stream_parser  # noqa: E402
 import usage  # noqa: E402
 
 MODEL_USAGE = {
@@ -90,10 +90,11 @@ class UsageReportTests(unittest.TestCase):
             lines = [{"type": "system", "subtype": "init", "session_id": session, "model": "claude-opus-5-5"},
                      {**FIRST, "session_id": session}, {**FINAL, "session_id": session}]
             stream.write_text("".join(json.dumps(line) + "\n" for line in lines))
-            final, meta = bridge.parse_stream(stream, session)
-        self.assertEqual(meta["result_event_count"], 2)
+            facts = stream_parser.parse_stream(stream, session)
+        final = facts["final"]
+        self.assertEqual(facts["result_events"], 2)
         self.assertEqual(final["num_turns"], 2)
-        report = usage.usage_report(final, result_events=meta["result_event_count"], resumed=False)
+        report = usage.usage_report(final, result_events=facts["result_events"], resumed=False)
         self.assertEqual(report["main_agent_final"]["tokens"]["output_tokens"], 1544)
         self.assertEqual(report["cli_session"]["totals"]["output_tokens"], 5292)
         self.assertAlmostEqual(report["cli_session"]["total_cost_usd"], 0.324641, places=6)

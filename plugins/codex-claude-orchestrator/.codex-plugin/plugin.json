@@ -1,7 +1,7 @@
 {
   "name": "codex-claude-orchestrator",
-  "version": "0.7.1+codex.20261003035940",
-  "description": "Project-aware Codex–Claude orchestration with portable specifications, native Codex supervision, configurable routing, MCP execution and compact progress details.",
+  "version": "1.0.0+codex.20261007165220",
+  "description": "Delegate implementation and analysis to the local Claude CLI with verbatim user words, an isolated copy, patch and report evidence, and Codex verification.",
   "author": {
     "name": "BryanYue",
     "url": "https://github.com/BryanYue"
@@ -9,8 +9,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Codex–Claude 协作",
-    "shortDescription": "按项目规格自然推进，自动选择执行者，查看简洁进度与核验结果。",
-    "longDescription": "整合项目规格、Skill、Codex 原生监督子代理、Claude CLI 与 MCP。支持项目一次采用、按任务偏好或手动指定执行者、精确续跑与改向。默认简洁详情，可展开或切完整视图；主 Codex 保留目标和验收责任。",
+    "shortDescription": "把实现或分析交给本机 Claude：原话直达、独立副本执行、交回 patch 与报告，由 Codex 核验。",
+    "longDescription": "Codex 把用户原话、原件和自己的说明分开交给 Claude；实现任务在受操作系统写保护的独立副本里运行，可跑测试，交回 patch；分析任务交回先回答原问题的报告。插件只记录事实与警告，是否通过由 Codex 核验后裁决。",
     "developerName": "BryanYue",
     "category": "Productivity",
     "capabilities": [
@@ -18,9 +18,9 @@
       "Write"
     ],
     "defaultPrompt": [
-      "这个项目以后采用 Codex–Claude 协作流程。",
-      "按已确认的计划继续，完成后核对原始验收。",
-      "这次让 Claude 执行，显示简洁进度。"
+      "让 Claude 按这个计划实现，完成后你来核验。",
+      "让 Claude 审查一下这次改动，先回答我的问题。",
+      "看看刚才那个 Claude 任务的进展。"
     ],
     "logo": "./assets/icon.png",
     "logoDark": "./assets/icon.png",

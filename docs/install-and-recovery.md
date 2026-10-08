@@ -1,12 +1,19 @@
 # Install, first use and recovery
 
-This covers the two install paths for `codex-claude-orchestrator` and the
-first-use preparation both share. See [git-marketplace.md](git-marketplace.md)
-for the Git-specific commands and identity, and [RELEASE-VERIFICATION.md](../RELEASE-VERIFICATION.md) for
-which of the steps below have actually been exercised for the current version.
-This documentation targets `v0.7.1`, build `0.7.1+codex.20261003035940`.
-Source, distribution and reinstall evidence are recorded separately from older
-experiments; an upgrade needs a fresh MCP connection.
+This covers the two install paths for `codex-claude-orchestrator`, the
+first-use preparation both share, upgrading from 0.7.x and recovering from a
+failed source switch. See [git-marketplace.md](git-marketplace.md) for the
+Git-specific commands and identity, and
+[RELEASE-VERIFICATION.md](../RELEASE-VERIFICATION.md) for which of the steps
+below have actually been exercised. This documentation targets `v1.0.0`, build
+`1.0.0+codex.20261007165220`. Any install, upgrade or rollback takes effect
+only in a new MCP connection, i.e. a new Codex task.
+
+Use the same `CODEX_HOME` as the desktop profile you intend to upgrade. Separate
+Codex profiles can keep independent marketplace refs and plugin caches; changing
+one does not upgrade the other. Check that profile's inventory and prepare its
+per-version dependencies. Old chats retain their already-loaded MCP process;
+an inventory update alone does not change that process.
 
 ## Two install paths
 
@@ -14,34 +21,32 @@ experiments; an upgrade needs a fresh MCP connection.
 | --- | --- | --- |
 | Entry point | `bash Install.command` from an extracted package | `codex plugin marketplace add` + `codex plugin add` (see [git-marketplace.md](git-marketplace.md)) |
 | Verifies package hashes | Yes, against `FILE-SHA256.json` | No local step does this; the host CLI fetches the ref directly |
-| Registers with local catalog (`~/.codex/claude-orchestrator/catalog`) | Yes | No — the plugin source is the Git ref itself |
+| Registers with local catalog (`$CODEX_HOME/claude-orchestrator/catalog`) | Yes | No — the plugin source is the Git ref itself |
 | Downloads or switches a Claude CLI | No — it only reports your local Claude CLI | No |
 | Runs automatically after install | Nothing further | Nothing further |
 
-A Git install does **not** run `Install.command`. This is deliberate: running
-it after a Git install would silently re-register the plugin against the local
-catalog and overwrite the Git source you just chose. If a step described for
-the ZIP path below (hash verification, catalog registration) is needed for a
-Git-sourced plugin, it must be reproduced as its own explicit action, not by
-invoking `Install.command` against a Git checkout.
+A Git install does **not** run `Install.command`. Running it after a Git
+install would re-register the plugin against the local catalog and replace the
+Git source you just chose. GitHub's "Download ZIP" is a source archive, not a
+built package: it has no `FILE-SHA256.json`, and `Install.command` refuses it.
 
 ## First-time preparation (both paths)
 
-The plugin becoming installed/registered is not the same as it being ready to
-delegate to Claude. There are four independent things to get ready, in this
-order:
+An installed, registered plugin is not yet ready to delegate to Claude. There
+are four independent things to get ready, in this order:
 
 1. **uv.** Required for both paths. Check with `command -v uv`; install per
    [the official instructions](https://docs.astral.sh/uv/getting-started/installation/)
    if missing (`brew install uv` if Homebrew is already available). Nothing in
-   this plugin installs uv for you or modifies your shell profile to do so.
-2. **Python ≥3.11 and the locked dependency venv.** `uv` resolves the
+   this plugin installs uv or modifies your shell profile.
+2. **Python ≥3.11 and the locked dependency environment.** uv resolves the
    interpreter and installs the locked dependencies (`mcp==2.2.0`, pinned in
-   `plugins/codex-claude-orchestrator/uv.lock`) into a version-specific venv
-   the first time they are needed. This first resolution can involve a
-   download, which is slow compared to the 120-second `startup_timeout_sec`
-   in `.mcp.json`. To avoid racing that timeout on a cold machine, warm the
-   venv explicitly **before** opening a Codex task that loads the plugin:
+   `plugins/codex-claude-orchestrator/uv.lock`) into a per-version environment
+   at `$CODEX_HOME/claude-orchestrator/venvs/<full plugin version>` (default
+   `~/.codex/...`; `CLAUDE_ORCHESTRATOR_ENV_DIR` overrides it). The first
+   resolution can involve a download, which is slow compared to the
+   120-second `startup_timeout_sec` in `.mcp.json`. Warm it explicitly
+   **before** opening a Codex task that loads the plugin.
 
    For an extracted ZIP or a source checkout, start at that package root:
 
@@ -50,157 +55,160 @@ order:
    ```
 
    For a Git marketplace install, first run `codex plugin list --json` and
-   locate this plugin's installed/cache path in the returned record (or ask
-   Codex to inspect its plugin record). Invoke `scripts/launch.sh` inside that
-   exact installed plugin directory. Do not guess a cache version directory or
-   run the ZIP installer to repair a Git source. If the host does not expose
-   the installed path, the dependency preparation can be run from a checkout
-   of the same fixed ref and full manifest version: the launcher selects the
-   same version-specific environment. Keep that checkout unchanged until the
-   installed version has started successfully.
+   locate this plugin's installed path in the returned record (or ask Codex to
+   inspect its plugin record), then run `bash scripts/launch.sh
+   --prepare-dependencies` inside that exact plugin directory. Do not guess a
+   cache version directory or run the ZIP installer to repair a Git source. If
+   the host does not expose the installed path, run the same command from a
+   checkout of the same fixed ref: the launcher selects the environment by the
+   full plugin version, so both prepare the same one.
 
-   This only runs `uv sync --frozen --no-dev` and prints a `{"status": ...}`
-   line; it never starts the MCP server, never calls a model, and never
-   touches global config, PATH, CLI profiles or authentication. If it fails,
-   the printed error is the exact `uv sync` failure (e.g. missing `uv`,
-   unreachable package index, disk space) — fix that and rerun the same
-   command; nothing has been partially registered.
-3. **Open a Codex task to actually start the MCP server.** Once dependencies
-   are warm, open a new Codex task so `.mcp.json` loads the plugin normally
+   This only runs `uv sync --frozen --no-dev` and prints a
+   `{"status":"ready",...}` line. It never starts the MCP server, never calls a
+   model, and never touches global config, PATH, shell profiles or
+   authentication. If it fails, the printed error is the `uv sync` failure
+   (missing uv, unreachable package index, disk space and so on); fix that and
+   rerun the same command. Nothing has been partially registered.
+3. **Open a new Codex task** so `.mcp.json` starts the plugin normally
    (`./scripts/launch.sh` with no arguments, which runs `scripts/server.py`).
-   This is the first point at which the MCP server itself starts; step 2 only
-   prepares its dependencies.
-4. **Your local Claude CLI and authentication.** Independent of steps 1–3, and
-   does not require Claude to be logged in yet. The plugin uses only the local
-   Claude CLI you installed or configured (`CLAUDE_BIN`, then the plugin
-   `claude_bin` setting, then `claude` on the MCP process PATH). It never
-   downloads, installs, updates, rolls back, copies or switches a Claude CLI,
-   and it does not change shell profiles, persistent PATH, Claude's auto-update
-   setting, login or account. The version is recorded for diagnosis only; a
-   task is admitted when `--help` advertises the exact flags it needs, the
-   local login check passes and any requested budget flag exists.
-   - `bash Install.command --diagnose-json` (ZIP path) or the Skill's
-     `claude_cli_status` tool (either path, once the MCP server is running)
-     reports uv discovery, Codex host compatibility, and Claude discovery/auth
-     status without starting a model call. It does not independently verify
-     that a cold Python/dependency download can succeed. Successful dependency
-     preparation and a fresh MCP initialization establish those separate facts.
-   - If no Claude executable is found, install Claude Code yourself with the
-     official instructions, or point the plugin at an existing one (below).
-     Retained records from the retired managed-CLI feature of earlier releases
-     (`~/.codex/claude-orchestrator/cli`) are left in place as history and
-     never selected.
-   - Authentication itself is always the user's own action. Log in with the
-     executable reported by `claude_cli_status`, rather than assuming a
-     different `claude` on PATH shares its account. The optional
-     `Install.command --configure-claude-bin` is a ZIP-install operation only;
-     for a Git-installed plugin set `CLAUDE_BIN` in the environment that
-     starts Codex. The plugin does not ask Codex to read, copy or upload
-     credential files.
-   - After you upgrade your Claude CLI, a correction that would resume an
-     earlier run is refused because the executable changed; start a fresh
-     round instead.
+   This is the first point at which the MCP server itself starts.
+4. **Your local Claude CLI and authentication.** Independent of steps 1–3.
+   - The plugin uses only the Claude CLI you installed or configured, in this
+     order: `CLAUDE_BIN`, then `claude_bin` in the plugin settings file
+     (`$CODEX_HOME/claude-orchestrator/settings.json`), then `claude` on the
+     MCP process PATH. It never downloads, installs, updates or switches a
+     Claude CLI, and it does not change shell profiles, persistent PATH,
+     Claude's auto-update setting, login or account.
+   - The MCP process does not source shell initialization files. If Claude
+     Code was installed through nvm, fnm or Volta and the desktop app cannot
+     find it, set `CLAUDE_BIN` to that executable's absolute path in the
+     environment that starts Codex, then restart Codex. The launcher puts that
+     executable's directory first on the plugin's own PATH so an npm shim finds
+     its sibling `node`. A ZIP install can instead persist the path with
+     `bash Install.command --configure-claude-bin /absolute/path/to/claude`;
+     that option is not for Git installs.
+   - The `claude_environment` tool (ask Codex to "check the local Claude
+     setup") reports the CLI path and version, whether `--help` advertises
+     every option dispatch needs, the result of `claude auth status --json`,
+     and whether `/usr/bin/sandbox-exec` is available for the copy profile. It
+     sends no model request. The version is recorded for diagnosis only; there
+     is no version allowlist. With `verify=true` (ask for "an online
+     verification") it sends one small paid request to confirm the login
+     actually works.
+   - Every run repeats the local check before launching Claude and ends as
+     `not_started` if it fails. A run that sets `max_budget_usd` also needs the
+     CLI to advertise `--max-budget-usd`.
+   - On the ZIP path, `bash Install.command --diagnose-json` reports the same
+     Claude readiness plus Codex host and uv discovery, without a model call.
+   - Authentication is always your own action: run `claude auth login` with
+     the executable the check reported (or configure your API/provider
+     authentication), rather than assuming another `claude` on PATH shares its
+     account. The plugin does not read, copy or upload credential files.
 
 ### Breakdown by what's missing
 
 | Symptom | What it means | What to do |
 | --- | --- | --- |
-| `command -v uv` fails | uv is not installed | Install uv per the official instructions above; do not let anything auto-run Homebrew/curl for you |
-| `./scripts/launch.sh --prepare-dependencies` fails on `uv sync` | Locked dependency resolution/download failed (network, index, disk) | Read the printed `uv sync` error directly; rerun after fixing it |
-| MCP server does not come up within 120s | Dependency download or another startup error may be responsible | Preserve stderr, run step 2, then retry MCP initialization. If warmup succeeds but startup still fails, inspect the actual server error; do not assume every timeout is a download problem or raise the timeout without evidence |
-| `claude_cli_status` reports no discovered Claude CLI | No local Claude executable is visible to the MCP process | Install Claude Code yourself, or set `CLAUDE_BIN` for Codex; a ZIP install may instead use its installer with `--configure-claude-bin` |
-| Environment check reports `cli_incompatible` | Your local CLI's `--help` does not list a flag this task needs (named in the report) | Upgrade or reconfigure your own Claude CLI; the plugin will not substitute another version |
-| `claude_cli_status` reports not authenticated | Claude CLI is present but the user has not logged in | Log in with the Claude CLI yourself; the plugin will not do this for you |
-| 0.6.1 diagnostics reports a startup code mismatch or unreadable plugin code | The loaded Runtime and current files cannot establish the same identity | Start a new MCP connection with the installed version; do not delete markers or repeatedly dispatch |
-| The old chat errors after a plugin source switch, while a fresh connection works | The original MCP process may still refer to the removed installation | Reconnect or restart the client, then check the actual loaded version; do not infer it from the install inventory |
-| A previous `unknown` still blocks dispatch after reconnecting | The old run has separate unresolved execution evidence | Inspect that run with the normal recovery tools; reconnecting alone cannot establish whether Claude started |
-| Isolated review reports OS protection unavailable | The required macOS source-write protection could not be established | Use strict read-only review, or resolve the specific host restriction; a clone alone is insufficient |
-| Delegation is blocked even though the plugin is installed | Claude readiness (steps 2–4) is separate from plugin registration (this doc's "Two install paths") | Re-check readiness with `claude_cli_status`/diagnostics, not just install success |
+| `command -v uv` fails | uv is not installed | Install uv per the official instructions above |
+| `launch.sh --prepare-dependencies` fails on `uv sync` | Locked dependency resolution or download failed (network, index, disk) | Read the printed `uv sync` error; rerun after fixing it |
+| The MCP server does not come up within 120 s | A cold dependency download or another startup error | Run step 2, then open a new task. If preparation succeeds and startup still fails, read the actual server error; do not assume every timeout is a download problem |
+| `claude_environment` status `cli_not_found` | No Claude executable is visible to the MCP process | Install Claude Code yourself, or set `CLAUDE_BIN` as in step 4 |
+| Status `cli_unavailable` | `claude --version` or `--help` failed | Check the installation and host execution permissions |
+| Status `cli_incompatible` | `--help` does not list an option dispatch needs (named in `missing_flags`) | Update your own Claude CLI; the plugin will not substitute another version |
+| Status `not_logged_in` or `auth_check_failed` | Not signed in, or the login state could not be read | Sign in yourself; for a read failure, check keychain/host permissions without clearing credentials |
+| Online verification reports `network_error`, `quota_or_rate_limited` or `access_denied` | The request failed for that reason | This alone does not mean the login expired; fix the reported cause |
+| `sandbox.available` is false, or a run says the copy profile needs `sandbox-exec` | No macOS write protection on this host | Analysis tasks can use the read-only profile; implementation tasks cannot run here |
+| A run ends `not_started` with "copy preparation failed" | The repository has submodules, sparse/skip-worktree entries, an unresolved merge, Git alternates, links outside the repository, or the boundary scan timed out | Analysis tasks can use the read-only profile; for implementation, resolve that repository state first |
+| The old chat errors after a plugin switch, while a new task works | The old MCP process still refers to the removed installation | Use a new Codex task; do not infer the loaded version from the install inventory |
+| A run ended as `lost` | Its supervising bridge exited without recording an outcome; the plugin stopped leftover Claude processes and collected what was written | Read the report and patch; once the process is confirmed stopped, decide or continue the run as usual |
+
+## Upgrading from 0.7.x
+
+1.0 is not compatible with 0.7.x tasks. Before switching:
+
+1. **Let running 0.7.x tasks finish, or cancel them with the 0.7.x plugin.**
+   1.0 does not list, observe or cancel runs started by an earlier version.
+2. **Switch the source** with the fixed-ref steps in
+   [git-marketplace.md](git-marketplace.md#change-a-fixed-ref-or-migrate-from-zip),
+   or run the new package's `Install.command` for a ZIP install.
+3. **Prepare dependencies** for the new version (step 2 above); each full
+   plugin version has its own environment.
+4. **Open a new Codex task.** Tasks that were already open keep the old MCP
+   process.
+
+What stays behind from 0.7.x:
+
+- **Run records.** 1.0 keeps its records under
+  `~/.codex/claude-orchestrator/v1/` (`CLAUDE_ORCHESTRATOR_STATE_DIR`
+  overrides the root). The 0.7.x records directly under
+  `~/.codex/claude-orchestrator/` (`registry.json`, `runs/` and related
+  directories) are left untouched. 1.0's tools and workbench do not list them
+  and they cannot be continued; keep them as files for reference, or delete
+  them once you no longer need them.
+- **Project adoption files.** Projects adopted with 0.7.x keep the
+  `AGENTS.md` block between `<!-- codex-claude-orchestrator:begin -->` and
+  `<!-- codex-claude-orchestrator:end -->` and the `.agents/codex-claude/`
+  directory. 1.0 neither reads nor removes them, yet the block still tells
+  Codex to use the plugin for multi-step work without being asked and to read
+  a project workflow context that 1.0 no longer provides. Remove both by hand,
+  and commit that change according to your project's rules.
+- **Retired managed-CLI records** under `$CODEX_HOME/claude-orchestrator/cli`
+  are not used by 1.0 and can be deleted.
+- **Removed tools and options.** Project adoption, executor routing, online
+  management of coordination guidance, strict/isolated review modes and
+  `review_scope`, `workflow_review`, recovery/reconcile, managed-CLI tools and
+  the separate doctor/diagnostics tools no longer exist. A packet using pre-1.0
+  fields is rejected with the new field names. Claude is used when you ask for
+  it; there is no project-level default.
+
+To roll back to `v0.7.1`, use the same fixed-ref steps with that tag, prepare
+its dependencies and open a new task. 1.0 does not modify the 0.7.x records;
+0.7.1 does not see runs made by 1.0.
 
 ## Migrating from the local catalog to a Git source
 
 This machine may already have a marketplace named `codex-claude-team` pointing
-at the local catalog (`~/.codex/claude-orchestrator/catalog`). Because the host
-CLI keys a marketplace by name, adding a Git source under the same name is not
-a conflict-free operation. The sequence below changes only this marketplace. Its observed coverage is
-recorded in RELEASE-VERIFICATION.md; the procedure alone is not proof that
-every failure path has been exercised.
+at the local catalog (`$CODEX_HOME/claude-orchestrator/catalog`). Because the
+host CLI keys a marketplace by name, adding a Git source under the same name is
+not a conflict-free operation. The sequence below changes only this
+marketplace; its observed coverage is recorded in RELEASE-VERIFICATION.md, and
+the procedure alone is not proof that every failure path has been exercised.
 
 1. **Record current state before touching anything.**
    ```bash
    codex plugin marketplace list --json   # save the codex-claude-team entry: source, ref if any
    codex plugin list --json               # save the codex-claude-orchestrator entry: version, enabled, source
    ```
-2. **Remove the old market entry.** The locally checked CLI exposes
-   `codex plugin marketplace remove codex-claude-team --json`. Check the
-   installed CLI's help if that command is unavailable. After the operation,
-   read both marketplace and plugin state. On the CLI tested for 0.5.0,
-   this removal also removed the plugin from the installed inventory; the
-   reinstall in step 4 is required. Do not infer cache deletion or running
-   process termination from that inventory change.
+2. **Remove the old market entry** with
+   `codex plugin marketplace remove codex-claude-team --json` (check the
+   installed CLI's help if that command is unavailable). Then read both
+   marketplace and plugin state. On the CLI tested earlier, this removal also
+   removed the plugin from the installed inventory, so the reinstall in step 4
+   is required. Do not infer cache deletion or process termination from that
+   inventory change.
 3. **Add the target Git source with a fixed ref** (see
    [git-marketplace.md](git-marketplace.md) for the exact `add`/`--ref`
-   invocation and why a moving branch should not be used for a first rollout).
-4. **Install the same plugin id** (`codex plugin add codex-claude-orchestrator@codex-claude-team`)
-   and verify with `codex plugin list --json` that version, enabled state
-   and marketplace source match. The tested list output omits the pinned
-   ref: also compare the fetched market root's `git rev-parse HEAD` with the
-   selected commit and inspect the persisted ref read-only when needed.
-5. **On any failure at steps 2–4**, read actual state before recovery. If the
-   candidate source was added, remove that candidate same-name entry first;
-   if removal itself failed or its result is unknown, stop instead of adding
-   a conflicting source. Restore the old local path or Git source and fixed
-   ref from step 1, reinstall the recorded old version, and restore its prior
-   enabled/disabled state using the host's supported plugin controls. Read
-   both inventories again and check source, ref/version and enabled state.
-   A failed initial removal whose old source is still present needs no
-   source replacement; a successful candidate install followed by failed
-   verification needs the full recovery sequence. If any recovery step or
-   final check is inconclusive, retain its evidence and stop automatic retries.
-6. A completed switch means source, ref/commit, plugin version and the
-   installed catalog all agree after step 4's verification. A run that was
-   already using the old MCP process keeps its original execution identity;
-   it is not hot-replaced by a later switch. Open a new Codex task to pick up
-   whichever version is now installed.
+   invocation and why a moving branch should not be used).
+4. **Install the same plugin id**
+   (`codex plugin add codex-claude-orchestrator@codex-claude-team`) and verify
+   with `codex plugin list --json` that version, enabled state and marketplace
+   source match. The list output omits the pinned ref: also compare the fetched
+   market root's `git rev-parse HEAD` with the selected commit.
+5. **On any failure at steps 2–4**, read the actual state before recovering.
+   If the candidate source was added, remove that same-name entry first; if
+   that removal failed or its result is unknown, stop instead of adding a
+   conflicting source. Restore the old local path or Git source and fixed ref
+   from step 1, reinstall the recorded old version, and restore its previous
+   enabled/disabled state with the host's plugin controls. Read both
+   inventories again and check source, ref/version and enabled state. If any
+   recovery step or final check is inconclusive, keep its output and stop
+   retrying automatically.
+6. A switch is complete when source, ref/commit, plugin version and installed
+   inventory all agree after step 4. Open a new Codex task to load the
+   installed version; an MCP process that was already running keeps its code.
 
 **Verification boundary:** consult [RELEASE-VERIFICATION.md](../RELEASE-VERIFICATION.md)
-for the tested fixed refs, host and outcomes. Successful remote installation
-and MCP initialization do not prove a new task's natural-language routing,
-automatic browser reuse, a cold second machine or another user's credentials.
-Failure recovery is tested only where explicitly recorded; do not infer that
-every interruption or permission failure was exercised.
-
-## Startup recovery (since 0.6.1)
-
-A fresh 0.6.1-or-later MCP connection launches its bridge from a valid state directory,
-even when the MCP process inherited a deleted working directory. The Claude
-process still uses the task's approved working directory. Diagnostics expose
-bridge startup readiness separately from CLI authentication.
-
-If plugin executable code changes after the Runtime loaded it, dispatch fails
-before creating a new run. Start a new connection with the installed version;
-reinstalling alone does not replace code already loaded by an old process.
-
-For new runs, recovery can use a nonce- and identity-bound startup record to
-prove failure before Claude started, including failure before an execution
-directory exists. Recovery persists an audit receipt before updating state or
-removing that run's marker. Use the normal recovery inspection and reconciliation
-tools; do not fabricate startup records or delete markers. Historical unknown
-runs without sufficient evidence remain blocked, and changing connections does
-not resolve that separate uncertainty.
-
-## Review and guidance compatibility in 0.7.1
-
-A new Git review with the preserved original `user_request` defaults to an
-independent writable copy. OS protection restricts writes to the original
-repository, Git metadata and external requirement sources. It is not a
-credential or network sandbox. External MCP is disabled. Legacy callers without
-an original request keep strict review; artifacts directories are always strict.
-Implementation still edits only declared files. Workflow availability does not
-prove invocation, completion or adequate coverage; Codex verifies those facts.
-
-Guidance is bundled with the plugin. Online content check/review/switch tools
-are retired; read/status remain. Old activation state does not select guidance
-for new runs, while immutable historical snapshots and original resume bindings
-remain verifiable. After an upgrade, inspect the original run before starting a
-new one; changed code or CLI identity can require a fresh revision.
+for the tested refs, host and outcomes. A successful remote installation and
+MCP initialization do not prove natural-language delegation in a new task, a
+cold second machine or another user's credentials. Failure recovery is tested
+only where explicitly recorded.

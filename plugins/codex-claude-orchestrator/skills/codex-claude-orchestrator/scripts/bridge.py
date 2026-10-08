@@ -1,2693 +1,657 @@
 #!/usr/bin/env python3
-"""Small supervised bridge for the Claude CLI.
+"""Run one delegated Claude task under supervision and record what happened.
 
-Strict tasks use tool guards; isolated reviews add OS source-write protection.
-The bridge has no
-daemon, database, background retry, Codex handoff, or automatic workflow.
+The bridge freezes the inputs, prepares the workspace, renders the brief,
+launches the local Claude CLI in its own process group and enforces the
+deadline and cancellation.  ``outcome.json`` is written last.  The bridge
+reports facts and warnings; whether the work is accepted is Codex's decision.
 """
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import hashlib
 import json
-import math
 import os
-import re
-import selectors
+from pathlib import Path
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
-import threading
 import time
-import unicodedata
+import traceback
+from typing import Any
 import uuid
-from pathlib import Path
-from typing import Any, Mapping
 
-# Plugin-level discovery is shared with diagnostics, including desktop PATH.
-PLUGIN_SCRIPTS = Path(__file__).resolve().parents[3] / "scripts"
-if PLUGIN_SCRIPTS.is_dir():
-    sys.path.insert(0, str(PLUGIN_SCRIPTS))
-from executable_locator import RETIRED_SELECTION_SOURCES, locate_claude, cli_environment
-import content_store
-import plugin_identity
-import startup_protocol
+PLUGIN_ROOT = Path(__file__).resolve().parents[3]
+if str(PLUGIN_ROOT / "scripts") not in sys.path:
+    sys.path.insert(0, str(PLUGIN_ROOT / "scripts"))
+from shared_io import dump_json as dump, load_json as load, read_regular
 import trusted_git
-from shared_io import dump_json as dump, load_json as load, sha256_file, read_regular
+from executable_locator import cli_environment, locate_claude
 
+import brief as brief_renderer
+import cli_env
+import copy_workspace
 from events import append as append_activity
-import usage as usage_scope
-import workflow_delivery
+import instruction_layer
+import process_control
+from process_family import Family, ENVIRONMENT_KEY as FAMILY_KEY
+import result_schema
 from run_process import ProcessStream
-from process_family import Family, ENVIRONMENT_KEY as FAMILY_ENVIRONMENT_KEY
-import review_workspace
-from stream_parser import workflow_input, parse_stream, denial_entries as denial_entries
-from compatibility import BUDGET_FLAGS, REQUIRED_FLAGS, GROUPS, bridge_contract_id, flag_advertised, required_flags, required_groups
-from compatibility import DISPATCH_PROTOCOL_VERSION, LEGACY_DISPATCH_CONTRACTS
-from workspace import WorkspaceError, artifact_snapshot, artifact_snapshot_difference, canonical_read_path, snapshot_digest, validate_artifact_lists
+import stream_parser
+import usage as usage_report
 
-WRITE_TOOLS = ("Edit", "Write")
-READ_TOOLS = ("Read", "Glob", "Grep")
-DISALLOWED = ("Bash", "Agent", "Task", "TeamCreate", "NotebookEdit", "Skill", "Workflow")
-# CLI permission rules match tool names, not a standalone wildcard. Keep
-# availability at `default`; dontAsk explicitly permits the advertised built-ins.
-ISOLATED_ALLOWED_TOOLS = (
-    "Agent", "Task", "Bash", "CronCreate", "CronDelete", "CronList", "DesignSync", "Edit", "EnterWorktree", "ExitWorktree",
-    "ListAgents", "LSP", "Monitor", "NotebookEdit", "PushNotification", "Read", "Glob", "Grep", "RemoteTrigger",
-    "ReportFindings", "ScheduleWakeup", "SendMessage", "ShareOnboardingGuide", "Skill", "StructuredOutput", "TaskStop",
-    "TaskOutput", "ToolSearch", "WebFetch", "WebSearch", "Workflow", "Write", "TodoWrite", "TeamCreate", "TeamDelete",
-    "TaskCreate", "TaskGet", "TaskList", "TaskUpdate", "AskUserQuestion", "EnterPlanMode", "ExitPlanMode",
-)
+OUTCOMES = ("ok", "timeout", "cancelled", "crashed", "not_started", "lost")
+COPY_ALLOWED = ("Agent", "Task", "Bash", "Edit", "Write", "NotebookEdit", "Read", "Glob", "Grep", "LSP", "Skill",
+                "ToolSearch", "TodoWrite", "TaskCreate", "TaskGet", "TaskList", "TaskUpdate", "TaskOutput", "TaskStop",
+                "Workflow", "Monitor", "ListAgents")
+# Tools with effects outside the copy, or that wait for a person who is not there.
+COPY_DENIED = ("AskUserQuestion", "CronCreate", "CronDelete", "CronList", "DesignSync", "EnterPlanMode",
+               "ExitPlanMode", "EnterWorktree", "ExitWorktree", "PushNotification", "RemoteTrigger", "ScheduleWakeup",
+               "SendMessage", "ShareOnboardingGuide", "TeamCreate", "TeamDelete")
+READONLY_TOOLS = ("Read", "Glob", "Grep")
+WEB_TOOLS = ("WebFetch", "WebSearch")
 PRINT_BG_WAIT_CEILING = "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"
-TERMINATION_GRACE_SECONDS = 3
+INPUT_FILE_LIMIT = 2000
+INPUT_BYTE_LIMIT = 64 * 1024 * 1024
+REPORT_LIMIT = 8 * 1024 * 1024
+RESULT_LIMIT = 1024 * 1024
+SUMMARY_LIMIT = 600
 
 
-def print_background_wait_ceiling_ms(timeout: float) -> int:
-    """Bound `claude -p`'s wait for a pending background Workflow by this run's deadline.
-
-    The CLI's default ceiling (10 minutes of idle waiting after the first
-    result) stops a still-running Workflow and drops its report, which is
-    shorter than a typical workflow_review timeout.  The value is never 0
-    (unbounded); the bridge deadline still terminates the process group.
-    """
-    return max(1000, math.ceil(float(timeout) * 1000))
-FINAL = {"completed", "blocked", "failed", "cancelled", "timeout", "unknown"}
-from bridge_errors import BridgeError
-from result_schema import RESULT_SCHEMA, result_payload
+def plugin_version() -> str:
+    try:
+        return str(load(PLUGIN_ROOT / ".codex-plugin" / "plugin.json")["version"])
+    except (OSError, ValueError, KeyError):
+        return "unknown"
 
 
 def activity(run_dir: Path, kind: str, summary: str, **fields: Any) -> None:
-    event = append_activity(run_dir, kind, summary, **fields)
-    # The terminal stream remains compact and deliberately omits any model text.
-    print(f"activity[{event['seq']}] {event['kind']}: {event['summary']}", flush=True)
+    append_activity(run_dir, kind, summary, **fields)
 
 
-def require_absolute(value: str, label: str) -> Path:
-    p = Path(value)
-    if not p.is_absolute():
-        raise BridgeError(f"{label} must be absolute")
-    return p
-
-
-def unsafe_relative_path(value: str) -> bool:
-    parts = Path(value).parts
-    return not value or "\\" in value or Path(value).is_absolute() or ".." in parts or Path(value).as_posix() != value
-
-
-def bad_owned_path(value: str) -> bool:
-    parts = tuple(unicodedata.normalize("NFC", part).casefold() for part in Path(value).parts)
-    return unsafe_relative_path(value) or ".git" in parts or any("oracle" in x.lower() for x in parts) or any(x in {".claude", ".codex"} for x in parts)
-
-
-def path_identity(value: str) -> str:
-    # APFS commonly folds case and Unicode decomposition. Be conservative on
-    # case-sensitive volumes too: a portable packet must not alias protection.
-    return unicodedata.normalize("NFC", value).casefold()
-
-
-def aliases_protected(target: Path, protected: list[Path]) -> bool:
-    for other in protected:
-        if path_identity(str(target)) == path_identity(str(other)):
-            return True
-        try:
-            if target.exists() and other.exists() and target.samefile(other):
-                return True
-        except OSError as exc:
-            raise BridgeError(f"cannot establish protected file identity: {other}") from exc
-    return False
-
-
-def validate_packet(packet: Any, *, frozen_workflow: bool = False) -> dict[str, Any]:
-    """Validate a task packet.
-
-    ``frozen_workflow`` is for the per-tool hook re-reading the packet this
-    run already dispatched: the bound saved script is re-verified in place
-    instead of re-enumerating every saved workflow.
-    """
-    if isinstance(packet, dict) and any(key in packet for key in ("cli_descriptor", "cli_selection", "cli_identity", "qualification")):
-        raise BridgeError("CLI identity is selected by the supervisor, not by task packet fields")
-    if isinstance(packet, dict) and "content_binding" in packet:
-        raise BridgeError("coordination content is pinned by the supervisor, not by task packet fields")
-    if not isinstance(packet, dict):
-        raise BridgeError("packet must be an object")
-    required = ("task_id", "revision", "role", "cwd", "objective", "requirement_sources",
-                "constraints", "acceptance", "protected_files", "model", "effort")
-    for key in required:
-        if key not in packet:
-            raise BridgeError(f"packet missing {key}")
-    if not isinstance(packet["task_id"], str) or not packet["task_id"]:
-        raise BridgeError("task_id must be a non-empty string")
-    if not isinstance(packet["revision"], int) or isinstance(packet["revision"], bool) or packet["revision"] < 1:
-        raise BridgeError("revision must be a positive integer")
-    if packet["role"] not in ("review", "implement", "workflow_review"):
-        raise BridgeError("role must be review, implement or workflow_review")
-    user_request = packet.get("user_request")
-    if user_request is not None and (not isinstance(user_request, str) or not user_request.strip()):
-        raise BridgeError("user_request must preserve a nonblank original request")
-    if not isinstance(packet.get("review_scope", "full"), str) or packet.get("review_scope", "full") not in {"defects", "quality", "full"}:
-        raise BridgeError("review_scope must be defects, quality or full")
-    mode = packet.get("review_mode", "strict")
-    if not isinstance(mode, str) or mode not in {"strict", "isolated"}:
-        raise BridgeError("review_mode must be strict or isolated")
-    if mode == "isolated" and (packet["role"] != "review" or packet.get("workspace_kind", "git") != "git" or user_request is None):
-        raise BridgeError("isolated mode requires Git review and original user_request")
-    raw_cwd = require_absolute(packet["cwd"], "cwd")
-    workspace_kind = packet.get("workspace_kind", "git")
-    if workspace_kind not in {"git", "artifacts"}:
-        raise BridgeError("workspace_kind must be git or artifacts")
-    if workspace_kind == "artifacts":
-        try:
-            # Validate the lexical root before resolve erases custom symlinks.
-            cwd = canonical_read_path(str(raw_cwd), raw_cwd, "artifact workspace root")
-        except (WorkspaceError, OSError) as exc:
-            raise BridgeError(str(exc)) from exc
-    else:
-        cwd = raw_cwd.resolve()
-    if not cwd.is_dir():
-        raise BridgeError("cwd must be an existing directory")
-    if not isinstance(packet["objective"], str) or not packet["objective"].strip():
-        raise BridgeError("objective must be a non-empty string")
-    for key in ("requirement_sources", "constraints", "acceptance", "protected_files"):
-        if not isinstance(packet[key], list) or not all(isinstance(x, str) for x in packet[key]):
-            raise BridgeError(f"{key} must be an array of strings")
-    canonical_sources = []
-    for source in packet["requirement_sources"]:
-        p = require_absolute(source, "requirement source")
-        if workspace_kind == "artifacts":
-            # Keep the caller's lexical absolute path until workspace.py checks
-            # every ancestor.  Resolving here would erase a custom symlink from
-            # the evidence path before the artifacts policy can reject it.
-            canonical_sources.append(str(p))
-            continue
-        if not p.is_file():
-            raise BridgeError(f"requirement source is not a file: {source}")
-        canonical_sources.append(str(p.resolve()))
-    owned = packet.get("owned_files", [])
-    if not isinstance(owned, list) or not all(isinstance(x, str) for x in owned):
-        raise BridgeError("owned_files must be an array of strings")
-    if packet["role"] == "implement" and not owned:
-        raise BridgeError("implement packet requires owned_files")
-    if packet["role"] in ("review", "workflow_review") and owned:
-        raise BridgeError("review packet cannot own files")
-    for key in ("owned_files", "protected_files"):
-        for item in packet.get(key, []):
-            if (key == "owned_files" and bad_owned_path(item)) or (key == "protected_files" and unsafe_relative_path(item)):
-                raise BridgeError(f"unsafe {key} path: {item}")
-    if len({path_identity(path) for path in owned}) != len(owned):
-        raise BridgeError("owned_files contains case or Unicode aliases")
-    if {path_identity(path) for path in owned} & {path_identity(path) for path in packet["protected_files"]}:
-        raise BridgeError("owned_files overlaps protected_files")
-    protected_targets = [cwd / path for path in packet["protected_files"]] + [Path(path) for path in canonical_sources]
-    if any(aliases_protected(cwd / path, protected_targets) for path in owned):
-        raise BridgeError("owned_files aliases a protected file or requirement source")
-    for source in packet["requirement_sources"]:
-        source_path = Path(source).resolve()
-        try:
-            relative_source = source_path.relative_to(cwd).as_posix()
-        except ValueError:
-            continue
-        if path_identity(relative_source) in {path_identity(path) for path in owned}:
-            raise BridgeError("requirement_sources cannot be owned_files")
-    if (not isinstance(packet["model"], str) or not packet["model"].strip()
-            or not isinstance(packet["effort"], str) or not packet["effort"].strip()):
-        raise BridgeError("model and effort must be non-empty strings")
-    if "\x00" in packet["model"] or "\x00" in packet["effort"]:
-        raise BridgeError("model and effort must not contain NUL characters")
-    budget = packet.get("budget", {})
-    if not isinstance(budget, dict) or any(key not in {"max_turns", "max_budget_usd"} for key in budget):
-        raise BridgeError("budget may contain only max_turns and max_budget_usd")
-    if "max_turns" in budget and (not isinstance(budget["max_turns"], int) or isinstance(budget["max_turns"], bool) or budget["max_turns"] < 1):
-        raise BridgeError("budget.max_turns must be a positive integer")
-    if "max_budget_usd" in budget and (not isinstance(budget["max_budget_usd"], (int, float)) or isinstance(budget["max_budget_usd"], bool) or not math.isfinite(budget["max_budget_usd"]) or budget["max_budget_usd"] <= 0):
-        raise BridgeError("budget.max_budget_usd must be a positive number")
-    correction = packet.get("correction")
-    if correction is not None:
-        if not isinstance(correction, dict) or correction.get("kind") not in {"local", "structural", "direction", "infrastructure"}:
-            raise BridgeError("invalid correction")
-        if not isinstance(correction.get("finding_id"), str) or not isinstance(correction.get("reason"), str):
-            raise BridgeError("correction needs finding_id and reason")
-        if not isinstance(correction.get("attempt"), int) or correction["attempt"] < 1:
-            raise BridgeError("correction attempt must be positive")
-    baseline = packet.get("baseline_commit")
-    if baseline is not None and (not isinstance(baseline, str) or len(baseline) != 40 or any(c not in "0123456789abcdef" for c in baseline)):
-        raise BridgeError("baseline_commit must be a lowercase full 40-character SHA")
-    packet = dict(packet)
-    packet["review_scope"] = packet.get("review_scope", "full")
-    packet["review_mode"] = mode
-    packet["request_provenance"] = "user_request" if user_request is not None else "legacy_unspecified"
-    packet["cwd"] = str(cwd)
-    packet["requirement_sources"] = canonical_sources
-    packet["owned_files"] = list(owned)
-    packet["protected_files"] = list(packet["protected_files"])
-    packet["workspace_kind"] = workspace_kind
-    packet["budget"] = budget
-    if workspace_kind == "artifacts":
-        if packet["role"] != "review":
-            raise BridgeError("artifacts workspace supports review only; implement, resume and workflow are unsupported")
-        git_probe = trusted_git.run(cwd, "rev-parse", "--is-inside-work-tree", text=True)
-        if git_probe.returncode == 0 and git_probe.stdout.strip() == "true":
-            raise BridgeError("artifacts workspace must be a non-Git directory; use workspace_kind=git for a repository or worktree")
-        if packet.get("baseline_commit") is not None:
-            raise BridgeError("artifacts workspace does not accept baseline_commit")
-        if packet.get("protocol_binding") is not None:
-            raise BridgeError("artifacts workspace does not support protocol_binding")
-        try:
-            inputs, sources = validate_artifact_lists(packet)
-        except WorkspaceError as exc:
-            raise BridgeError(str(exc)) from exc
-        packet["input_files"] = inputs
-        packet["requirement_sources"] = sources
-    elif "input_files" in packet:
-        # Preserve the old Git packet contract rather than silently making an
-        # accidental file list look supervised.
-        raise BridgeError("input_files is supported only for workspace_kind=artifacts")
-    workflow = packet.get("workflow")
-    if packet["role"] == "workflow_review":
-        if packet.get("correction") is not None:
-            raise BridgeError("workflow_review is fresh-only and cannot carry a correction")
-        try:
-            from named_workflow import NamedWorkflowError, validate as validate_named_workflow, verify_bound
-            workflow = verify_bound(workflow, cwd) if frozen_workflow else validate_named_workflow(workflow, cwd)
-        except (NamedWorkflowError, OSError, subprocess.CalledProcessError) as exc:
-            raise BridgeError(f"saved workflow identity check failed: {exc}") from exc
-        packet["workflow"] = workflow
-        # Saved scripts are protected exactly as requirement sources are: their
-        # identity is checked before dispatch, after dispatch, and on any future
-        # preflight.  The explicit packet hash is independently verified above.
-        packet["requirement_sources"] = list(dict.fromkeys(packet["requirement_sources"] + [workflow["path"]]))
-    elif workflow is not None:
-        raise BridgeError("workflow is permitted only for workflow_review")
-    if packet.get("protocol_binding") is not None:
-        from protocol import validate_binding
-        try:
-            packet = validate_binding(packet)
-        except (ValueError, OSError, subprocess.CalledProcessError) as exc:
-            raise BridgeError(f"Protocol identity check failed: {exc}") from exc
-        if any(aliases_protected(cwd / owned_path, [Path(source) for source in packet["requirement_sources"]]) for owned_path in owned):
-            raise BridgeError("protocol/delta cannot be owned_files or alias an owned file")
-    return packet
-
-
-def git_bytes(cwd: Path, *args: str) -> bytes:
-    p = trusted_git.run(cwd, *args)
-    if p.returncode:
-        raise BridgeError(f"git {' '.join(args)} failed: {p.stderr.decode('utf-8', 'replace').strip()}")
-    return p.stdout
-
-
-def git(cwd: Path, *args: str) -> str:
-    return git_bytes(cwd, *args).decode("utf-8", "surrogateescape")
-
-
-def git_head(cwd: Path) -> str | None:
-    """Return HEAD when it exists, while still rejecting a non-Git cwd.
-
-    A freshly initialized repository has a valid worktree but no commit yet.
-    That condition is useful for a read-only supervised review and must remain
-    distinguishable from an invalid repository; ``None`` is therefore part of
-    the persisted snapshot rather than a fabricated SHA.
-    """
-    git(cwd, "rev-parse", "--is-inside-work-tree")
-    p = trusted_git.run(cwd, "rev-parse", "--verify", "-q", "HEAD", text=True)
-    if p.returncode == 1:
-        return None
-    if p.returncode:
-        raise BridgeError(f"git rev-parse HEAD failed: {p.stderr.strip()}")
-    return p.stdout.strip()
-
-
-def git_status_entries(cwd: Path) -> list[tuple[str, str, str | None]]:
-    p = trusted_git.run(cwd, "status", "--porcelain=v1", "-z", "-uall")
-    if p.returncode:
-        raise BridgeError(f"git status failed: {p.stderr.decode(errors='replace').strip()}")
-    fields = p.stdout.split(b"\0")
-    entries: list[tuple[str, str, str | None]] = []
-    i = 0
-    while i < len(fields) - 1:
-        field = fields[i]
-        if len(field) < 3:
-            raise BridgeError("malformed git porcelain status")
-        xy = field[:2].decode("ascii")
-        path = field[3:].decode("utf-8", "surrogateescape")
-        original = None
-        if "R" in xy or "C" in xy:
-            i += 1
-            if i >= len(fields) - 1:
-                raise BridgeError("malformed git rename status")
-            original = fields[i].decode("utf-8", "surrogateescape")
-        entries.append((xy, path, original))
-        i += 1
-    return entries
-
-
-def content_digest(path: Path) -> str:
+def _read_json(path: Path) -> Any:
     try:
-        stat = path.lstat()
-    except FileNotFoundError:
-        return "missing"
-    if path.is_symlink():
-        return "symlink:" + hashlib.sha256(os.readlink(path).encode("utf-8", "surrogateescape")).hexdigest()
-    if path.is_file():
-        return sha256_file(path)
-    return f"non-file:{stat.st_mode}:{stat.st_size}"
-
-
-def cwd_relative_status_path(path: str, prefix: str) -> str:
-    """Convert a Git-root porcelain path into the cwd coordinates of owned_files.
-
-    Paths outside a subdirectory cwd become ``../`` paths, which can never
-    equal an owned file and are rejected by ``bad_owned_path``.
-    """
-    if not prefix:
-        return path
-    if path.startswith(prefix):
-        return path[len(prefix):]
-    return os.path.relpath("/" + path, "/" + prefix.rstrip("/"))
-
-
-def git_snapshot(cwd: Path, packet: dict[str, Any], *, worktree_root: Path | None = None) -> dict[str, Any]:
-    """Snapshot in cwd coordinates.
-
-    ``worktree_root`` observes a deleted cwd from its verified worktree root
-    (see ``recorded_cwd_observation_root``).  Porcelain status and the tracked
-    diff are worktree-wide and root-relative from any cwd, so the result keeps
-    the same shape and digest the recorded cwd itself would produce.
-    """
-    observer = cwd if worktree_root is None else worktree_root
-    head = git_head(observer)
-    if worktree_root is None:
-        # Directory names may legally begin or end with whitespace; drop only Git's line terminator.
-        prefix = git(cwd, "rev-parse", "--show-prefix").removesuffix("\n")
-    else:
-        relative = Path(os.path.relpath(cwd, worktree_root)).as_posix()
-        prefix = "" if relative == "." else relative + "/"
-
-    def located(cwd_relative: str, root_relative: str) -> Path:
-        # Only the root is traversable once cwd is gone; "cwd/../x" is not.
-        return cwd / cwd_relative if worktree_root is None else worktree_root / root_relative
-
-    entries: list[tuple[str, str, str | None]] = []
-    hashes: dict[str, str] = {}
-    for xy, path, original in git_status_entries(observer):
-        relative = cwd_relative_status_path(path, prefix)
-        relative_original = None if original is None else cwd_relative_status_path(original, prefix)
-        entries.append((xy, relative, relative_original))
-        hashes[relative] = content_digest(located(relative, path))
-        if original is not None:
-            hashes[relative_original] = content_digest(located(relative_original, original))
-    # Keep legacy universal-newline hashing for existing UTF-8 snapshots while
-    # accepting other encodings. File hashes below still cover exact bytes.
-    tracked_diff = git_bytes(observer, "diff", "--no-ext-diff", "--no-textconv") + git_bytes(observer, "diff", "--cached", "--no-ext-diff", "--no-textconv")
-    tracked_diff = tracked_diff.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
-    guarded = {path: content_digest(located(path, prefix + path))
-               for path in packet.get("owned_files", []) + packet.get("protected_files", [])}
-    normalized = [{"xy": xy, "path": path, "original": original} for xy, path, original in entries]
-    material = tracked_diff + json.dumps(normalized, ensure_ascii=False, sort_keys=True).encode("utf-8", "surrogateescape") + json.dumps(hashes, ensure_ascii=False, sort_keys=True).encode("utf-8", "surrogateescape")
-    snapshot = {"head": head, "status_entries": normalized, "diff_hash": hashlib.sha256(material).hexdigest(), "dirty_content_hashes": hashes,
-                "guarded_content_hashes": guarded, "ignored_files_not_enumerated": True}
-    if prefix:
-        # Root-cwd snapshots keep their earlier shape so protocol-compatible
-        # resumes still compare equal after a plugin upgrade.
-        snapshot["git_prefix"] = prefix
-    return snapshot
-
-
-def changed_paths(snapshot: dict[str, Any]) -> set[str]:
-    paths: set[str] = set()
-    for entry in snapshot["status_entries"]:
-        paths.add(entry["path"])
-        if entry.get("original") is not None:
-            paths.add(entry["original"])
-    return paths
-
-
-def scope_violations(packet: dict[str, Any], before: dict[str, Any], after: dict[str, Any]) -> list[str]:
-    changed = changed_paths(after)
-    changed.update(p for p in packet["protected_files"]
-                   if before["guarded_content_hashes"].get(p) != after["guarded_content_hashes"].get(p))
-    return sorted(p for p in changed if p not in set(packet["owned_files"]) or p in set(packet["protected_files"]) or bad_owned_path(p))
-
-
-def lane_identity(cwd: Path, workspace_kind: str = "git") -> str:
-    """Return the one execution-lane identity shared by every cwd of a worktree.
-
-    Git lanes are the canonical ``--show-toplevel`` so a root and its
-    subdirectories exclude each other, while linked worktrees (which share a
-    common git-dir) stay independent.  Artifact roots are verified non-Git and
-    keep their exact canonical directory.  A root cwd keeps the pre-identity
-    lock and marker key, which is what older releases hashed.
-    """
-    try:
-        resolved = cwd.resolve(strict=True)
-    except OSError as exc:
-        raise BridgeError(f"cwd lane identity cannot be established: {exc}") from exc
-    if workspace_kind == "artifacts":
-        return str(resolved)
-    if git(resolved, "rev-parse", "--is-inside-work-tree").strip() != "true":
-        raise BridgeError("cwd is not inside a Git working tree; lane identity cannot be established")
-    # Directory names may legally end with whitespace; drop only Git's line terminator.
-    toplevel = git(resolved, "rev-parse", "--show-toplevel").removesuffix("\n")
-    try:
-        return str(Path(toplevel).resolve(strict=True))
-    except OSError as exc:
-        raise BridgeError(f"Git worktree toplevel cannot be resolved: {exc}") from exc
-
-
-def recorded_lane(cwd: Any) -> tuple[str, bool]:
-    """Return ``(lock key, established)`` for a cwd recorded without a lane identity.
-
-    When no Git worktree can be resolved (artifact roots, deleted or moved
-    directories) the key falls back to the exact cwd an older writer locked.
-    That fallback is only a lock/marker key, never a proven worktree lane.
-    """
-    if not isinstance(cwd, str) or not os.path.isabs(cwd):
-        raise BridgeError("recorded cwd is missing; lane identity cannot be established")
-    try:
-        return lane_identity(Path(cwd), "git"), True
-    except BridgeError:
-        return str(Path(cwd).resolve()), False
-
-
-def recorded_lane_identity(cwd: Any) -> str:
-    return recorded_lane(cwd)[0]
-
-
-def recorded_cwd_in_lane(cwd: Any, identity: str) -> bool:
-    """Attribute a recorded cwd without an established lane, without guessing across worktrees."""
-    if not isinstance(cwd, str) or not os.path.isabs(cwd):
-        return False
-    # Non-strict resolve still canonicalizes existing ancestors such as /var.
-    try:
-        recorded = Path(cwd).resolve()
-    except (OSError, RuntimeError):
-        recorded = Path(os.path.normpath(cwd))
-    root = Path(identity)
-    if recorded.is_dir():
-        return recorded_lane_identity(str(recorded)) == identity
-    # A deleted cwd cannot be re-resolved; its lexical ancestry is the only
-    # remaining evidence and stays blocking.
-    return recorded == root or root in recorded.parents
-
-
-def recorded_cwd_observation_root(cwd: Any, identity: Any) -> Path | None:
-    """Verify a recorded Git cwd still belongs to its established lane.
-
-    An established lane is the canonical toplevel recorded at dispatch.  The
-    cwd must be that root or a normalized descendant, and the root must still
-    resolve to itself.  A cwd that still exists must be a real directory that
-    resolves to itself and whose current toplevel is that lane; ``None`` then
-    means "observe at the cwd".  A deleted cwd returns the root to observe
-    from, but only when its nearest surviving ancestor is a real directory of
-    the same lane.  Any symlinked, replaced, nested or rebound location is
-    ambiguous and raises instead of observing a different workspace.
-    """
-    if not isinstance(identity, str) or not identity or not os.path.isabs(identity):
-        raise BridgeError("the run has no established worktree lane")
-    if not isinstance(cwd, str) or not os.path.isabs(cwd):
-        raise BridgeError("recorded cwd is missing or not absolute")
-    if os.path.normpath(cwd) != cwd or os.path.normpath(identity) != identity:
-        raise BridgeError("recorded cwd or worktree lane is not in canonical form")
-    root, recorded = Path(identity), Path(cwd)
-    if recorded != root and root not in recorded.parents:
-        raise BridgeError("recorded cwd is outside its established worktree lane")
-    try:
-        if root.is_symlink() or root.resolve(strict=True) != root:
-            raise BridgeError("established worktree root no longer resolves to itself")
-    except OSError as exc:
-        raise BridgeError(f"established worktree root is unavailable: {exc}") from exc
-    if os.path.lexists(recorded):
-        if recorded.is_symlink() or not recorded.is_dir() or os.path.realpath(recorded) != str(recorded):
-            raise BridgeError("recorded cwd was replaced by a symlink, a non-directory or a path that resolves elsewhere")
-        if lane_identity(recorded, "git") != identity:
-            raise BridgeError("recorded cwd now belongs to a different worktree")
-        return None
-    nearest = next(parent for parent in recorded.parents if os.path.lexists(parent))
-    if nearest.is_symlink() or not nearest.is_dir() or os.path.realpath(nearest) != str(nearest):
-        raise BridgeError("the surviving ancestor of the recorded cwd is a symlink or not a directory")
-    if lane_identity(nearest, "git") != identity:
-        raise BridgeError("the surviving ancestor of the recorded cwd now belongs to a different worktree")
-    return root
-
-
-def _lane_key(identity: str) -> str:
-    from lane_lock import lane_key
-    return lane_key(identity)
-
-
-def lane_lock_path(identity: str) -> Path:
-    from lane_lock import legacy_lock_path
-    return legacy_lock_path(identity)
-
-
-def unknown_marker_roots() -> tuple[Path, Path]:
-    from lane_lock import marker_roots
-    return marker_roots()
-
-
-def unknown_marker_root() -> Path:
-    return unknown_marker_roots()[0]
-
-
-def unknown_marker_path(identity: str) -> Path:
-    return unknown_marker_root() / (_lane_key(identity) + ".json")
-
-
-def unknown_lane_marker(cwd: Path, workspace_kind: str = "git") -> Path:
-    return unknown_marker_path(lane_identity(cwd, workspace_kind))
-
-
-def unknown_markers(identity: str) -> list[tuple[Path, Any]]:
-    """Return every unknown marker attributable to this lane.
-
-    Markers carry their lane.  Older markers were keyed by the exact resolved
-    cwd, so a legacy subdirectory marker is found by its recorded cwd.  An
-    unreadable file at this lane's key still blocks; one elsewhere without a
-    readable cwd cannot be attributed to any lane.
-    """
-    key = _lane_key(identity)
-    found: list[tuple[Path, Any]] = []
-    for path in sorted({path for root in unknown_marker_roots() for path in root.glob("*.json")}):
-        try:
-            value = json.loads(path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            continue
-        except (OSError, ValueError):
-            value = None
-        stem = path.name[:-len(".json")]
-        if stem == key or stem.startswith(key + "."):
-            found.append((path, value))
-        elif isinstance(value, dict):
-            recorded = value.get("lane_identity")
-            if recorded == identity or (recorded is None and recorded_cwd_in_lane(value.get("cwd"), identity)):
-                found.append((path, value))
-    return found
-
-
-def publish_unknown_marker(identity: str, value: dict[str, Any], *, established: bool = True) -> Path:
-    """Publish durable and legacy evidence without replacing another run's marker.
-
-    An unestablished key is stored under that key but without a lane
-    identity, so every lane still attributes the marker by its recorded cwd.
-    """
-    run_id = value["run_id"]
-    content = {**value, "lane_identity": identity if established else None}
-    if not established:
-        content["lane_key_source"] = "unresolved_recorded_cwd"
-    published = []
-    for root in unknown_marker_roots():
-        primary = root / (_lane_key(identity) + ".json")
-        temporary = primary.with_name(f".{primary.name}.{uuid.uuid4().hex}.tmp")
-        temporary.write_text(json.dumps(content, ensure_ascii=False) + "\n", encoding="utf-8")
-        try:
-            try:
-                # Older releases only consult this primary key in the legacy root.
-                os.link(temporary, primary)
-                published.append(primary)
-                continue
-            except FileExistsError:
-                pass
-            try:
-                existing = json.loads(primary.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                existing = None
-            target = primary
-            if not isinstance(existing, dict) or existing.get("run_id") != run_id:
-                suffix = hashlib.sha256(str(run_id).encode()).hexdigest()[:16]
-                target = primary.with_name(f"{_lane_key(identity)}.{suffix}.json")
-            os.replace(temporary, target)
-            published.append(target)
-        finally:
-            temporary.unlink(missing_ok=True)
-    return published[0]
-
-
-def lock_file(identity: str, task_id: str):
-    from lane_lock import acquire
-    try:
-        return acquire(identity, inherit=True)
-    except BlockingIOError:
-        raise BridgeError("another active run already owns this cwd")
-    except OSError as exc:
-        raise BridgeError(f"cwd lane lock is unavailable: {exc}") from exc
-
-
-def state(run_dir: Path, status: str, **extra: Any) -> None:
-    old = {}
-    p = run_dir / "state.json"
-    if p.exists():
-        old = load(p)
-    old.update({"status": status, "updated_at": time.time(), **extra})
-    dump(p, old)
-
-
-def pre_dispatch_cancelled(run_dir: Path, packet: dict[str, Any], note: str) -> int:
-    state(run_dir, "cancelled", reason=note)
-    dump(run_dir / "receipt.json", {"status": "cancelled", "task_id": packet["task_id"], "revision": packet["revision"],
-                                     "note": "cancelled before Claude dispatch", **plugin_identity.receipt_fields(run_dir)})
-    activity(run_dir, "cancelled", "cancelled before Claude dispatch", status="cancelled")
-    return 1
-
-
-def workspace_snapshot(packet: dict[str, Any], *, worktree_root: Path | None = None) -> dict[str, Any]:
-    if packet["workspace_kind"] == "artifacts":
-        if worktree_root is not None:
-            raise BridgeError("an artifact root can only be observed at its own location")
-        try:
-            return artifact_snapshot(packet)
-        except WorkspaceError as exc:
-            raise BridgeError(str(exc)) from exc
-    snapshot = git_snapshot(Path(packet["cwd"]), packet, worktree_root=worktree_root)
-    snapshot["workspace_digest"] = snapshot_digest(snapshot)
-    return snapshot
-
-
-def preflight(packet: dict[str, Any], resume: Path | None) -> tuple[dict[str, Any], dict[str, str]]:
-    cwd = Path(packet["cwd"])
-    before = workspace_snapshot(packet)
-    if packet["workspace_kind"] == "git" and packet.get("baseline_commit") and before["head"] != packet["baseline_commit"]:
-        raise BridgeError("git HEAD does not equal baseline_commit")
-    requirements = {source: sha256_file(Path(source)) for source in packet["requirement_sources"]}
-    if packet["workspace_kind"] == "git" and packet["role"] == "implement":
-        if resume is None and before["status_entries"]:
-            dirty_paths = [entry["path"] for entry in before["status_entries"]]
-            raise BridgeError(f"first implement run requires a clean workspace; changed paths: {dirty_paths[:20]}")
-        for owned in packet["owned_files"]:
-            ignored = trusted_git.run(cwd, "check-ignore", "-q", "--", owned).returncode == 0
-            if ignored:
-                raise BridgeError(f"owned file is ignored and cannot be supervised: {owned}")
-    if resume is not None:
-        if before != load(resume / "workspace_after.json"):
-            raise BridgeError("resume workspace differs from prior run's after snapshot")
-        if requirements != load(resume / "requirements.json"):
-            raise BridgeError("resume requirement source paths or hashes changed")
-    return before, requirements
-
-
-def validate_resume(packet: dict[str, Any], previous: Path) -> str:
-    prev_packet = validate_packet(load(previous / "packet.json"))
-    prev_result = load(previous / "result.json")
-    prev_state = load(previous / "state.json")
-    frozen = ("task_id", "cwd", "role", "workspace_kind", "input_files", "model", "constraints", "acceptance", "owned_files", "protected_files", "baseline_commit", "protocol_binding", "project_workflow", "workflow", "budget", "review_mode", "review_scope", "user_request")
-    if any(packet.get(k) != prev_packet.get(k) for k in frozen):
-        raise BridgeError("resume changed a frozen task contract field")
-    if packet["revision"] <= prev_packet["revision"]:
-        raise BridgeError("resume revision must strictly increase")
-    if prev_state.get("status") != "completed" or prev_result.get("provider_subtype") != "success":
-        raise BridgeError("resume requires a completed successful prior session")
-    if (previous / "cancel.json").exists():
-        raise BridgeError("resume is forbidden for a cancelled or invalidated prior session")
-    correction = packet.get("correction")
-    if not correction or correction["kind"] not in {"local", "infrastructure"}:
-        raise BridgeError("only local or infrastructure correction may resume")
-    sid = prev_result.get("actual_session_id")
-    if not isinstance(sid, str) or not sid:
-        raise BridgeError("prior run has no resumable session id")
-    return sid
-
-
-def _contained_path(raw: str, cwd: Path, sources: set[Path], allow_source: bool) -> tuple[Path, bool]:
-    if not raw or "\x00" in raw or "$" in raw:
-        raise BridgeError("empty, NUL, or variable-based paths are forbidden")
-    value = Path(raw)
-    if value.parts and value.parts[0].startswith("~"):
-        raise BridgeError("tilde-based paths are forbidden")
-    if ".." in value.parts:
-        raise BridgeError("path traversal is forbidden")
-    target = (value if value.is_absolute() else cwd / value)
-    try:
-        relative = target.relative_to(cwd)
-        cursor = cwd
-        for piece in relative.parts:
-            cursor = cursor / piece
-            if cursor.is_symlink():
-                raise BridgeError("symlink path is forbidden")
-        return target, True
-    except ValueError:
-        if allow_source and target in sources:
-            if target.is_symlink():
-                raise BridgeError("symlink requirement source is forbidden")
-            return target, False
-        raise BridgeError(_outside_scope_message(target, sources, allow_source))
-
-
-SCOPE_HINT_FILES = 3
-
-
-def _outside_scope_message(target: Path, sources: set[Path], allow_source: bool) -> str:
-    """Explain a denial without granting anything: name the exact files a parent search was after."""
-    message = "path is outside cwd and requirement sources"
-    covered = sorted(str(source) for source in sources if target in source.parents)
-    if allow_source and covered:
-        shown = ", ".join(covered[:SCOPE_HINT_FILES])
-        if len(covered) > SCOPE_HINT_FILES:
-            shown += f" (+{len(covered) - SCOPE_HINT_FILES} more)"
-        # Keep the rule and usable operation before variable-length paths so
-        # bounded denial previews cannot hide the reason or suggest permission.
-        message += ("; a parent directory outside cwd is never searchable. "
-                    "Use Read, or Grep with path set to one exact file. "
-                    f"Exact requirement sources: {shown[:600]}")
-    return message
-
-
-def _artifact_read_path(raw: str, cwd: Path, allowed: set[Path]) -> Path:
-    value = Path(raw)
-    if ".." in value.parts:
-        raise BridgeError("path traversal is forbidden")
-    try:
-        canonical = canonical_read_path(raw, cwd)
-    except WorkspaceError as exc:
-        raise BridgeError(str(exc)) from exc
-    if canonical not in allowed:
-        raise BridgeError("artifact review may read only exact declared input_files and requirement_sources")
-    return canonical
-
-
-def _glob_base(pattern: str) -> str:
-    first = min((i for i, char in enumerate(pattern) if char in "*?[{"), default=len(pattern))
-    base = pattern[:first]
-    if not base:
-        return "."
-    return base.rsplit("/", 1)[0] or ("/" if base.startswith("/") else ".")
-
-
-def _glob_variants(pattern: str) -> list[str]:
-    """Expand simple brace choices so every possible lexical base is checked.
-
-    Claude Glob accepts brace choices.  Treat malformed/nested braces as
-    ambiguous rather than trying to emulate a provider-specific glob parser.
-    The bound keeps a generated pattern from turning guard validation into an
-    unbounded expansion.
-    """
-    if not isinstance(pattern, str) or not pattern or "\x00" in pattern or "$" in pattern:
-        raise BridgeError("Glob pattern must be a non-empty literal string")
-    variants = [pattern]
-    while any("{" in item or "}" in item for item in variants):
-        expanded: list[str] = []
-        for item in variants:
-            left = item.find("{")
-            right = item.find("}")
-            if left < 0 or right < 0 or right < left or "{" in item[left + 1:right] or "}" in item[left + 1:right]:
-                raise BridgeError("ambiguous Glob brace expression is forbidden")
-            choices = item[left + 1:right].split(",")
-            if len(choices) < 2 or any(not choice for choice in choices):
-                raise BridgeError("ambiguous Glob brace expression is forbidden")
-            expanded.extend(item[:left] + choice + item[right + 1:] for choice in choices)
-            if len(expanded) > 64:
-                raise BridgeError("Glob brace expansion is too large")
-        variants = expanded
-    if any(".." in Path(variant).parts for variant in variants):
-        raise BridgeError("Glob pattern traversal is forbidden")
-    return variants
-
-
-def hook_reply_denied(reason: str) -> int:
-    print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": reason}}))
-    return 0
-
-
-def hook_policy_preflight(cwd: Path, environment: Mapping[str, str],
-                          managed_paths: list[Path] | None = None) -> dict[str, Any]:
-    """Fail before provider dispatch when readable settings can disable this gate.
-
-    The check never rewrites or suppresses existing settings/hooks.  Server or
-    MDM policy that is not materialized as a readable file remains explicitly
-    unconfirmed; the per-tool audit below must not be described as prevention.
-    """
-    disabled_env = [key for key in ("CLAUDE_CODE_SAFE_MODE", "CLAUDE_CODE_SIMPLE")
-                    if environment.get(key) == "1"]
-    if disabled_env:
-        raise BridgeError("bridge hook guard is disabled by inherited environment: " + ", ".join(disabled_env))
-    configured = environment.get("CLAUDE_CONFIG_DIR")
-    home = environment.get("HOME")
-    user_root = Path(configured).expanduser() if configured else (Path(home) / ".claude" if home else None)
-    paths: list[tuple[str, Path]] = []
-    if user_root is not None:
-        paths.append(("user", user_root / "settings.json"))
-    paths.extend((("project", cwd / ".claude" / "settings.json"),
-                  ("project_local", cwd / ".claude" / "settings.local.json")))
-    if managed_paths is None:
-        managed_paths = [Path("/Library/Application Support/ClaudeCode/managed-settings.json"),
-                         Path("/etc/claude-code/managed-settings.json")]
-    paths.extend(("managed_file", path) for path in managed_paths)
-    observed: list[dict[str, Any]] = []
-    unsafe: list[str] = []
-    for source, path in paths:
-        if not path.exists():
-            continue
-        try:
-            value = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as exc:
-            raise BridgeError(f"cannot verify Claude hook policy in {source} settings: {type(exc).__name__}") from exc
-        if not isinstance(value, dict):
-            raise BridgeError(f"cannot verify Claude hook policy in {source} settings: root is not an object")
-        flags = {key: value.get(key) for key in ("disableAllHooks", "allowManagedHooksOnly") if key in value}
-        observed.append({"source": source, "path": str(path), "flags": flags})
-        for key, flag in flags.items():
-            if flag is True:
-                unsafe.append(f"{source}:{key}=true")
-            elif not isinstance(flag, bool):
-                unsafe.append(f"{source}:{key} is not a boolean")
-    if unsafe:
-        raise BridgeError("bridge hook guard cannot be guaranteed by effective settings: " + "; ".join(unsafe))
-    return {"status": "local_settings_checked", "settings": observed,
-            "managed_policy_visibility": "local_files_only; server/MDM-only policy is not proven by this check"}
-
-
-def _activity_events(run_dir: Path) -> list[dict[str, Any]]:
-    try:
-        lines = (run_dir / "activity.jsonl").read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        lines = []
-    events: list[dict[str, Any]] = []
-    for line in lines:
-        try:
-            event = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(event, dict):
-            events.append(event)
-    return events
-
-
-def hook_coverage(run_dir: Path, tool_uses: Mapping[str, str], *, guard_all_tools: bool = False,
-                  rejected_formatter_tool_uses: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    # A hook decision is audit evidence whether it allowed or denied the call;
-    # a denial still fails the run through hook_denials.  Any other status, or
-    # an event whose tool differs from the provider's tool_use, proves nothing.
-    decisions: dict[str, dict[str, str]] = {"allowed": {}, "denied": {}}
-    recorded_ids: set[str] = set()
-    for event in _activity_events(run_dir):
-        if event.get("kind") == "tool" and isinstance(event.get("tool_use_id"), str):
-            recorded_ids.add(event["tool_use_id"])
-        if (event.get("kind") == "tool" and event.get("status") in decisions
-                and isinstance(event.get("tool_use_id"), str) and isinstance(event.get("tool"), str)):
-            decisions[event["status"]][event["tool_use_id"]] = event["tool"]
-    # Ordinary runs install a path guard only for the file tools in their
-    # matcher. StructuredOutput is the CLI's schema formatter and has no file
-    # capability. Workflow uses matcher="*", so every observed tool (including
-    # each child StructuredOutput) must have a corresponding hook event. Only
-    # a uniquely bound parent formatter rejected by the CLI before execution
-    # can be excluded; an existing hook record always takes precedence.
-    guarded_names = set(READ_TOOLS + WRITE_TOOLS)
-    expected = {tool_id: tool for tool_id, tool in tool_uses.items()
-                if tool != "EndConversation" and (guard_all_tools or tool in guarded_names)}
-    rejected = sorted(tool_id for tool_id, proof in (rejected_formatter_tool_uses or {}).items()
-                      if expected.get(tool_id) == "StructuredOutput" and tool_id not in recorded_ids
-                      and isinstance(proof, dict) and proof.get("state") == "rejected_before_execution"
-                      and proof.get("tool_name") == "StructuredOutput")
-    expected = {tool_id: tool for tool_id, tool in expected.items() if tool_id not in rejected}
-    denied = sorted(tool_id for tool_id, tool in expected.items() if decisions["denied"].get(tool_id) == tool)
-    allowed = sorted(tool_id for tool_id, tool in expected.items()
-                     if decisions["allowed"].get(tool_id) == tool and tool_id not in denied)
-    missing = sorted(set(expected) - set(allowed) - set(denied))
-    return {"status": "complete" if not missing else "incomplete", "expected_count": len(expected),
-            "audited_count": len(allowed) + len(denied), "allowed_count": len(allowed), "denied_count": len(denied),
-            "allowed_tool_use_ids": allowed, "denied_tool_use_ids": denied, "missing_tool_use_ids": missing,
-            "pre_execution_rejected_formatter_count": len(rejected),
-            "pre_execution_rejected_formatter_tool_use_ids": rejected}
-
-
-def hook_denials(run_dir: Path, tool_uses: Mapping[str, str], provider_denials: list[Any]) -> list[dict[str, Any]]:
-    """Return this run's durably recorded PreToolUse denials.
-
-    Workflow child tool calls run under this hook but need not appear in the
-    parent stream or its permission_denials, so the CLI report alone cannot
-    prove that nothing was denied.
-    """
-    reported: set[str] = set()
-    def visit(value: Any) -> None:
-        if isinstance(value, dict):
-            if isinstance(value.get("tool_use_id"), str):
-                reported.add(value["tool_use_id"])
-            for nested in value.values():
-                visit(nested)
-        elif isinstance(value, list):
-            for nested in value:
-                visit(nested)
-    visit(provider_denials)
-    denials: list[dict[str, Any]] = []
-    for event in _activity_events(run_dir):
-        if event.get("kind") != "tool" or event.get("status") != "denied":
-            continue
-        tool_use_id = event.get("tool_use_id")
-        denials.append({"source": "bridge_pretooluse_hook", "activity_seq": event.get("seq"),
-                        "tool_name": event.get("tool"), "tool_use_id": tool_use_id, "reason": event.get("text"),
-                        "in_provider_stream": isinstance(tool_use_id, str) and tool_use_id in tool_uses,
-                        "in_provider_denials": isinstance(tool_use_id, str) and tool_use_id in reported})
-    return denials
-
-
-def unexpected_tool_uses(tool_uses: Mapping[str, str], task_tools: tuple[str, ...]) -> list[str]:
-    """Name observed tools outside the task's --tools set.
-
-    The hook matcher covers only file tools, so this is the evidence that an
-    unlisted local CLI version really honored --tools/--disallowedTools.
-    """
-    permitted = set(task_tools) | {"StructuredOutput", "EndConversation"}
-    return sorted({tool for tool in tool_uses.values() if tool not in permitted})
-
-
-def hook(packet_path: Path, cwd_arg: str) -> int:
-    try:
-        packet = validate_packet(load(packet_path), frozen_workflow=True)
-        cwd = Path(cwd_arg).resolve()
-        isolated = packet.get("review_mode") == "isolated"
-        review = load_execution_workspace(packet_path.parent) if isolated else None
-        if cwd != Path(review["cwd"] if review else packet["cwd"]):
-            raise BridgeError("hook cwd does not match packet")
-        event = json.load(sys.stdin)
-        name = event.get("tool_name") or event.get("toolName")
-        input_ = event.get("tool_input") or event.get("toolInput") or {}
-        tool_use_id = event.get("tool_use_id") or event.get("toolUseId")
-        if not isinstance(tool_use_id, str) or not tool_use_id:
-            raise BridgeError("PreToolUse event has no auditable tool_use_id")
-        if isolated:
-            # OS restrictions apply to Bash, descendants and absolute paths too.
-            # This hook records invocation evidence, not a pretend command parser.
-            append_activity(packet_path.parent, "tool", "isolated review tool permitted",
-                            tool=name, status="allowed", tool_use_id=tool_use_id)
-            return 0
-        if name == "StructuredOutput" and packet["role"] == "workflow_review":
-            # Workflow child agents may have their own output schema.  The
-            # parent run's terminal structured result is still validated by
-            # result_payload() after the provider process exits.
-            append_activity(packet_path.parent, "tool", "workflow structured output permitted",
-                            tool=name, status="allowed", tool_use_id=tool_use_id)
-            return 0
-        if name == "Workflow":
-            # Claude Code's Workflow schema for a saved script accepts `name`
-            # (and optionally args).  This adapter deliberately permits neither
-            # inline scripts nor script paths: the packet binds a single
-            # reviewed script identity and `Workflow(name)` is the CLI permission
-            # grammar documented for headless saved workflows.
-            expected = packet.get("workflow", {}).get("name")
-            expected_input = {"name": expected}
-            if "args" in packet.get("workflow", {}):
-                expected_input["args"] = packet["workflow"]["args"]
-            try:
-                exact_input = json.dumps(input_, ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":")) == json.dumps(expected_input, ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":"))
-            except (TypeError, ValueError):
-                exact_input = False
-            if (packet.get("role") != "workflow_review" or not isinstance(input_, dict) or not exact_input):
-                raise BridgeError("only the packet's exact saved Workflow(name) is permitted")
-            # The invocation itself resolves the name, so effective-resolution
-            # and ambiguity checks run here again, not on every file tool.
-            from named_workflow import NamedWorkflowError, validate as validate_named_workflow
-            try:
-                validate_named_workflow(packet["workflow"], cwd)
-            except (NamedWorkflowError, OSError, subprocess.CalledProcessError) as exc:
-                raise BridgeError(f"saved workflow identity check failed: {exc}") from exc
-            append_activity(packet_path.parent, "tool", "saved workflow permitted", tool="Workflow", file=expected,
-                            status="allowed", tool_use_id=tool_use_id)
-            return 0
-        raw = input_.get("file_path") or input_.get("path") or input_.get("query_path")
-        sources = {Path(x).resolve() for x in packet["requirement_sources"]}
-        artifact_allowed = sources | {Path(x).resolve() for x in packet.get("input_files", [])}
-        if name in READ_TOOLS:
-            if packet["workspace_kind"] == "artifacts":
-                if not isinstance(raw, str) or not raw:
-                    raise BridgeError("artifact read tool has no explicit file path")
-                if name == "Glob" and any(mark in input_.get("pattern", "") for mark in "*?["):
-                    raise BridgeError("artifact review does not permit wildcard discovery")
-                _artifact_read_path(raw, cwd, artifact_allowed)
-                append_activity(packet_path.parent, "tool", "artifact file permitted", tool=name, file=raw,
-                                status="allowed", tool_use_id=tool_use_id)
-                return 0
-            # Glob has both path and pattern; validate both rather than trusting one.
-            if name == "Glob":
-                pattern = input_.get("pattern", "")
-                explicit = raw if isinstance(raw, str) and raw else "."
-                _contained_path(explicit, cwd, sources, True)
-                checked: list[str] = []
-                for variant in _glob_variants(pattern):
-                    base = Path(_glob_base(variant))
-                    candidate = str(base if base.is_absolute() else Path(explicit) / base)
-                    _contained_path(candidate, cwd, sources, True)
-                    checked.append(candidate)
-                raw = checked[0]
-            if name == "Grep" and not raw:
-                raw = "."  # Claude Grep without a path searches its cwd.
-            if not isinstance(raw, str) or not raw:
-                raise BridgeError("read tool has no path")
-            _contained_path(raw, cwd, sources, True)
-            append_activity(packet_path.parent, "tool", "tool path permitted", tool=name, file=raw,
-                            status="allowed", tool_use_id=tool_use_id)
-            return 0
-        if name not in WRITE_TOOLS:
-            raise BridgeError("tool is not permitted by bridge packet")
-        if not isinstance(raw, str) or not raw:
-            raise BridgeError("write tool has no file path")
-        target, inside = _contained_path(raw, cwd, sources, False)
-        if not inside:  # defensive; write caller passed allow_source=False
-            raise BridgeError("write path is outside cwd")
-        relative = target.relative_to(cwd)
-        rel = relative.as_posix()
-        if aliases_protected(target, [cwd / path for path in packet["protected_files"]] + list(sources)):
-            raise BridgeError("write path aliases a protected file or requirement source")
-        if bad_owned_path(rel) or rel in set(packet["protected_files"]) or rel not in set(packet.get("owned_files", [])):
-            raise BridgeError("write path is not an exact owned non-protected file")
-        append_activity(packet_path.parent, "tool", "tool path permitted", tool=name, file=rel,
-                        status="allowed", tool_use_id=tool_use_id)
-        return 0
-    except Exception as exc:
-        append_activity(packet_path.parent, "tool", "tool path denied", tool=str(locals().get("name") or "unknown"),
-                        status="denied", text=str(exc), tool_use_id=str(locals().get("tool_use_id") or "missing"))
-        return hook_reply_denied(str(exc))
-
-
-def load_execution_workspace(run_dir: Path) -> dict:
-    link = run_dir / "review-workspace-link.json"
-    if link.is_file():
-        value = load(link)
-        root = Path(value["run_dir"])
-        metadata = root / review_workspace.METADATA_NAME
-        if sha256_file(metadata) != value["identity_sha256"]:
-            raise BridgeError("resumed review workspace identity changed")
-        return review_workspace.load_review_workspace(root)
-    return review_workspace.load_review_workspace(run_dir)
-
-
-def capture_review_report(run_dir: Path, packet: dict, meta: dict) -> dict:
-    path = Path(packet["review_report_path"])
-    try:
-        workspace = load_execution_workspace(run_dir)
-        path.relative_to(Path(workspace["workspace_root"]))
-        if path.is_symlink() or path.parent.is_symlink():
-            raise BridgeError("review report must be a regular file inside its copy")
-        data = read_regular(path, 4 * 1024 * 1024)
-        (run_dir / "review-report.json").write_bytes(data)
-    except (OSError, ValueError, BridgeError) as exc:
-        return {"status": "not_collected", "reason": str(exc)}
-    record = {"status": "delivered", "path": "review-report.json", "bytes": len(data),
-              "sha256": hashlib.sha256(data).hexdigest(), "workflow_invocations": meta.get("workflow_tool_use_count", 0),
-              "note": "raw report captured from the writable copy; semantic acceptance remains independent"}
-    try:
-        record["structured"] = result_payload({"structured_output": json.loads(data)})
-    except (ValueError, BridgeError) as exc:
-        record.update(status="invalid", reason=str(exc))
-    return record
-
-
-def scope_contract(packet: dict[str, Any]) -> dict[str, Any]:
-    """State the file and Workflow boundary the hook enforces, derived from the validated packet.
-
-    Strict tasks enforce this with PreToolUse; isolated hooks are audit only.
-    The isolated OS profile protects the source independently of hook coverage.
-    """
-    cwd = Path(packet["cwd"])
-    if packet.get("review_mode") == "isolated":
-        return {"read": {"mode": "review_context", "sources": packet["requirement_sources"]},
-                "write": {"mode": "independent_copy", "cwd": packet["cwd"]},
-                "protection": "OS denies writes to original source and Git metadata; other paths, credentials and network are not isolated",
-                "tools": "Bash, Agent, Skill and Workflow available; external MCP disabled"}
-    if packet["workspace_kind"] == "artifacts":
-        read: dict[str, Any] = {
-            "mode": "exact_files_only",
-            "exact_files": list(dict.fromkeys(packet.get("input_files", []) + packet["requirement_sources"])),
-            "rule": "Read only these exact files, or Grep with path set to one of them; no directory or wildcard discovery."}
-    else:
-        external = []
-        for source in packet["requirement_sources"]:
-            try:
-                Path(source).relative_to(cwd)
-            except ValueError:
-                external.append(source)
-        read = {"inside_cwd": {"root": packet["cwd"], "tools": list(READ_TOOLS),
-                               "rule": "any path inside cwd; symlinked paths are denied"},
-                "external_exact_files": external,
-                "external_rule": ("Outside cwd, Read these exact files, or Grep with path set to exactly one of them. "
-                                  "Their parent directories and every other path outside cwd are denied, and a denial fails the run.")}
-    scope: dict[str, Any] = {"read": read,
-                             "write": ({"exact_files": list(packet["owned_files"])} if packet["role"] == "implement"
-                                       else {"mode": "none"})}
-    if packet["role"] == "workflow_review":
-        scope["workflow_invocation"] = {
-            "tool": "Workflow", "input": workflow_input(packet["workflow"]),
-            "rule": ("the only permitted Workflow call, with exactly this input; every agent it starts is held "
-                     "to the same read boundary")}
-    return scope
-
-
-def prompt(packet: dict[str, Any]) -> str:
-    # Corrections stay in the user prompt: resumed Claude sessions retain old system snapshots.
-    instruction = "Return only the requested structured result. Do not claim acceptance."
-    if packet["role"] == "workflow_review":
-        instruction = (
-            f"Run only the saved Workflow named /{packet['workflow']['name']} through the Workflow tool, "
-            "with exactly the input in scope.workflow_invocation, "
-            "then wait for its report before returning the structured result. The Workflow tool result is only "
-            "a launch acknowledgement: the Workflow keeps running in the background and its completion "
-            "arrives automatically as a task notification. Do not poll it, read its output file, inspect private "
-            "workflow journals or transcripts, or try other tools to obtain it; simply wait. The bridge captures "
-            "the Workflow's full output itself. A structured result returned before "
-            "that completion is interim and is never accepted as the report. Do not use an inline script, "
-            "a scriptPath, any other Workflow, or a normal review as a substitute. Do not claim that the "
-            "Workflow ran unless the tool call completed successfully. Do not claim acceptance."
-        )
-    if packet.get("review_mode") == "isolated":
-        instruction += (" Work inside the independent writable copy. Tests and temporary edits are allowed; "
-                        "original repository and requirement sources are OS write-protected. Do not publish changes. "
-                        "Use Workflow/Agent when useful and wait for every invocation to finish; report failed or incomplete checks. "
-                        "Do not daemonize or detach processes. Nested macOS sandbox-exec may fail (for example SwiftPM); "
-                        "report every skipped test, and use a supported no-inner-sandbox option only within this protected copy. "
-                        "You are the sole final report writer: Workflow returns JSON; independently inspect it and save the complete "
-                        "structured review JSON (including findings, coverage, checks and unresolved items) to "
-                        + str(packet.get("review_report_path")) + " before your final response. Never drop unverified findings.")
-    evidence_rules = (
-        "Ground findings in inspected source and distinguish confirmed facts from hypotheses. "
-        "A search or Glob returning no matches is not proof a file is absent (hidden or ignored files may be omitted). "
-        "Verify the exact path with permitted tools, or mark its existence unconfirmed; never read secrets to prove existence. "
-        "For documented commands, trace actual defaults, generated artifact names and their consumers before asserting consistency. "
-        "Do not claim checks were executed when you only inspected code."
-    )
-    return json.dumps({"user_request": packet.get("user_request"), "packet": packet, "scope": scope_contract(packet), "instruction": instruction,
-                       "review": {"scope": packet.get("review_scope", "full"), "dimensions": (["correctness", "failure_recovery", "tests"] if packet.get("review_scope") == "defects" else ["architecture", "maintainability", "documentation", "prompts", "simplification"] if packet.get("review_scope") == "quality" else ["correctness", "failure_recovery", "tests", "security", "architecture", "maintainability", "documentation", "prompts", "simplification"]), "rule": "Report coverage and unresolved checks. Findings may be empty; classify confidence, cite evidence, do not invent runtime triggers for design judgments."},
-                       "report_schema": RESULT_SCHEMA, "evidence_rules": evidence_rules}, ensure_ascii=True)
-
-
-def process_group_absent(group_id: int) -> bool:
-    """Confirm absence via a readable full process list; denied/partial is unknown."""
-    try:
-        result = subprocess.run(["ps", "-axo", "pid=,pgid="], text=True, capture_output=True, timeout=3)
-        if result.returncode != 0:
-            return False
-        rows = [tuple(map(int, line.split())) for line in result.stdout.splitlines() if line.strip()]
-        if any(len(row) != 2 for row in rows) or not any(pid == os.getpid() for pid, _ in rows):
-            return False
-        return not any(group == group_id for _, group in rows)
-    except (OSError, ValueError, subprocess.TimeoutExpired):
-        return False
-
-
-def _process_rows() -> list[dict[str, Any]] | None:
-    """Return a complete, minimally parsed process table or None when unsure."""
-    try:
-        result = subprocess.run(["ps", "-axo", "pid=,pgid=,lstart=,command="], text=True,
-                                capture_output=True, timeout=3)
-        if result.returncode != 0:
-            return None
-        rows: list[dict[str, Any]] = []
-        for line in result.stdout.splitlines():
-            parts = line.strip().split(None, 7)
-            if len(parts) < 7:
-                return None
-            command = parts[7] if len(parts) == 8 else ""
-            rows.append({"pid": int(parts[0]), "process_group": int(parts[1]),
-                         "start_time": " ".join(parts[2:7]), "command": command})
-        if not any(row["pid"] == os.getpid() for row in rows):
-            return None
-        return rows
-    except (OSError, ValueError, subprocess.TimeoutExpired):
-        return None
-
-
-def capture_process_identity(pid: int, expected_session_id: str | None = None) -> dict[str, Any] | None:
-    rows = _process_rows()
-    if rows is None:
-        return None
-    row = next((item for item in rows if item["pid"] == pid), None)
-    if row is None:
-        return None
-    return {"pid": pid, "process_group": row["process_group"], "start_time": row["start_time"],
-            "command_sha256": hashlib.sha256(row["command"].encode("utf-8", "replace")).hexdigest(),
-            "expected_session_id": expected_session_id, "observed_at": time.time()}
-
-
-def process_identity_presence(identity: Any, process_group: Any, label: str) -> dict[str, str]:
-    """Check a recorded process identity without treating a reused PID as ours."""
-    if isinstance(process_group, bool) or not isinstance(process_group, int) or process_group <= 0:
-        return {"state": "unconfirmed", "reason": f"{label} identity is missing or invalid"}
-    # ESRCH is kernel evidence that no member of this process group exists.  It
-    # is both stronger and cheaper than a process-list search, and remains
-    # usable in restricted hosts where `ps` itself cannot be executed.
-    try:
-        os.killpg(process_group, 0)
-    except ProcessLookupError:
-        return {"state": "stopped", "reason": f"{label} is absent"}
-    except OSError as exc:
-        # Permission and transient host errors are not absence evidence.  Keep
-        # old records unknown instead of trusting a potentially restricted
-        # process list to disprove the kernel's ambiguous result.
-        return {"state": "unconfirmed", "reason": f"cannot inspect {label}: {type(exc).__name__}: {exc}"}
-    rows = _process_rows()
-    if rows is None:
-        return {"state": "unconfirmed", "reason": f"cannot inspect {label}"}
-    members = [row for row in rows if row["process_group"] == process_group]
-    if not members:
-        return {"state": "unconfirmed", "reason": f"{label} was live at the kernel check but absent from the process table; retry inspection"}
-    if not isinstance(identity, dict):
-        return {"state": "unconfirmed", "reason": f"{label} is present but its durable identity is unavailable"}
-    pid = identity.get("pid")
-    if (identity.get("process_group") != process_group or isinstance(pid, bool) or not isinstance(pid, int)
-            or pid <= 0 or not isinstance(identity.get("start_time"), str)
-            or not isinstance(identity.get("command_sha256"), str)):
-        return {"state": "unconfirmed", "reason": f"{label} is present but its durable identity is invalid"}
-    leader = next((row for row in members if row["pid"] == pid), None)
-    if leader is not None:
-        command_sha = hashlib.sha256(leader["command"].encode("utf-8", "replace")).hexdigest()
-        if leader["start_time"] == identity.get("start_time") and command_sha == identity.get("command_sha256"):
-            return {"state": "running", "reason": f"{label} with the recorded identity is still present"}
-    session = identity.get("expected_session_id")
-    if isinstance(session, str) and session and any(session in row["command"] for row in members):
-        return {"state": "running", "reason": f"{label} session is still present in its process group"}
-    if leader is not None:
-        if leader["start_time"] == identity.get("start_time"):
-            return {"state": "unconfirmed", "reason": f"{label} kept its PID/start time but its command identity changed"}
-        return {"state": "stopped", "reason": f"recorded {label} identity is absent; its PID/PGID was reused"}
-    return {"state": "unconfirmed", "reason": f"{label} leader ended but same-group descendants or a reused group remain"}
-
-
-def process_group_stopped(group_id: int) -> bool:
-    """Prove a process group is absent without treating inspection denial as absence."""
-    try:
-        os.killpg(group_id, 0)
-    except ProcessLookupError:
-        return True
-    except OSError:
-        return process_group_absent(group_id)
-    return False
-
-
-def wait_process_group_absent(group_id: int, timeout: float) -> bool:
-    deadline = time.monotonic() + timeout
-    while True:
-        if process_group_stopped(group_id):
-            return True
-        if time.monotonic() >= deadline:
-            return False
-        time.sleep(.05)
-
-
-def terminate_group(proc: subprocess.Popen[str]) -> str | None:
-    """Request group termination and return a diagnostic if its outcome is unknown.
-
-    A failed signal is not evidence that the child stopped.  Callers must turn a
-    returned diagnostic into an ``unknown`` terminal state and leave the cwd
-    marker in place for Runtime or standalone reconciliation.
-    """
-    # Reap an already exited direct child before signalling its process group.
-    # On macOS an unreaped session leader remains visible as a zombie and
-    # killpg() can return EPERM for that otherwise empty group.  That is a
-    # cleanup race, not evidence of a live descendant.  If the group still has
-    # members after reaping, the ordinary group termination path remains in
-    # force.
-    if proc.poll() is not None and process_group_stopped(proc.pid):
-        return None
-    request_error = None
-    liveness_error = None
-
-    def diagnostic(message: str) -> str:
-        details = [value for value in (request_error, liveness_error) if value]
-        return "; ".join([message, *details])
-
-    try:
-        os.killpg(proc.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        return None
-    except OSError as exc:
-        proc.poll()
-        request_error = f"SIGTERM process-group request failed: {type(exc).__name__}: {exc}"
-    # A parent can exit while descendants in its group ignore SIGTERM.
-    deadline = time.monotonic() + TERMINATION_GRACE_SECONDS
-    while time.monotonic() < deadline:
-        proc.poll()
-        try:
-            os.killpg(proc.pid, 0)
-        except ProcessLookupError:
-            return
-        except OSError as exc:
-            # Some macOS host permission checks race with group disappearance.
-            # Reaping/absence can settle within the existing grace period; an
-            # ambiguous snapshot must not skip the remaining wait or SIGKILL.
-            liveness_error = f"process-group liveness check failed: {type(exc).__name__}: {exc}"
-            if process_group_absent(proc.pid):
-                return None
-        time.sleep(.05)
-    try:
-        os.killpg(proc.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        return None
-    except OSError as exc:
-        return diagnostic(f"SIGKILL process-group request failed: {type(exc).__name__}: {exc}")
-    try:
-        proc.wait(timeout=TERMINATION_GRACE_SECONDS)
-    except subprocess.TimeoutExpired:
-        return diagnostic("direct child did not terminate before cleanup deadline")
-    deadline = time.monotonic() + TERMINATION_GRACE_SECONDS
-    while time.monotonic() < deadline:
-        if process_group_stopped(proc.pid):
-            return None
-        time.sleep(.05)
-    return diagnostic("process group remained present after SIGKILL")
-
-
-def record_unconfirmed_cleanup(run_dir: Path, packet: dict[str, Any], reason: str, cleanup_error: str,
-                               original_error: BaseException | None = None, lane: str | None = None) -> int:
-    """Persist a fail-closed terminal state when process cleanup cannot be proved."""
-    diagnostic = {"reason": reason, "cleanup_status": "unconfirmed", "cleanup_error": cleanup_error}
-    if original_error is not None:
-        diagnostic["original_error"] = f"{type(original_error).__name__}: {original_error}"
-    dump(run_dir / "error.json", diagnostic)
-    established = True
-    if lane is None:
-        try:
-            lane = lane_identity(Path(packet["cwd"]), packet.get("workspace_kind", "git"))
-        except BridgeError:
-            lane, established = str(Path(packet["cwd"]).resolve()), False
-    publish_unknown_marker(lane, {"cwd": packet["cwd"], "run_id": run_dir.name, "run_dir": str(run_dir), "reason": reason,
-                                  "cleanup_status": "unconfirmed", "recorded_at": time.time()},
-                           established=established)
-    state(run_dir, "unknown", **diagnostic)
-    dump(run_dir / "receipt.json", {"status": "unknown", "task_id": packet["task_id"], "revision": packet["revision"],
-                                     "cleanup_status": "unconfirmed",
-                                     "note": "process cleanup could not be confirmed; reconcile process state before reusing this cwd.",
-                                     **plugin_identity.receipt_fields(run_dir)})
-    activity(run_dir, "unknown", "process cleanup unconfirmed; reconciliation required", status="unknown",
-             text=cleanup_error)
-    print(f"bridge cleanup unconfirmed: {cleanup_error}", file=sys.stderr, flush=True)
-    return 1
-
-
-RELEASABLE_RECEIPTS = {"reported", "blocked", "failed", "cancelled", "timeout"}
-
-
-def publish_launch_intent(args: argparse.Namespace, run_dir: Path, packet: dict[str, Any], lane: str) -> None:
-    """Durably claim the lane before a Claude child can exist.
-
-    The child runs in its own session and does not inherit the lane lock, so
-    once both Runtime and this bridge are gone this marker is the only
-    cross-state evidence that it may still be writing in the worktree.
-    """
-    lifecycle_path = getattr(args, "_lifecycle_path", None)
-    nonce = uuid.uuid4().hex
-    path = publish_unknown_marker(lane, {
-        "cwd": packet["cwd"], "run_id": run_dir.name, "task_id": packet["task_id"], "revision": packet["revision"],
-        "reason": "Claude launch intent; the child may outlive its bridge and Runtime",
-        "recorded_at": time.time(),
-        "launch_intent": {"nonce": nonce, "run_dir": str(run_dir), "bridge_pid": os.getpid(),
-                          "lifecycle_file": str(lifecycle_path) if lifecycle_path else None}})
-    args._launch_intent = {"path": path, "nonce": nonce, "child": "not_launched"}
-
-
-def launch_intent_update(args: argparse.Namespace, child: str) -> None:
-    intent = getattr(args, "_launch_intent", None)
-    if intent is not None:
-        intent["child"] = child
-
-
-def release_launch_intent(args: argparse.Namespace) -> None:
-    """Remove this run's launch-intent marker once no child can remain.
-
-    A marker rewritten by record_unconfirmed_cleanup or Runtime no longer
-    carries this nonce; it stays for trusted-terminal adoption or reconcile.
-    """
-    intent = getattr(args, "_launch_intent", None)
-    if intent is None or intent["child"] not in {"not_launched", "stopped"}:
-        return
-    try:
-        receipt = load(Path(args.run_dir) / "receipt.json")
+        return load(path)
     except (OSError, ValueError):
-        return
-    if not isinstance(receipt, dict) or receipt.get("status") not in RELEASABLE_RECEIPTS:
-        return
-    for root in unknown_marker_roots():
-        for path in root.glob("*.json"):
-            try:
-                value = load(path)
-            except (OSError, ValueError):
-                continue
-            owned = (isinstance(value, dict) and value.get("run_id") == Path(args.run_dir).name
-                     and isinstance(value.get("launch_intent"), dict) and value["launch_intent"].get("nonce") == intent["nonce"])
-            if owned:
-                path.unlink(missing_ok=True)
-
-
-def check_command(command: list[str], cwd: Path, timeout: float, input_text: str | None = None, env: dict[str, str] | None = None) -> tuple[int | None, str, str, str | None]:
-    """Keep diagnostics in memory; callers expose only selected non-secret fields."""
-    proc = None
-    try:
-        proc = subprocess.Popen(command, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, text=True, start_new_session=True, env=env)
-        stdout, stderr = proc.communicate(input=input_text, timeout=timeout)
-        return proc.returncode, stdout, stderr, None
-    except subprocess.TimeoutExpired:
-        cleanup_error = terminate_group(proc)
-        if cleanup_error:
-            return None, "", "", "timeout_termination_unconfirmed"
-        return None, "", "", "timeout"
-    except OSError:
-        return None, "", "", "execution_error"
-    except KeyboardInterrupt:
-        if proc is not None:
-            # check_command has no run directory in which to leave a recovery
-            # marker.  Preserve the interrupt for its owning command instead.
-            terminate_group(proc)
-        raise
-    finally:
-        if proc is not None:
-            for pipe in (proc.stdin, proc.stdout, proc.stderr):
-                if pipe is not None:
-                    pipe.close()
-
-
-def failure_category(text: str) -> str:
-    """Classify failures without reflecting provider messages or credential values."""
-    lower = text.lower()
-    if any(s in lower for s in ("authentication_error", "invalid api key", "invalid_api_key", "token expired",
-                                "token has expired", "not logged in", "please run /login")) or re.search(r"\b401\b", lower):
-        return "authentication_failed"
-    if any(s in lower for s in ("rate_limit", "rate limit", "usage limit", "credit balance", "insufficient credit")) or re.search(r"\b429\b", lower):
-        return "quota_or_rate_limited"
-    if "permission_denied" in lower or "permission_error" in lower or re.search(r"\b403\b", lower):
-        return "access_denied"
-    if any(s in lower for s in ("enotfound", "econn", "connection error", "network", "dns", "tls", "ssl")):
-        return "network_error"
-    return "verification_failed"
-
-
-def auth_metadata(data: dict[str, Any]) -> dict[str, Any]:
-    # Never echo arbitrary auth JSON, token sources, organization IDs, or raw errors.
-    safe: dict[str, Any] = {}
-    for source, destination in (("authMethod", "auth_method"), ("apiProvider", "provider"), ("subscriptionType", "subscription_type")):
-        value = data.get(source)
-        if isinstance(value, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9._-]{0,39}", value):
-            safe[destination] = value
-    email = data.get("email")
-    if isinstance(email, str) and re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
-        local, domain = email.rsplit("@", 1)
-        safe["account_masked"] = local[:1] + "***@" + domain
-    return safe
-
-
-def _retired_selection(descriptor: Mapping[str, Any]) -> bool:
-    selection = descriptor.get("selection") if isinstance(descriptor.get("selection"), dict) else {}
-    return bool(descriptor.get("identity_id") or isinstance(selection.get("identity"), dict)
-                or selection.get("source") in RETIRED_SELECTION_SOURCES)
-
-
-def _local_descriptor_identity(selection: dict[str, Any]) -> dict[str, str]:
-    target = Path(selection["path"])
-    return {"sha256": sha256_file(target), "resolved_path": str(target.resolve())}
-
-
-def create_cli_descriptor(packet: dict, resume: Path | None = None) -> dict:
-    """Pin the user's local CLI once; a resume must find the same executable."""
-    if resume is not None:
-        previous = resume / "cli-selection.json"
-        if not previous.is_file():
-            raise BridgeError("resume_cli_identity_unavailable: legacy run has no fixed CLI identity; start a fresh run")
-        descriptor = load(previous)
-        if descriptor.get("purpose") != "dispatch":
-            raise BridgeError("resume_cli_identity_unavailable: prior selection is not a business dispatch")
-        protocol = descriptor.get("dispatch_protocol_version")
-        if protocol is None and descriptor.get("schema_version") == 1 and descriptor.get("contract_id") in LEGACY_DISPATCH_CONTRACTS:
-            protocol = 1
-        if type(protocol) is not int or protocol != DISPATCH_PROTOCOL_VERSION:
-            raise BridgeError("resume_protocol_incompatible: prior dispatch protocol is not supported; inspect the old result and start fresh")
-        if _retired_selection(descriptor):
-            raise BridgeError("resume_cli_identity_retired: the prior run used a plugin-managed private Claude CLI, "
-                              "which is no longer executed; start a fresh revision with the local Claude CLI")
-        current = locate_claude()
-        if not current.get("path"):
-            raise BridgeError("resume_cli_identity_changed: the local Claude CLI used by the prior run is no longer "
-                              "discoverable; start a fresh revision instead of resuming")
-        observed = _local_descriptor_identity(current)
-        if (observed["sha256"] != descriptor.get("sha256")
-                or observed["resolved_path"] != descriptor.get("resolved_path")):
-            raise BridgeError("resume_cli_identity_changed: the local Claude CLI changed since the prior run "
-                              "(for example after an upgrade); start a fresh revision instead of resuming")
-        # Rebind implementation evidence, never a different executable or
-        # session. The ordinary preflight still rechecks the resume flag.
-        descriptor = {**descriptor, "dispatch_protocol_version": protocol, "selection": current,
-                      "contract_id_at_start": descriptor.get("contract_id_at_start", descriptor.get("contract_id")),
-                      "contract_id": bridge_contract_id(), "contract_id_now": bridge_contract_id()}
-        verify_cli_descriptor(descriptor)
-        return descriptor
-    selection = locate_claude()
-    descriptor = {"schema_version": 1, "purpose": "dispatch", "contract_id": bridge_contract_id(),
-                  "dispatch_protocol_version": DISPATCH_PROTOCOL_VERSION,
-                  "contract_id_at_start": bridge_contract_id(), "contract_id_now": bridge_contract_id(),
-                  "selection": selection, "created_at": time.time()}
-    if selection.get("path"):
-        descriptor.update(_local_descriptor_identity(selection))
-    return descriptor
-
-
-def load_content_binding(args: argparse.Namespace, resume: Path | None) -> dict | None:
-    """Return the supervisor-pinned content identity; a resume keeps the prior run's binding."""
-    prior_path = resume / "content-binding.json" if resume is not None else None
-    prior = load(prior_path) if prior_path is not None and prior_path.is_file() else None
-    supplied = getattr(args, "content_binding", None)
-    if supplied:
-        binding_file = require_absolute(supplied, "content-binding")
-        expected = getattr(args, "content_binding_sha256", None)
-        if expected and sha256_file(binding_file) != expected:
-            raise BridgeError("content binding bytes changed before bridge start")
-        binding = load(binding_file)
-    else:
-        binding = prior
-    if resume is not None and binding != prior:
-        raise BridgeError("resume must keep the prior run's pinned coordination content")
-    if binding is not None:
-        try:
-            content_store.verify_binding(binding)
-        except (content_store.ContentError, OSError) as exc:
-            raise BridgeError(f"pinned coordination content failed verification: {exc}") from exc
-    return binding
-
-
-def verify_cli_descriptor(descriptor: dict) -> dict:
-    """Validate an internal descriptor; no user packet field can select a CLI."""
-    if not isinstance(descriptor, dict):
-        raise BridgeError("invalid CLI identity descriptor")
-    if descriptor.get("purpose") == "qualification":
-        raise BridgeError("qualification descriptors are retired; private candidate CLIs are never executed")
-    if descriptor.get("purpose") != "dispatch" or descriptor.get("contract_id") != bridge_contract_id():
-        raise BridgeError("CLI descriptor contract changed; prepare a fresh dispatch with current compatibility evidence")
-    if (type(descriptor.get("schema_version")) is not int or descriptor["schema_version"] != 1
-            or type(descriptor.get("dispatch_protocol_version")) is not int
-            or descriptor["dispatch_protocol_version"] != DISPATCH_PROTOCOL_VERSION):
-        raise BridgeError("dispatch_protocol_incompatible: prepare a dispatch with a supported protocol")
-    selection = descriptor.get("selection")
-    if not isinstance(selection, dict):
-        raise BridgeError("invalid pinned CLI selection")
-    if _retired_selection(descriptor):
-        raise BridgeError("cli_selection_retired: plugin-managed private Claude CLI identities are no longer executed")
-    path = selection.get("path")
-    if path:
-        actual = Path(path)
-        if (not actual.is_file() or not os.access(actual, os.X_OK)
-                or str(actual.resolve()) != descriptor.get("resolved_path")
-                or sha256_file(actual) != descriptor.get("sha256")):
-            raise BridgeError("cli_identity_changed: selected executable is missing or changed; no fallback was used")
-    return selection
-
-
-_SECRET_PATTERNS = (
-    re.compile(r"sk-ant-[A-Za-z0-9_-]+"),
-    re.compile(r"(?i)(bearer|token|key|secret|password)([\"'=: ]+)[^\s\"',]+"),
-    re.compile(r"[^\s@\"']+@[^\s@\"']+\.[A-Za-z]{2,}"),
-    re.compile(r"[A-Za-z0-9+/_-]{40,}"),
-)
-
-
-def redacted_excerpt(text: str, limit: int = 400) -> str:
-    value = " ".join((text or "").split())
-    for pattern in _SECRET_PATTERNS:
-        value = pattern.sub(lambda match: (match.group(1) + match.group(2) + "[redacted]") if match.lastindex else "[redacted]", value)
-    return value[:limit] + ("…" if len(value) > limit else "")
-
-
-def probe_diagnostic(code: int | None, out: str, err: str, error: str | None) -> dict[str, Any]:
-    """Keep the failure class of a local CLI probe without raw secrets."""
-    result: dict[str, Any] = {"exit_code": code}
-    if error:
-        result["error_kind"] = error
-    elif isinstance(code, int) and code < 0:
-        result["error_kind"] = "signal"
-        result["signal"] = -code
-    elif code:
-        result["error_kind"] = "nonzero_exit"
-    if out:
-        result["stdout_excerpt"] = redacted_excerpt(out)
-    if err:
-        result["stderr_excerpt"] = redacted_excerpt(err)
-    return result
-
-
-def check_environment(cwd: Path, verify: bool = False, model: str = "sonnet", timeout: float = 60,
-                      required_groups: list[str] | None = None, selection: dict | None = None) -> dict[str, Any]:
-    needed_groups = set(required_groups or ["core", "read_only"])
-    if not needed_groups.issubset(GROUPS):
-        raise BridgeError("unknown compatibility capability group")
-    if selection is None:
-        selection = locate_claude()
-    binary = selection.get("candidate") or "claude"
-    resolved = selection["path"]
-    child_env = cli_environment(selection)
-    report: dict[str, Any] = {"checked_at": time.time(), "cwd": str(cwd), "ready": False,
-                              "cli": {"path": resolved, "installed": bool(resolved), "source": selection["source"],
-                                      "version_policy": "diagnostic_only"},
-                              "auth": {"status": "not_checked", "credential_validity": "not_verified"},
-                              "probe": {"status": "not_requested", "requested_model": model}}
-    def fail(status_: str, action: str) -> dict[str, Any]:
-        report.update(status=status_, action=action)
-        report["installation"] = {"installed": report["cli"]["installed"], "version": report["cli"].get("version")}
-        report["readiness"] = {"installation": report["installation"], "login": report["auth"],
-                               "invocation": report["probe"], "compatibility": report.get("compatibility", {"status": "not_checked"})}
-        return report
-    if not resolved:
-        status_ = "cli_not_executable" if "/" in binary and Path(binary).exists() else "cli_not_found"
-        return fail(status_, selection.get("action") or "Install/repair Claude Code: https://code.claude.com/docs/en/setup")
-    code, out, err, error = check_command([resolved, "--version"], cwd, min(timeout, 10), env=child_env)
-    if error or code != 0:
-        report["cli"]["version_probe"] = probe_diagnostic(code, out, err, error)
-        return fail("cli_unavailable", "Claude CLI could not report its version; see cli.version_probe for the exit code "
-                    "or timeout and check the installation and host execution permissions.")
-    version = re.search(r"\b\d+\.\d+\.\d+(?:[-+][\w.]+)?\b", out)
-    report["cli"]["version"] = version.group() if version else "unrecognized"
-    if not version:
-        report["cli"]["version_probe"] = probe_diagnostic(code, out, err, error)
-    code, out, err, error = check_command([resolved, "--help"], cwd, min(timeout, 10), env=child_env)
-    if error or code != 0:
-        report["cli"]["help_probe"] = probe_diagnostic(code, "", err, error)
-        return fail("cli_unavailable", "Claude CLI help failed; check installation and host permissions.")
-    missing = sorted(flag for flag in required_flags(needed_groups, verify) if not flag_advertised(out, flag))
-    report["cli"]["missing_flags"] = missing
-    available_groups = set(GROUPS) if all(flag_advertised(out, flag) for flag in REQUIRED_FLAGS) else set()
-    if not flag_advertised(out, "--resume"):
-        available_groups.discard("resume")
-    missing_groups = sorted(needed_groups - available_groups)
-    report["compatibility"] = {"status": "unavailable" if missing else "advertised",
-                               "evidence": "cli_help_syntax", "behavior_verified": False,
-                               "required_groups": sorted(needed_groups), "available_groups": sorted(available_groups),
-                               "missing_groups": missing_groups, "missing_flags": missing,
-                               "version_policy": "diagnostic_only", "contract_id": bridge_contract_id(),
-                               "note": ("--help proves only advertised syntax; each run is still gated by the hook "
-                                        "self-test and post-run tool, session, result and workspace checks.")}
-    capabilities = {name: flag for name, flag in BUDGET_FLAGS.items() if flag_advertised(out, flag)}
-    report["cli"]["capabilities"] = {name: {"flag": flag, "evidence": "cli_help_syntax", "enforcement": "provider_option",
-                                            "limit_exhaustion_verified": False} for name, flag in capabilities.items()}
-    report["cli"]["unavailable_capabilities"] = sorted(name for name in BUDGET_FLAGS if name not in capabilities)
-    # Local login is orthogonal to option syntax: a CLI missing one flag can
-    # still have a perfectly valid configured account. Never report it as logout.
-    code, out, err, error = check_command([resolved, "auth", "status", "--json"], cwd, min(timeout, 15), env=child_env)
-    if error:
-        report["auth"]["status"] = "check_timeout" if error.startswith("timeout") else "check_" + error
-        if error == "timeout_termination_unconfirmed":
-            report["auth"]["cleanup_status"] = "unconfirmed"
-        return fail("auth_check_failed", "Authentication status could not be read; check host/keychain permissions or CLI availability, without clearing credentials.")
-    try:
-        data = json.loads(out)
-    except (ValueError, TypeError):
-        data = None
-    if not isinstance(data, dict) or type(data.get("loggedIn")) is not bool:
-        report["auth"]["status"] = "unknown"
-        return fail("auth_check_failed", "Claude auth status did not return a recognized JSON status; inspect CLI auth support.")
-    report["auth"].update(auth_metadata(data), logged_in=data["loggedIn"])
-    if not data["loggedIn"] and code in (0, 1):
-        report["auth"]["status"] = "not_logged_in"
-        return fail("not_logged_in", "Run claude auth login in your terminal for an account login, or configure your intended API/provider authentication; then rerun the check.")
-    if code != 0:
-        report["auth"]["status"] = "unknown"
-        return fail("auth_check_failed", "Authentication status returned an inconsistent exit code; do not treat it as authenticated.")
-    report["auth"]["status"] = "reported_logged_in"
-    report["installation"] = {"installed": True, "version": report["cli"]["version"]}
-    report["readiness"] = {"installation": report["installation"], "login": report["auth"],
-                           "invocation": report["probe"], "compatibility": report["compatibility"]}
-    if missing:
-        return fail("cli_incompatible", "The local Claude CLI --help does not advertise options this task needs: "
-                    + ", ".join(missing) + ". The login result is independent; update or reconfigure your own Claude CLI, then rerun the check.")
-
-    if verify:
-        # A single normal CLI request exercises its effective auth, with no agent tools.
-        command = [resolved, "-p", "--model", model, "--effort", "low", "--output-format", "json",
-                   "--tools", "", "--disallowedTools", ",".join(READ_TOOLS + WRITE_TOOLS + DISALLOWED),
-                   "--permission-mode", "dontAsk", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
-                   "--disable-slash-commands", "--no-session-persistence"]
-        if "max_turns" in capabilities:
-            command[1:1] = [capabilities["max_turns"], "1"]
-        code, out, err, error = check_command(command, cwd, timeout, "Authentication connectivity check only. Reply exactly AUTH_CHECK_OK. Do not use tools.", env=child_env)
-        report["probe"]["checked_at"] = time.time()
-        if error:
-            category = "timeout" if error.startswith("timeout") else error
-            report["probe"]["status"] = category
-            if error == "timeout_termination_unconfirmed":
-                report["probe"]["cleanup_status"] = "unconfirmed"
-                return fail("verification_timeout", "Probe timed out and host permissions prevented termination confirmation; inspect its process before retrying. Credential validity remains unknown.")
-            return fail("verification_" + category, "Online verification could not finish; this does not establish that credentials are invalid.")
-        try:
-            provider = json.loads(out)
-        except (ValueError, TypeError):
-            provider = None
-        if (isinstance(provider, dict) and code == 0 and provider.get("type") == "result"
-                and provider.get("subtype") == "success" and not provider.get("is_error")
-                and not provider.get("permission_denials") and isinstance(provider.get("result"), str)):
-            report["probe"]["status"] = "verified"
-            report["auth"]["credential_validity"] = "verified_for_request"
-            report["ready"] = True
-            report["status"] = "verified"
-            return report
-        category = failure_category(out + "\n" + err)
-        report["probe"]["status"] = category
-        if category == "authentication_failed":
-            report["auth"]["credential_validity"] = "rejected"
-            return fail(category, "Claude rejected authentication. Reauthenticate the intended account/provider, then rerun verification.")
-        return fail(category, "Check the reported availability category; network, quota, model or access failures do not by themselves mean the login expired.")
-    report.update(ready=True, status="local_checks_passed",
-                  note="CLI reports authentication configured. Use doctor --verify to check an actual request; this check does not prove remote validity, quota or session persistence.")
-    return report
-
-
-def lifecycle_update(args: argparse.Namespace, **fields: Any) -> None:
-    record = getattr(args, "_lifecycle", None)
-    if record is None:
-        return
-    record.update(fields, updated_at=time.time())
-    dump(args._lifecycle_path, record)
-
-
-def run(args: argparse.Namespace) -> int:
-    """Defer shutdown signals until child ownership and cleanup are safe."""
-    previous = {}
-    args._termination_signal = None
-
-    def requested(signum, _frame):
-        # Raising here can interrupt Popen before its child is assigned to proc,
-        # or interrupt a cleanup already in progress. Repeated signals coalesce.
-        if args._termination_signal is None:
-            args._termination_signal = signum
-
-    try:
-        if threading.current_thread() is threading.main_thread():
-            for signum in (signal.SIGTERM, signal.SIGHUP):
-                previous[signum] = signal.signal(signum, requested)
-        return run_with_lifecycle(args)
-    finally:
-        for signum, handler in previous.items():
-            signal.signal(signum, handler)
-
-
-def cancellation_requested(args: argparse.Namespace, run_dir: Path) -> bool:
-    marker = run_dir / "cancel.json"
-    signum = getattr(args, "_termination_signal", None)
-    if signum is not None and not marker.exists():
-        dump(marker, {"reason": f"bridge received {signal.Signals(signum).name}",
-                      "signal": signum, "requested_at": time.time()})
-    return marker.exists()
-
-
-def run_with_lifecycle(args: argparse.Namespace) -> int:
-    """Keep launch evidence outside run_dir, including failures before mkdir.
-
-    Missing child metadata is never proof of no dispatch: launch_intent is
-    persisted before Popen and remains indeterminate across a hard crash.
-    With a startup nonce, the sidecar already holds Runtime's pre-spawn record;
-    it is replaced only after the handoff binding verifies, and a failed
-    handoff leaves that record untouched.
-    """
-    sidecar = os.environ.get("CODEX_BRIDGE_LIFECYCLE_FILE")
-    startup_nonce = getattr(args, "startup_nonce", None)
-    if startup_nonce is not None and not sidecar:
-        raise BridgeError("startup handoff requires the Runtime lifecycle file")
-    if sidecar:
-        loaded_code = (startup_protocol.loaded_identity(startup_protocol.plugin_root(Path(__file__).resolve()))
-                       if startup_nonce is not None else None)
-        packet_path = require_absolute(args.packet, "packet")
-        raw = load(packet_path)
-        args._lifecycle_path = require_absolute(sidecar, "lifecycle file")
-        args._lifecycle_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        packet_cwd = raw.get("cwd")
-        lifecycle = {"schema_version": 1, "run_id": Path(args.run_dir).name,
-                     "task_id": raw.get("task_id"), "revision": raw.get("revision"),
-                     "cwd": str(Path(packet_cwd).resolve()) if isinstance(packet_cwd, str) and os.path.isabs(packet_cwd) else None,
-                     "packet_sha256": sha256_file(packet_path), "bridge_pid": os.getpid(),
-                     "cli_descriptor_sha256": getattr(args, "cli_descriptor_sha256", None),
-                     "phase": "pre_dispatch", "status": "starting", "child_started": False,
-                     "terminal": False}
-        if startup_nonce is not None:
-            try:
-                pre_spawn = load(args._lifecycle_path)
-            except (OSError, ValueError):
-                pre_spawn = None
-            try:
-                startup_protocol.verify_handoff(pre_spawn, nonce=startup_nonce, run_id=lifecycle["run_id"],
-                                                packet_sha256=lifecycle["packet_sha256"],
-                                                cli_descriptor_sha256=lifecycle["cli_descriptor_sha256"], code=loaded_code)
-            except startup_protocol.StartupError as exc:
-                raise BridgeError(str(exc)) from exc
-            lifecycle.update(startup_nonce=startup_nonce, startup_protocol_version=startup_protocol.STARTUP_PROTOCOL_VERSION,
-                             code_identity=loaded_code["value"], lane_identity=pre_spawn.get("lane_identity"),
-                             taken_over_from=startup_protocol.PRE_SPAWN_PHASE)
-            args._startup_code = loaded_code
-        args._lifecycle = lifecycle
-        args._lifecycle["bridge_identity"] = capture_process_identity(os.getpid())
-        lifecycle_update(args)
-    try:
-        descriptor_path = getattr(args, "cli_descriptor", None)
-        if descriptor_path:
-            descriptor_file = require_absolute(descriptor_path, "cli-descriptor")
-            expected = getattr(args, "cli_descriptor_sha256", None)
-            if expected and sha256_file(descriptor_file) != expected:
-                raise BridgeError("CLI descriptor bytes changed before bridge start")
-            args._cli_descriptor = load(descriptor_file)
-            args._cli_descriptor_sha256 = sha256_file(descriptor_file)
-        lifecycle_update(args, cli_descriptor_sha256=getattr(args, "_cli_descriptor_sha256", None))
-        code = _run(args)
-    except (Exception, KeyboardInterrupt) as exc:
-        record = getattr(args, "_lifecycle", {})
-        not_launched = record.get("child_started") is False and record.get("phase") == "pre_dispatch"
-        lifecycle_update(args, terminal=True, status="failed" if not_launched else "unknown",
-                         phase="pre_dispatch" if not_launched else "terminal",
-                         reason=f"{type(exc).__name__}: {exc}")
-        raise
-    descriptor = getattr(args, "_cli_descriptor", None)
-    receipt_path = Path(args.run_dir) / "receipt.json"
-    if receipt_path.is_file() and plugin_identity.load_frozen(Path(args.run_dir)) is not None:
-        # Backstop for a receipt written by a path that did not attach the identity itself.
-        try:
-            receipt_value = load(receipt_path)
-            if isinstance(receipt_value, dict) and "plugin_identity" not in receipt_value:
-                receipt_value.update(plugin_identity.receipt_fields(Path(args.run_dir)))
-                dump(receipt_path, receipt_value)
-        except (OSError, ValueError):
-            pass
-    if descriptor and receipt_path.is_file():
-        receipt_value = load(receipt_path)
-        receipt_value["cli_identity"] = {"id": descriptor.get("identity_id"), "sha256": descriptor.get("sha256") or descriptor.get("identity_sha256"),
-                                         "contract_id": descriptor.get("contract_id"), "purpose": descriptor.get("purpose"),
-                                         "contract_id_at_start": descriptor.get("contract_id_at_start", descriptor.get("contract_id")),
-                                         "contract_id_now": descriptor.get("contract_id"),
-                                         "dispatch_protocol_version": descriptor.get("dispatch_protocol_version")}
-        dump(receipt_path, receipt_value)
-    content_binding = getattr(args, "_content_binding", None)
-    if content_binding and receipt_path.is_file():
-        receipt_value = load(receipt_path)
-        receipt_value["content_binding"] = content_store.binding_summary(content_binding)
-        dump(receipt_path, receipt_value)
-    record = getattr(args, "_lifecycle", {})
-    if record:
-        receipt_path = Path(args.run_dir) / "receipt.json"
-        receipt = load(receipt_path) if receipt_path.is_file() else {}
-        status_ = receipt.get("status", "unknown")
-        lifecycle_update(args, terminal=True, status=status_,
-                         phase="pre_dispatch" if record.get("child_started") is False else "terminal",
-                         blocked_by=receipt.get("blocked_by"), reason=receipt.get("reason") or receipt.get("note"))
-    # Last step: the receipt and terminal lifecycle are durable before the
-    # lane claim goes away.  Any exception above keeps the marker.
-    release_launch_intent(args)
-    return code
-
-
-class _RunContext:
-    """Transient launch resources and observations, owned by one _run invocation."""
-    def __init__(self, args: argparse.Namespace, packet_path: Path, run_dir: Path, packet: dict[str, Any],
-                 resume: Path | None, resume_session: str | None, descriptor: dict[str, Any],
-                 selection: dict[str, Any], content_binding: dict[str, Any] | None):
-        self.args: argparse.Namespace = args
-        self.packet_path: Path = packet_path
-        self.run_dir: Path = run_dir
-        self.packet: dict[str, Any] = packet
-        self.resume: Path | None = resume
-        self.resume_session: str | None = resume_session
-        self.descriptor: dict[str, Any] = descriptor
-        self.selection: dict[str, Any] = selection
-        self.content_binding: dict[str, Any] | None = content_binding
-        self.lane: str | None = None
-        self.lock: Any = None
-        self.proc: subprocess.Popen[bytes] | None = None
-        self.family: Family | None = None
-        self.family_evidence: dict[str, Any] | None = None
-        self.stream: Any = None
-        self.err: Any = None
-        self.selector: selectors.BaseSelector | None = None
-        self.workflow_root: dict[str, Any] | None = None
-        self.before: dict[str, Any] = {}
-        self.requirements: dict[str, str] = {}
-        self.isolated: bool = False
-        self.execution_packet: dict[str, Any] = {}
-        self.review: dict[str, Any] | None = None
-        self.execution_cwd: str = packet["cwd"]
-        self.environment: dict[str, Any] = {}
-        self.capabilities: dict[str, Any] = {}
-        self.command: list[str] = []
-        self.child_env: dict[str, str] = {}
-        self.session: str = ""
-        self.tools: tuple[str, ...] = ()
-        self.policy_evidence: dict[str, Any] = {}
-        self.payload: memoryview | None = None
-        self.workflow_wait_ceiling_ms: int | None = None
-        self.prompt_delivery: dict[str, Any] = {}
-        self.cancelled: bool = False
-        self.timed_out: bool = False
-        self.residual_process_group: bool = False
-        self.meta_stream_warning: str | None = None
-        self.provider: dict[str, Any] | None = None
-        self.meta: dict[str, Any] = {}
-        self.coverage: dict[str, Any] = {}
-        self.workflow_record: dict[str, Any] | None = None
-        self.after: dict[str, Any] = {}
-        self.requirements_after: dict[str, str] = {}
-        self.structured: dict[str, Any] | None = None
-        self.final_status: str = "failed"
-        self.report_state: str = "absent"
-        self.subtype: str | None = None
-        self.parent_structured: dict[str, Any] | None = None
-        self.review_report: dict[str, Any] | None = None
-        self.scope_error: str | None = None
-        self.invariant_error: str | None = None
-        self.workflow_evidence_blocked: bool = False
-        self.expected_session: str = ""
-        self.unknown_message: str = ""
-        self.early_cancel: str | None = None
-        self.bridge: Path | None = None
-        self.unexpected_tools: list[str] = []
-
-
-def _run(args: argparse.Namespace) -> int:
-    packet_path = require_absolute(args.packet, "packet")
-    run_dir = require_absolute(args.run_dir, "run-dir")
-    if run_dir.exists():
-        raise BridgeError("run-dir already exists; refusing duplicate run")
-    raw_packet = load(packet_path)
-    packet = validate_packet(raw_packet)
-    resume = require_absolute(args.resume_from, "resume-from") if args.resume_from else None
-    if resume is not None:
-        if packet["workspace_kind"] == "artifacts":
-            raise BridgeError("artifacts workspace does not support resume; start a fresh read-only review")
-        if packet["role"] == "workflow_review":
-            raise BridgeError("workflow_review does not support resume; start a fresh hash-bound run")
-        if not resume.is_dir():
-            raise BridgeError("resume-from must be an existing run directory")
-        resume_session = validate_resume(packet, resume)
-    else:
-        resume_session = None
-    descriptor = getattr(args, "_cli_descriptor", None)
-    if descriptor is None:
-        descriptor = create_cli_descriptor(packet, resume)
-        args._cli_descriptor = descriptor
-    selection = verify_cli_descriptor(descriptor)
-    content_binding = load_content_binding(args, resume)
-    run_dir.mkdir(mode=0o700)  # atomic creation is the duplicate-run guard
-    ctx = _RunContext(args, packet_path, run_dir, packet, resume, resume_session, descriptor, selection, content_binding)
-    try:
-        outcome = _initialize_run(ctx)
-        if outcome is not None:
-            return outcome
-        outcome = _environment_preflight(ctx)
-        if outcome is not None:
-            return outcome
-        _prepare_execution_workspace(ctx)
-        _prepare_provider_command(ctx)
-        outcome = _verify_provider_dispatch(ctx)
-        if outcome is not None:
-            return outcome
-        publish_launch_intent(ctx.args, ctx.run_dir, ctx.packet, ctx.lane)
-        lifecycle_update(ctx.args, phase="launch_intent", child_started=None)
-        launch_intent_update(ctx.args, "unconfirmed")
-        try:
-            ctx.proc = subprocess.Popen(ctx.command, cwd=ctx.execution_cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=ctx.err,
-                                    start_new_session=True, env=ctx.child_env)
-        except OSError as exc:
-            # Popen reports exec failure only after reaping its failed child.
-            launch_intent_update(ctx.args, "not_launched")
-            lifecycle_update(ctx.args, phase="pre_dispatch", child_started=False, reason=f"Claude launch failed: {exc}")
-            raise
-        outcome = _supervise_provider(ctx)
-        if outcome is not None:
-            return outcome
-        _collect_provider_evidence(ctx)
-        _classify_provider_result(ctx)
-        _apply_workflow_report_evidence(ctx)
-        _check_source_invariants(ctx)
-        return _persist_provider_result(ctx)
-    except KeyboardInterrupt:
-        if ctx.proc is not None:
-            cleanup_error = terminate_group(ctx.proc)
-            family_error = _finish_process_family(ctx)
-            cleanup_error = cleanup_error or family_error
-            if cleanup_error:
-                return record_unconfirmed_cleanup(ctx.run_dir, ctx.packet, "KeyboardInterrupt", cleanup_error, lane=ctx.lane)
-            launch_intent_update(ctx.args, "stopped")
-        state(ctx.run_dir, "cancelled", reason="KeyboardInterrupt")
-        dump(ctx.run_dir / "receipt.json", {"status": "cancelled", "note": "interrupted; inspect process state manually.",
-                                        **plugin_identity.receipt_fields(ctx.run_dir)})
-        activity(ctx.run_dir, "cancelled", "bridge interrupted", status="cancelled")
-        return 130
-    except Exception as exc:
-        if ctx.proc is not None:
-            cleanup_error = terminate_group(ctx.proc)
-            family_error = _finish_process_family(ctx)
-            cleanup_error = cleanup_error or family_error
-            if cleanup_error:
-                return record_unconfirmed_cleanup(ctx.run_dir, ctx.packet, "bridge exception cleanup", cleanup_error, exc, lane=ctx.lane)
-            launch_intent_update(ctx.args, "stopped")
-        dump(ctx.run_dir / "error.json", {"error": str(exc)})
-        state(ctx.run_dir, "failed", error=str(exc))
-        dump(ctx.run_dir / "receipt.json", {"status": "failed", "note": "bridge failure; inspect stderr/error.json.",
-                                        **plugin_identity.receipt_fields(ctx.run_dir)})
-        activity(ctx.run_dir, "failed", "bridge failure recorded", status="failed")
-        print(f"bridge failed: {exc}", file=sys.stderr, flush=True)
-        return 1
-    finally:
-        if ctx.family is not None and ctx.proc is not None and ctx.family_evidence is None:
-            _finish_process_family(ctx)
-        # Exception and unconfirmed-cleanup paths can return before collection.
-        # Release this bridge's handles without implying that the child stopped.
-        if ctx.selector is not None:
-            ctx.selector.close()
-        for handle in (ctx.stream, ctx.err, ctx.proc.stdin if ctx.proc else None, ctx.proc.stdout if ctx.proc else None):
-            if handle is not None and not handle.closed:
-                try:
-                    handle.close()
-                except OSError:
-                    pass
-        # Without a launched child the provider root is empty.  After a launch
-        # it is removed only once its output was captured above; otherwise it
-        # is kept (see workflow-temp-root.json) because the child may live.
-        if ctx.workflow_root is not None and ctx.proc is None:
-            workflow_delivery.remove_root(ctx.workflow_root)
-        if ctx.lock is not None:
-            ctx.lock.close()
-
-
-def _initialize_run(ctx: _RunContext) -> int | None:
-    """Freeze launch inputs, acquire the lane, and capture original source evidence."""
-    dump(ctx.run_dir / "packet.json", ctx.packet)
-    plugin_identity.freeze(ctx.run_dir, bridge_contract_id())
-    dump(ctx.run_dir / "cli-selection.json", ctx.descriptor)
-    if ctx.content_binding is not None:
-        dump(ctx.run_dir / "content-binding.json", ctx.content_binding)
-        ctx.args._content_binding = ctx.content_binding
-    activity(ctx.run_dir, "preflight", "run directory created", status="preflight")
-    ctx.lane = lane_identity(Path(ctx.packet["cwd"]), ctx.packet["workspace_kind"])
-    ctx.unknown_message = "cwd worktree has an unknown prior supervised run; reconcile it manually before dispatch"
-    ctx.early_cancel = os.environ.get("CODEX_BRIDGE_CANCEL_FILE")
-    if cancellation_requested(ctx.args, ctx.run_dir) or (ctx.early_cancel and Path(ctx.early_cancel).is_file()):
-        if not (ctx.run_dir / "cancel.json").exists():
-            dump(ctx.run_dir / "cancel.json", {"reason": "runtime cancelled before bridge dispatch", "requested_at": time.time()})
-        return pre_dispatch_cancelled(ctx.run_dir, ctx.packet, "cancelled before bridge dispatch")
-    ctx.lock = lock_file(ctx.lane, ctx.packet["task_id"])
-    # Markers are checked only under the lock: a live lane holder's own
-    # launch intent must surface as "active run", not as unknown.  A
-    # previous holder can also publish just before releasing the lock.
-    if unknown_markers(ctx.lane):
-        raise BridgeError(ctx.unknown_message)
-    ctx.before, ctx.requirements = preflight(ctx.packet, ctx.resume)
-    dump(ctx.run_dir / "workspace_before.json", ctx.before)
-    if ctx.packet["workspace_kind"] == "git":
-        dump(ctx.run_dir / "git_before.json", ctx.before)
-    dump(ctx.run_dir / "requirements.json", ctx.requirements)
-
-
-def _prepare_execution_workspace(ctx: _RunContext) -> None:
-    """Select the retained independent review copy without replacing source snapshots."""
-    ctx.isolated = ctx.packet.get("review_mode") == "isolated"
-    ctx.execution_packet = dict(ctx.packet)
-    ctx.review = None
-    if ctx.isolated:
-        if ctx.resume is not None:
-            ctx.review = load_execution_workspace(ctx.resume)
-            prior_link = ctx.resume / "review-workspace-link.json"
-            prior_runs = load(prior_link).get("prior_run_dirs", []) if prior_link.is_file() else []
-            if not isinstance(prior_runs, list) or not all(isinstance(path, str) and Path(path).is_absolute() for path in prior_runs):
-                raise BridgeError("invalid resumed review history paths")
-            prior_runs = sorted({str(Path(path).resolve()) for path in prior_runs + [str(ctx.resume), str(Path(ctx.review["metadata_path"]).parent)]})
-            dump(ctx.run_dir / "review-workspace-link.json", {"run_dir": str(Path(ctx.review["metadata_path"]).parent),
-                                                        "prior_run_dirs": prior_runs,
-                                                        "identity_sha256": sha256_file(Path(ctx.review["metadata_path"]))})
-        else:
-            ctx.review = review_workspace.prepare_review_workspace(ctx.packet["cwd"], ctx.run_dir, ctx.packet["requirement_sources"])
-        bundled_workflow = review_workspace.install_bundled_workflow(ctx.review)
-        ctx.execution_packet["cwd"] = ctx.review["cwd"]
-        report_path = Path(ctx.review.get("artifact_directory", str(Path(ctx.review["workspace_root"]) / ".codex-review"))) / f"{ctx.run_dir.name}.json"
-        report_path.parent.mkdir(exist_ok=True)
-        if report_path.exists() or report_path.is_symlink():
-            raise BridgeError("review report path already exists")
-        ctx.execution_packet["review_report_path"] = str(report_path)
-        ctx.execution_packet["suggested_workflow"] = {
-            **bundled_workflow,
-            "args": {"user_request": ctx.packet["user_request"], "objective": ctx.packet["objective"],
-                     "review_scope": ctx.packet["review_scope"], "report_path": str(report_path),
-                     "requirement_sources": ctx.packet["requirement_sources"], "constraints": ctx.packet["constraints"],
-                     "acceptance": ctx.packet["acceptance"]}}
-    ctx.execution_cwd = ctx.execution_packet["cwd"]
-
-
-def _environment_preflight(ctx: _RunContext) -> int | None:
-    """Block unsupported environments, budgets, or cancellation before preparing dispatch."""
-    ctx.environment = check_environment(Path(ctx.packet["cwd"]), model=ctx.packet["model"],
-                                    required_groups=required_groups(ctx.packet, ctx.resume is not None), selection=ctx.selection)
-    ctx.environment["cli_descriptor"] = {"identity_id": ctx.descriptor.get("identity_id"), "sha256": ctx.descriptor.get("sha256") or ctx.descriptor.get("identity_sha256"),
-                                       "source": ctx.selection.get("source"), "resolved_path": ctx.descriptor.get("resolved_path"),
-                                       "version": (ctx.environment.get("cli") or {}).get("version"),
-                                       "contract_id": ctx.descriptor.get("contract_id"), "purpose": ctx.descriptor.get("purpose"),
-                                       "contract_id_at_start": ctx.descriptor.get("contract_id_at_start", ctx.descriptor.get("contract_id")),
-                                       "contract_id_now": ctx.descriptor.get("contract_id"),
-                                       "dispatch_protocol_version": ctx.descriptor.get("dispatch_protocol_version")}
-    dump(ctx.run_dir / "environment.json", ctx.environment)
-    if not ctx.environment["ready"]:
-        state(ctx.run_dir, "blocked", reason=ctx.environment["status"])
-        dump(ctx.run_dir / "receipt.json", {"status": "blocked", "blocked_by": "preflight", "reason": ctx.environment["status"],
-                                         "task_id": ctx.packet["task_id"], "revision": ctx.packet["revision"],
-                                         "note": "Claude task was not launched. Resolve the preflight issue, then use a new run-dir.",
-                                         **plugin_identity.receipt_fields(ctx.run_dir)})
-        print(f"bridge blocked before dispatch: {ctx.environment['status']}", flush=True)
-        activity(ctx.run_dir, "blocked", "environment preflight blocked dispatch", status="blocked")
-        return 1
-    ctx.capabilities = ctx.environment["cli"].get("capabilities", {})
-    unsupported_budget = sorted(key for key in ctx.packet["budget"] if key not in ctx.capabilities)
-    if unsupported_budget:
-        state(ctx.run_dir, "blocked", reason="budget_capability_unavailable")
-        dump(ctx.run_dir / "receipt.json", {"status": "blocked", "blocked_by": "preflight", "reason": "budget_capability_unavailable",
-                                         "task_id": ctx.packet["task_id"], "revision": ctx.packet["revision"],
-                                         "note": f"Local Claude CLI --help does not advertise the requested budget controls: {unsupported_budget}. The task was not launched without them; wall timeout remains enforced by bridge.",
-                                         **plugin_identity.receipt_fields(ctx.run_dir)})
-        activity(ctx.run_dir, "blocked", "requested budget control unavailable", status="blocked")
-        return 1
-    # Runtime cancellation can arrive while an authentication/CLI preflight
-    # is running.  Check both marker locations again immediately before the
-    # only Claude Popen in this function.
-    if cancellation_requested(ctx.args, ctx.run_dir) or (ctx.early_cancel and Path(ctx.early_cancel).is_file()):
-        if not (ctx.run_dir / "cancel.json").exists():
-            dump(ctx.run_dir / "cancel.json", {"reason": "runtime cancelled during bridge preflight", "requested_at": time.time()})
-        return pre_dispatch_cancelled(ctx.run_dir, ctx.packet, "cancelled during bridge preflight")
-
-
-def _prepare_provider_command(ctx: _RunContext) -> None:
-    """Construct tool policy, command, and a verified hook guard; retain opened I/O handles."""
-    state(ctx.run_dir, "running", pid=os.getpid())
-    activity(ctx.run_dir, "starting", "dispatching supervised Claude process", status="starting")
-    ctx.bridge = Path(__file__).resolve()
-    hook_argv = [sys.executable, str(ctx.bridge), "hook", "--packet", str(ctx.run_dir / "packet.json"), "--cwd", ctx.execution_cwd]
-    # Claude treats hook exit 1/import failures as non-blocking.  Force
-    # every launcher failure to exit 2, which PreToolUse treats as a block.
-    hook_cmd = " ".join(shlex.quote(item) for item in hook_argv) + " || exit 2"
-    matcher = "*" if ctx.isolated or ctx.packet["role"] == "workflow_review" else "Read|Glob|Grep|Edit|Write"
-    settings = {"hooks": {"PreToolUse": [{"matcher": matcher, "hooks": [{"type": "command", "command": hook_cmd}]}]}}
-    dump(ctx.run_dir / "settings.json", settings)
-    dump(ctx.run_dir / "mcp.json", {"mcpServers": {}})
-    schema = RESULT_SCHEMA
-    ctx.session = str(uuid.uuid4())
-    ctx.tools = READ_TOOLS + (WRITE_TOOLS if ctx.packet["role"] == "implement" else ())
-    allowed_tools = ctx.tools
-    disallowed_tools = DISALLOWED
-    if ctx.packet["role"] == "workflow_review":
-        ctx.tools = READ_TOOLS + ("Workflow",)
-        allowed_tools = READ_TOOLS + (f"Workflow({ctx.packet['workflow']['name']})",)
-        disallowed_tools = tuple(tool for tool in DISALLOWED if tool != "Workflow") + WRITE_TOOLS
-    if ctx.isolated:
-        ctx.tools = ("default",)
-        allowed_tools = ISOLATED_ALLOWED_TOOLS
-        disallowed_tools = ()
-    ctx.command = [ctx.environment["cli"]["path"], "-p", "--model", ctx.packet["model"], "--effort", ctx.packet["effort"],
-               "--output-format", "stream-json", "--verbose", "--json-schema", json.dumps(schema), "--permission-mode", "dontAsk",
-               "--tools", ",".join(ctx.tools), "--allowedTools", ",".join(allowed_tools), "--disallowedTools", ",".join(disallowed_tools),
-               "--settings", str(ctx.run_dir / "settings.json"), "--strict-mcp-config", "--mcp-config", str(ctx.run_dir / "mcp.json")]
-    if ctx.isolated:
-        index = ctx.command.index("--disallowedTools")
-        del ctx.command[index:index + 2]
-    for key, value in ctx.packet["budget"].items():
-        ctx.command += [ctx.capabilities[key]["flag"], str(value)]
-    if ctx.packet["role"] != "workflow_review" and not ctx.isolated:
-        ctx.command.append("--disable-slash-commands")
-    ctx.command += (["--resume", ctx.resume_session] if ctx.resume_session else ["--session-id", ctx.session])
-    dump(ctx.run_dir / "command.json", {"argv": ctx.command, "initial_session_id": ctx.session, "resume_session_id": ctx.resume_session,
-                                    "cli_descriptor": ctx.environment["cli_descriptor"]})
-    ctx.child_env = cli_environment(ctx.environment["cli"])
-    ctx.child_env = {key: value for key, value in ctx.child_env.items() if not key.startswith("CODEX_BRIDGE_")}
-    ctx.child_env["PYTHONDONTWRITEBYTECODE"] = "1"
-    ctx.policy_evidence = hook_policy_preflight(Path(ctx.execution_cwd), ctx.child_env)
-    self_test_id = "bridge-self-test-" + uuid.uuid4().hex
-    if ctx.packet["workspace_kind"] == "artifacts":
-        declared_reads = ctx.packet["requirement_sources"] + ctx.packet.get("input_files", [])
-        if not declared_reads:
-            raise BridgeError("artifact guard self-test requires a declared readable file")
-        self_test_path = declared_reads[0]
-    else:
-        self_test_path = "."
-    self_test = subprocess.run(["/bin/sh", "-c", hook_cmd], cwd=ctx.execution_cwd, env=ctx.child_env,
-                               input=json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Read",
-                                                 "tool_input": {"file_path": self_test_path}, "tool_use_id": self_test_id}),
-                               text=True, capture_output=True, timeout=10)
-    if self_test.returncode != 0 or self_test.stdout.strip():
-        raise BridgeError("bridge hook guard self-test failed before provider dispatch")
-    ctx.policy_evidence.update(self_test="passed", self_test_tool_use_id=self_test_id,
-                           limitation="does not prove server/MDM-only policy or later CLI hook invocation")
-    dump(ctx.run_dir / "hook-guard-preflight.json", ctx.policy_evidence)
-    print(f"bridge started task={ctx.packet['task_id']} run_dir={ctx.run_dir}", flush=True)
-    ctx.stream = (ctx.run_dir / "stream.jsonl").open("w", encoding="utf-8")
-    ctx.err = (ctx.run_dir / "stderr").open("w", encoding="utf-8")
-
-
-def _verify_provider_dispatch(ctx: _RunContext) -> int | None:
-    """Verify executable identity and final cancellation before publishing launch intent."""
-    verify_cli_descriptor(ctx.descriptor)
-    ctx.workflow_wait_ceiling_ms = None
-    if ctx.packet["role"] == "workflow_review":
-        prior_cap = ctx.child_env.get("CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS", "2")
-        ctx.child_env["CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS"] = "1" if prior_cap == "1" else "2"
-        ctx.workflow_wait_ceiling_ms = print_background_wait_ceiling_ms(ctx.args.timeout)
-        ctx.child_env[PRINT_BG_WAIT_CEILING] = str(ctx.workflow_wait_ceiling_ms)
-    if ctx.isolated:
-        ctx.workflow_wait_ceiling_ms = print_background_wait_ceiling_ms(ctx.args.timeout)
-        ctx.child_env[PRINT_BG_WAIT_CEILING] = str(ctx.workflow_wait_ceiling_ms)
-        protected = [ctx.run_dir]
-        if ctx.resume is not None:
-            protected.extend(Path(prior) for prior in load(ctx.run_dir / "review-workspace-link.json")["prior_run_dirs"])
-        plugin_root = startup_protocol.plugin_root(Path(__file__).resolve())
-        protected.extend([plugin_root, Path(sys.prefix).resolve(), Path(sys.base_prefix).resolve(),
-                          Path(sys.executable).resolve(), Path(ctx.command[0]).resolve()])
-        from lane_lock import coordination_root, legacy_lock_path, marker_roots
-        protected.extend([coordination_root(), legacy_lock_path(ctx.lane).parent, *marker_roots()])
-        lifecycle_path = os.environ.get("CODEX_BRIDGE_LIFECYCLE_FILE")
-        if lifecycle_path:
-            # Protect all historical runs, CLI/venv state, and future control
-            # artifacts without maintaining a second filename inventory.
-            protected.append(Path(lifecycle_path).resolve().parent.parent)
-        ctx.command = review_workspace.protected_command(
-            ctx.command, ctx.review, extra_protected=protected,
-            writable_exceptions=[Path(ctx.review["workspace_root"]), (ctx.run_dir / "activity.jsonl").resolve(), (ctx.run_dir / "stderr").resolve()])
-        dump(ctx.run_dir / "command.json", {"argv": ctx.command, "initial_session_id": ctx.session, "resume_session_id": ctx.resume_session,
-                                        "cli_descriptor": ctx.environment["cli_descriptor"], "execution_cwd": ctx.execution_cwd})
-    # The hook command re-executes bridge.py from disk on every tool call.
-    startup_code = getattr(ctx.args, "_startup_code", None)
-    if startup_code is not None:
-        problem = startup_protocol.mismatch(startup_code, startup_protocol.code_identity(startup_protocol.plugin_root(ctx.bridge)))
-        if problem:
-            raise BridgeError(problem + "; Claude was not launched")
-    # Publishing over a marker that appeared since the locked check (for
-    # example Runtime's post-spawn escalation of this run) would erase it.
-    if unknown_markers(ctx.lane):
-        raise BridgeError(ctx.unknown_message)
-    # The guard self-test, descriptor and code checks above can take
-    # seconds.  A cancellation observed by now must not launch Claude.
-    if cancellation_requested(ctx.args, ctx.run_dir) or (ctx.early_cancel and Path(ctx.early_cancel).is_file()):
-        if not (ctx.run_dir / "cancel.json").exists():
-            dump(ctx.run_dir / "cancel.json", {"reason": "runtime cancelled during bridge preflight", "requested_at": time.time()})
-        return pre_dispatch_cancelled(ctx.run_dir, ctx.packet, "cancelled during bridge preflight")
-    if ctx.packet["role"] == "workflow_review":
-        ctx.workflow_root = workflow_delivery.create_root()
-        dump(ctx.run_dir / "workflow-temp-root.json", ctx.workflow_root)
-        ctx.child_env[workflow_delivery.TMPDIR_ENV] = ctx.workflow_root["path"]
-    if ctx.isolated:
-        ctx.family = Family()
-        ctx.child_env.update(ctx.family.environment)
-    ctx.payload = memoryview(prompt(ctx.execution_packet).encode("utf-8"))
-
-
-def _supervise_provider(ctx: _RunContext) -> int | None:
-    """Persist child ownership before I/O, supervise deadline/cancellation, and prove cleanup."""
-    # One deadline from launch bounds prompt delivery and execution alike.
-    deadline = time.monotonic() + ctx.args.timeout
-    launch_intent_update(ctx.args, "running")
-    # Persist the launched PID/PGID before any I/O that can wait on the
-    # child, so a hard crash leaves a process group to prove stopped.
-    child_started_at = time.time()
-    lifecycle_update(ctx.args, phase="executing", child_started=True, child_pid=ctx.proc.pid,
-                     child_process_group=ctx.proc.pid, child_identity=None)
-    dump(ctx.run_dir / "child.json", {"pid": ctx.proc.pid, "process_group": ctx.proc.pid, "started_at": child_started_at,
-                                   "expected_session_id": ctx.resume_session or ctx.session, "identity": None,
-                                   "family_marker": ctx.child_env.get(FAMILY_ENVIRONMENT_KEY)})
-    assert ctx.proc.stdin and ctx.proc.stdout
-    child_identity = capture_process_identity(ctx.proc.pid, ctx.resume_session or ctx.session)
-    lifecycle_update(ctx.args, child_identity=child_identity)
-    dump(ctx.run_dir / "child.json", {"pid": ctx.proc.pid, "process_group": ctx.proc.pid, "started_at": child_started_at,
-                                   "expected_session_id": ctx.resume_session or ctx.session, "identity": child_identity,
-                                   "family_marker": ctx.child_env.get(FAMILY_ENVIRONMENT_KEY)})
-    activity(ctx.run_dir, "executing", "Claude child started", status="executing")
-    transport = ProcessStream(ctx.proc, ctx.stream, ctx.payload, ctx.run_dir, ctx.packet["role"] == "workflow_review" or ctx.packet.get("review_mode") == "isolated")
-    ctx.selector = transport.selector
-    ctx.prompt_delivery = transport.delivery
-    ctx.cancelled = ctx.timed_out = interrupted = False
-    cleanup_error: str | None = None
-    next_family_observation = 0.0
-    try:
-        while ctx.proc.poll() is None:
-            if ctx.family is not None and time.monotonic() >= next_family_observation:
-                ctx.family.observe()
-                next_family_observation = time.monotonic() + .5
-            transport.drain(.15)
-            if cancellation_requested(ctx.args, ctx.run_dir):
-                ctx.cancelled = True; cleanup_error = terminate_group(ctx.proc); break
-            if time.monotonic() > deadline:
-                ctx.timed_out = True; cleanup_error = terminate_group(ctx.proc); break
-    except KeyboardInterrupt:
-        ctx.cancelled = True
-        interrupted = True
-        cleanup_error = terminate_group(ctx.proc)
-    transport.close_input("incomplete")
-    if cleanup_error:
-        reason = "KeyboardInterrupt" if interrupted else ("cancelled run" if ctx.cancelled else "timed out run")
-        return record_unconfirmed_cleanup(ctx.run_dir, ctx.packet, reason, cleanup_error, lane=ctx.lane)
-    try:
-        ctx.proc.wait(timeout=3)
-    except subprocess.TimeoutExpired as exc:
-        cleanup_error = terminate_group(ctx.proc)
-        return record_unconfirmed_cleanup(ctx.run_dir, ctx.packet, "post-stop wait", cleanup_error or
-                                          "direct child remained running after stop request", exc, lane=ctx.lane)
-    ctx.residual_process_group = not wait_process_group_absent(ctx.proc.pid, .75)
-    if ctx.residual_process_group:
-        cleanup_error = terminate_group(ctx.proc)
-        if cleanup_error:
-            return record_unconfirmed_cleanup(ctx.run_dir, ctx.packet, "normal child exit left a live process group", cleanup_error,
-                                              lane=ctx.lane)
-    family_error = _finish_process_family(ctx)
-    if family_error:
-        return record_unconfirmed_cleanup(ctx.run_dir, ctx.packet, "detached provider cleanup", family_error, lane=ctx.lane)
-    activity(ctx.run_dir, "collecting", "collecting final provider output", status="collecting")
-    eof_deadline = time.monotonic() + 3
-    while not transport.eof and time.monotonic() < eof_deadline:
-        transport.drain(min(.1, max(.01, eof_deadline - time.monotonic())))
-    transport.finish()
-    ctx.meta_stream_warning = None if transport.eof else "stdout did not reach EOF before collection deadline"
-    if not transport.eof:
-        cleanup_error = terminate_group(ctx.proc)
-        if cleanup_error:
-            return record_unconfirmed_cleanup(ctx.run_dir, ctx.packet, "stdout collection cleanup", cleanup_error, lane=ctx.lane)
-    # The direct child is reaped and its process group was proven absent.
-    launch_intent_update(ctx.args, "stopped")
-    ctx.stream.close(); ctx.err.close()
-
-
-
-def _finish_process_family(ctx: _RunContext) -> str | None:
-    if ctx.family is None:
         return None
-    ctx.family_evidence = ctx.family.finish()
-    dump(ctx.run_dir / "process-family.json", ctx.family_evidence)
-    if ctx.family_evidence["state"] != "stopped":
-        return "detached process identities could not be confirmed stopped"
-    return None
-
-def _collect_provider_evidence(ctx: _RunContext) -> None:
-    """Collect stream/hook/workflow facts and the final original-workspace observation."""
-    ctx.expected_session = ctx.resume_session or ctx.session
-    ctx.provider, ctx.meta = parse_stream(ctx.run_dir / "stream.jsonl", ctx.expected_session,
-                                  ctx.packet["workflow"] if ctx.packet["role"] == "workflow_review" else "*" if ctx.isolated else None)
-    ctx.coverage = hook_coverage(ctx.run_dir, ctx.meta.get("guarded_tool_uses", {}),
-                             guard_all_tools=ctx.isolated or ctx.packet["role"] == "workflow_review",
-                             rejected_formatter_tool_uses=ctx.meta.get("rejected_formatter_tool_uses", {}))
-    denied_hooks = hook_denials(ctx.run_dir, ctx.meta.get("guarded_tool_uses", {}), ctx.meta["permission_denials"])
-    if denied_hooks:
-        ctx.meta["permission_denials"].extend(denied_hooks)
-        ctx.meta["hook_denial_error"] = f"PreToolUse guard denied {len(denied_hooks)} tool use(s) during this run"
-        for item in denied_hooks:
-            print(f"hook denial tool={item['tool_name']} tool_use_id={item['tool_use_id']} "
-                  f"in_provider_stream={item['in_provider_stream']} reason={item['reason']}", flush=True)
-    ctx.unexpected_tools = ([] if ctx.isolated or ctx.packet["role"] == "workflow_review"
-                        else unexpected_tool_uses(ctx.meta.get("guarded_tool_uses", {}), ctx.tools))
-    ctx.workflow_record = None
-    if ctx.packet["role"] == "workflow_review":
-        # The process group is proven stopped, so the provider can no
-        # longer write the output files being captured.
-        ctx.workflow_record = collect_workflow_delivery(ctx.run_dir, ctx.packet, ctx.meta, ctx.expected_session, ctx.workflow_root)
-        ctx.workflow_record["temp_root"]["cleanup"] = workflow_delivery.remove_root(ctx.workflow_root)
-        ctx.workflow_root = None
-    ctx.after = workspace_snapshot(ctx.packet); dump(ctx.run_dir / "workspace_after.json", ctx.after)
-    if ctx.packet["workspace_kind"] == "git":
-        dump(ctx.run_dir / "git_after.json", ctx.after)
-        if ctx.before["head"] is None:
-            diff_bytes = git_bytes(Path(ctx.packet["cwd"]), "diff", "--no-ext-diff", "--no-textconv") + git_bytes(Path(ctx.packet["cwd"]), "diff", "--cached", "--no-ext-diff", "--no-textconv")
-            diff_header = "# Workspace diff has no HEAD baseline; untracked paths are listed in git_after.json.\n"
-        else:
-            diff_bytes = git_bytes(Path(ctx.packet["cwd"]), "diff", "--no-ext-diff", "--no-textconv", "HEAD")
-            diff_header = "# Workspace diff relative to HEAD; this may include changes that predated this run.\n"
-        (ctx.run_dir / "diff.patch").write_bytes(diff_header.encode("utf-8") + diff_bytes)
-    if ctx.isolated:
-        execution = load_execution_workspace(ctx.run_dir)
-        copy_root = Path(execution["workspace_root"])
-        (ctx.run_dir / "review-copy.diff.patch").write_bytes(git_bytes(copy_root, "diff", "--no-ext-diff", "--no-textconv", "HEAD"))
-        dump(ctx.run_dir / "review-copy-status.json", {"entries": git_status_entries(copy_root),
-             "note": "copy changes relative to HEAD include preexisting edits; untracked contents are retained in the copy until explicit disposal"})
-    ctx.requirements_after = {source: sha256_file(Path(source)) for source in ctx.packet["requirement_sources"]}
 
 
-def _classify_provider_result(ctx: _RunContext) -> None:
-    """Keep the raw report as evidence, then classify transport and execution conditions."""
-    ctx.final_status = "failed"; ctx.structured: dict[str, Any] | None = None
-    if ctx.isolated and ctx.coverage["status"] != "complete":
-        ctx.meta["hook_audit_warning"] = "tool-use audit coverage is incomplete; isolated source protection is enforced by the OS"
-    ctx.subtype = ctx.provider.get("subtype") if ctx.provider else None
-    # The report is kept as evidence whatever the run outcome; parsing it
-    # never decides success, which stays with the checks below.
-    ctx.report_state = "absent"
-    if ctx.provider is not None and ctx.provider.get("structured_output") is not None:
+def cancel_requested(run_dir: Path) -> bool:
+    return (run_dir / "cancel.json").exists()
+
+
+def freeze_inputs(inputs: list[str], destination: Path) -> tuple[list[dict[str, Any]], list[str]]:
+    """Copy each input byte for byte; symlinks, sensitive names and overflow are listed, never copied."""
+    destination.mkdir(mode=0o700)
+    entries: list[dict[str, Any]] = []
+    skipped: list[str] = []
+    budget = {"files": INPUT_FILE_LIMIT, "bytes": INPUT_BYTE_LIMIT}
+
+    def take(source: Path, target: Path) -> dict[str, Any] | None:
+        size = source.stat().st_size
+        if budget["files"] < 1 or size > budget["bytes"]:
+            skipped.append(f"{source} (input size limit)")
+            return None
+        budget["files"] -= 1
+        budget["bytes"] -= size
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target, follow_symlinks=False)
+        target.chmod(0o444)
+        return {"bytes": size, "sha256": hashlib.sha256(target.read_bytes()).hexdigest()}
+
+    for index, raw in enumerate(inputs, start=1):
+        source = Path(raw)
+        target = destination / f"{index:02d}-{source.name or 'input'}"
+        if copy_workspace.sensitive_path(source.name):
+            skipped.append(f"{source} (sensitive name)")
+            continue
+        if source.is_file():
+            copied = take(source, target)
+            if copied:
+                entries.append({"original": str(source), "copy": str(target), "kind": "file", **copied})
+            continue
+        files = 0
+        total = 0
+        for directory, dirs, names in os.walk(source, followlinks=False):
+            relative_dir = Path(directory).relative_to(source)
+            for name in sorted(dirs):
+                if copy_workspace.sensitive_path(name) or name == ".git" or (Path(directory) / name).is_symlink():
+                    skipped.append(str(Path(directory) / name))
+            dirs[:] = sorted(name for name in dirs if not copy_workspace.sensitive_path(name) and name != ".git"
+                             and not (Path(directory) / name).is_symlink())
+            for name in sorted(names):
+                path = Path(directory) / name
+                if copy_workspace.sensitive_path(name) or path.is_symlink() or not path.is_file():
+                    skipped.append(str(path))
+                    continue
+                copied = take(path, target / relative_dir / name)
+                if copied:
+                    files += 1
+                    total += copied["bytes"]
+        entries.append({"original": str(source), "copy": str(target), "kind": "directory", "files": files, "bytes": total})
+    return entries, skipped
+
+
+def worktree_state(root: Path) -> dict[str, Any]:
+    """HEAD plus every non-ignored changed path with its content, link target and exec bit.
+
+    A continuation compares this to decide whether its copy must be rebuilt from the original.
+    """
+    head = trusted_git.run(root, "rev-parse", "--verify", "-q", "HEAD", text=True).stdout.strip() or None
+    status = trusted_git.run(root, "status", "--porcelain=v1", "-z", "-uall")
+    entries: dict[str, list[str]] = {}
+    fields = status.stdout.split(b"\0") if status.returncode == 0 else []
+    index = 0
+    while index < len(fields) - 1:
+        field = fields[index]
+        if len(field) < 4:
+            break
+        name = field[3:].decode("utf-8", "surrogateescape")
+        if b"R" in field[:2] or b"C" in field[:2]:
+            index += 1
+        path = root / name
         try:
-            ctx.structured = result_payload(ctx.provider)
-            ctx.report_state = "structured"
-        except Exception as exc:
-            ctx.report_state = "validation_error"
-            ctx.meta["result_validation_error"] = str(exc)
-    if ctx.cancelled or cancellation_requested(ctx.args, ctx.run_dir):
-        ctx.final_status = "cancelled"
-    elif ctx.timed_out:
-        ctx.final_status = "timeout"
-    elif ctx.provider is None or ctx.meta_stream_warning:
-        ctx.final_status = "failed"
-    elif ctx.prompt_delivery["state"] != "complete":
-        ctx.meta["prompt_delivery_error"] = "the task prompt was not fully delivered to the Claude child"
-        ctx.final_status = "failed"
-    elif ctx.residual_process_group:
-        ctx.meta["process_group_error"] = "direct Claude child exited while same-group descendants remained; descendants were stopped"
-        ctx.final_status = "failed"
-    elif ctx.coverage["status"] != "complete" and not ctx.isolated:
-        ctx.meta["hook_guard_error"] = "one or more provider tool uses lack matching PreToolUse guard evidence"
-        ctx.final_status = "failed"
-    elif ctx.unexpected_tools:
-        ctx.meta["tool_policy_error"] = f"provider used tools outside this task's tool set: {ctx.unexpected_tools}"
-        ctx.final_status = "failed"
-    elif ctx.meta.get("session_error") or (ctx.meta["permission_denials"] and not ctx.isolated) or ctx.subtype == "permission_denials" or ctx.provider.get("is_error") or ctx.subtype != "success" or ctx.proc.returncode != 0:
-        ctx.final_status = "failed"
-    elif ctx.structured is not None:
-        ctx.final_status = ctx.structured["status"]
-    else:
-        ctx.meta.setdefault("result_validation_error", "provider result lacks structured_output object")
+            if path.is_symlink():
+                digest = "link:" + os.readlink(path)
+            elif path.is_file():
+                digest = hashlib.sha256(path.read_bytes()).hexdigest() + (":x" if os.access(path, os.X_OK) else "")
+            else:
+                digest = "missing" if not os.path.lexists(path) else "other"
+        except OSError:
+            digest = "unreadable"
+        entries[name] = [field[:2].decode("ascii", "replace"), digest]
+        index += 1
+    return {"head": head, "entries": entries, "status_ok": status.returncode == 0}
 
 
-def _apply_workflow_report_evidence(ctx: _RunContext) -> None:
-    """Require completed Workflow delivery and capture isolated reports without implying acceptance."""
-    ctx.workflow_evidence_blocked = False
-    if ctx.workflow_record is not None:
-        # The first tool result only confirms that a background workflow was
-        # launched.  A completed task-notification tied to that same tool ID
-        # is required, its full output must be captured, and the accepted
-        # parent result must follow it.
-        if not (ctx.meta.get("workflow_tool_result_success") and ctx.meta.get("workflow_completion_observed")):
-            ctx.meta["workflow_error"] = "expected named Workflow launch and completed task-notification were not observed"
-        elif ctx.meta["result_selection"]["final_stream_line"] is None:
-            ctx.meta["workflow_error"] = "no parent result in the expected session followed the Workflow completion"
-        elif not ctx.meta.get("workflow_final_after_completion"):
-            ctx.meta["workflow_error"] = ("the final parent result preceded the Workflow completion notification; "
-                                      "an interim launch result is not the Workflow report")
-        elif ctx.workflow_record["status"] != "delivered":
-            ctx.meta["workflow_error"] = ("the completed Workflow's full report was not collected: "
-                                      + ", ".join(ctx.workflow_record["reason_codes"]))
-        if ctx.meta.get("workflow_error"):
-            ctx.meta["workflow_error_codes"] = ctx.workflow_record["reason_codes"]
-            if ctx.final_status == "completed":
-                ctx.final_status = "blocked"
-                ctx.workflow_evidence_blocked = True
-    ctx.review_report = None
-    ctx.parent_structured = ctx.structured
-    if ctx.isolated:
-        ctx.review_report = capture_review_report(ctx.run_dir, ctx.execution_packet, ctx.meta)
-        full_report = ctx.review_report.pop("structured", None)
-        if full_report is not None:
-            ctx.structured = full_report
-            ctx.report_state = "structured"
-            if ctx.final_status in {"completed", "blocked"}:
-                ctx.final_status = "blocked" if "blocked" in {ctx.final_status, ctx.structured["status"]} else "completed"
-        if ctx.review_report["status"] != "delivered" and ctx.final_status == "completed":
-            ctx.final_status = "blocked"
-            ctx.workflow_evidence_blocked = True
-        invocations = ctx.meta.get("workflow_invocations", [])
-        unfinished = [item for item in invocations
-                      if item["acknowledgement"]["state"] != "failed"
-                      and (item.get("terminal") or {}).get("status") not in {"completed", "failed", "stopped", "cancelled"}]
-        if unfinished:
-            ctx.meta["workflow_warning"] = "Workflow completion was not observed; retained as incomplete review coverage"
-        elif invocations and not ctx.meta.get("workflow_completion_observed"):
-            ctx.meta["workflow_warning"] = "one or more Workflow attempts failed or stopped; retain their diagnostics when evaluating the report"
+def state_changes(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
+    changed = sorted(path for path in set(before["entries"]) | set(after["entries"])
+                     if before["entries"].get(path) != after["entries"].get(path))
+    return (["HEAD"] if before["head"] != after["head"] else []) + changed
 
 
-def _check_source_invariants(ctx: _RunContext) -> None:
-    """Apply original source, HEAD, and ownership invariants after report capture."""
-    ctx.scope_error = None
-    ctx.invariant_error = None
-    if ctx.requirements_after != ctx.requirements:
-        ctx.invariant_error = "requirement source changed during run"
-        ctx.final_status = "failed"
-    if ctx.packet["workspace_kind"] == "git" and ctx.after["head"] != ctx.before["head"]:
-        ctx.invariant_error = "git HEAD changed during run"
-        ctx.final_status = "failed"
-    if ctx.packet["role"] in ("review", "workflow_review"):
-        if ctx.packet["workspace_kind"] == "artifacts":
-            differences = artifact_snapshot_difference(ctx.before, ctx.after)
-            if differences:
-                ctx.invariant_error = "artifact workspace changed: " + "; ".join(differences)
-                ctx.final_status = "failed"
-        elif ctx.after != ctx.before:
-            ctx.invariant_error = "review run changed workspace state"
-            ctx.final_status = "failed"
-    if ctx.packet["role"] == "implement":
-        forbidden = scope_violations(ctx.packet, ctx.before, ctx.after)
-        if forbidden:
-            ctx.scope_error = f"out-of-scope or protected changes: {forbidden}"
-            ctx.final_status = "failed"
+def matches(path: str, patterns: list[str]) -> bool:
+    return any(fnmatch.fnmatchcase(path, pattern) or path.startswith(pattern.rstrip("/") + "/") for pattern in patterns)
 
 
-def _persist_provider_result(ctx: _RunContext) -> int:
-    """Persist unaccepted result evidence and the receipt, honoring a final cancellation marker."""
-    usage = ctx.meta.get("usage")
-    usage_summary = {key: usage[key] for key in ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
-                     if isinstance(usage, dict) and isinstance(usage.get(key), int)}
-    cost = ctx.provider.get("total_cost_usd") if ctx.provider else None
-    cost = cost if isinstance(cost, (float, int)) and not isinstance(cost, bool) and math.isfinite(cost) and cost >= 0 else None
-    model_usage = ctx.provider.get("modelUsage") if ctx.provider else None
-    # A marker arriving after process exit but before final persistence wins.
-    if cancellation_requested(ctx.args, ctx.run_dir) and ctx.final_status in {"completed", "blocked"}:
-        ctx.final_status = "cancelled"
-    # A Workflow evidence gap is the bridge's finding, not an executor refusal.
-    blocked_by = (("review_report" if ctx.isolated else "workflow_evidence") if ctx.workflow_evidence_blocked else "executor") if ctx.final_status == "blocked" else None
-    result = {"workspace_kind": ctx.packet["workspace_kind"], "workspace_manifest": {"before": "workspace_before.json", "after": "workspace_after.json"},
-              "cli_identity": ctx.environment["cli_descriptor"],
-              "content_binding": content_store.binding_summary(ctx.content_binding),
-              "total_cost_usd": cost, "model_usage": model_usage if isinstance(model_usage, dict) else None,
-              "usage_report": usage_scope.usage_report(ctx.provider, result_events=ctx.meta.get("result_event_count", 0),
-                                                       resumed=ctx.resume_session is not None),
-              "blocked_by": blocked_by,
-              "prompt_delivery": ctx.prompt_delivery, "prompt_delivery_error": ctx.meta.get("prompt_delivery_error"),
-              "result_selection": ctx.meta.get("result_selection"),
-              "budget": ctx.packet["budget"], "budget_enforcement": "provider_enforced" if ctx.packet["budget"] else "not_requested",
-              "provider_subtype": ctx.subtype, "provider_exit_code": ctx.proc.returncode, "requested_model": ctx.packet["model"],
-              "initialized_model": ctx.meta.get("initialized_model"), "cli_resolved_model": ctx.meta.get("initialized_model"),
-              "actual_models": ctx.meta.get("actual_models", []), "provider_models": ctx.meta.get("actual_models", []),
-              "actual_model": ctx.meta.get("actual_models", [None])[0] if len(ctx.meta.get("actual_models", [])) == 1 else None,
-              "actual_model_source": ctx.meta.get("actual_model_source"),
-              "provider_response_observed": ctx.meta.get("provider_response_observed", False),
-              "system_init_model": ctx.meta.get("system_init_model"), "reported_model": ctx.meta.get("reported_model"),
-              "actual_session_id": ctx.meta.get("actual_session_id"),
-              "usage": usage, "usage_summary": usage_summary, "permission_denials": ctx.meta["permission_denials"], "structured": ctx.structured,
-              "parent_structured": ctx.parent_structured if ctx.isolated else None,
-              "scope_error": ctx.scope_error, "invariant_error": ctx.invariant_error, "stream_warning": ctx.meta_stream_warning,
-              "result_validation_error": ctx.meta.get("result_validation_error"), "session_error": ctx.meta.get("session_error"),
-              "hook_guard_preflight": ctx.policy_evidence, "hook_guard_coverage": ctx.coverage,
-              "rejected_formatter_tool_uses": ctx.meta.get("rejected_formatter_tool_uses", {}),
-              "hook_audit_warning": ctx.meta.get("hook_audit_warning"), "workflow_warning": ctx.meta.get("workflow_warning"),
-              "hook_guard_error": ctx.meta.get("hook_guard_error"), "hook_denial_error": ctx.meta.get("hook_denial_error"),
-              "tool_policy_error": ctx.meta.get("tool_policy_error"),
-              "process_group_error": ctx.meta.get("process_group_error"), "process_family": ctx.family_evidence,
-              "system_init_session_id": ctx.meta.get("system_init_session_id"), "final_session_id": ctx.meta.get("final_session_id"),
-              "workflow_name": ctx.meta.get("workflow_name"), "workflow_tool_use_observed": ctx.meta.get("workflow_tool_use_observed"),
-              "workflow_tool_result_success": ctx.meta.get("workflow_tool_result_success"),
-              "workflow_tool_use_count": ctx.meta.get("workflow_tool_use_count"),
-              "workflow_tool_result_success_count": ctx.meta.get("workflow_tool_result_success_count"),
-              "workflow_completion_observed": ctx.meta.get("workflow_completion_observed"),
-              "workflow_completion_count": ctx.meta.get("workflow_completion_count"),
-              "workflow_final_after_completion": ctx.meta.get("workflow_final_after_completion"),
-              "workflow_interim_result_count": ctx.meta.get("workflow_interim_result_count"),
-              "workflow_background_wait_ceiling_ms": ctx.workflow_wait_ceiling_ms,
-              "workflow_error": ctx.meta.get("workflow_error"), "workflow_error_codes": ctx.meta.get("workflow_error_codes"),
-              "workflow_delivery": ctx.workflow_record, "review_report": ctx.review_report,
-              "workflow_invocations": ctx.meta.get("workflow_invocations", []), "workflow_names": ctx.meta.get("workflow_names", []),
-              "review_mode": ctx.packet.get("review_mode", "strict"), "review_scope": ctx.packet.get("review_scope", "full"),
-              "review_workspace": ctx.review, "request_provenance": ctx.packet.get("request_provenance")}
-    result["report_evidence"] = {
-        "state": ctx.report_state, "claimed_status": ctx.structured["status"] if ctx.structured else None,
-        "run_status": ctx.final_status, "accepted": False,
-        "note": ("The provider's own report, kept as unaccepted evidence. Its claimed_status is the model's claim, "
-                 "not this run's outcome; run_status and the receipt decide that.")}
-    result.update(plugin_identity.receipt_fields(ctx.run_dir))
-    dump(ctx.run_dir / "result.json", result)
-    receipt_status = "reported" if ctx.final_status == "completed" else ("blocked" if ctx.final_status == "blocked" else ctx.final_status)
-    dump(ctx.run_dir / "receipt.json", {"status": receipt_status, "task_id": ctx.packet["task_id"], "revision": ctx.packet["revision"],
-                                      "blocked_by": blocked_by,
-                                      "note": "reported is not accepted; Codex must verify evidence and workspace state.",
-                                      **plugin_identity.receipt_fields(ctx.run_dir)})
-    state(ctx.run_dir, ctx.final_status, provider_exit_code=ctx.proc.returncode)
-    phase = "reported" if ctx.final_status == "completed" else ctx.final_status
-    activity(ctx.run_dir, phase, "provider result recorded", status=phase)
-    print(f"bridge finished status={ctx.final_status} provider_subtype={ctx.subtype}", flush=True)
-    return 0 if ctx.final_status in {"completed", "blocked"} else 1
+def source_root_of(cwd: str) -> Path:
+    top = trusted_git.run(Path(cwd), "rev-parse", "--show-toplevel", text=True)
+    if top.returncode:
+        raise copy_workspace.CopyWorkspaceError(f"not a Git worktree: {top.stderr.strip()}")
+    return Path(top.stdout.rstrip("\n")).resolve()
 
 
-def collect_workflow_delivery(run_dir: Path, packet: dict[str, Any], meta: dict[str, Any], session: str,
-                              root: dict[str, Any] | None) -> dict[str, Any]:
-    """Capture each bound call's provider output and derive the one per-invocation delivery record."""
-    invocations: list[dict[str, Any]] = []
-    for item in meta.get("workflow_invocations", []):
-        item = dict(item)
-        terminal = item.get("terminal") or {}
-        if terminal.get("source") == "system_task_notification" and not terminal.get("conflict"):
-            # Failed or cancelled tasks are captured too: their output is evidence.
-            binding = {"run_id": run_dir.name, "session_id": session, "tool_use_id": item["tool_use_id"],
-                       "task_id": item.get("task_id"), "terminal_status": terminal.get("status"),
-                       "workflow": {key: packet["workflow"][key] for key in ("name", "path", "sha256")}}
-            item["collection"] = workflow_delivery.capture(
-                root, session_id=session, task_id=item.get("task_id"),
-                output_file=(item.get("output_reference") or {}).get("output_file"),
-                run_dir=run_dir, index=item["index"], binding=binding)
+def prepare_workspace(packet: dict[str, Any], plan: dict[str, Any], run_dir: Path) -> dict[str, Any]:
+    """Build this round's copy from scratch: the original's current files plus work not yet delivered.
+
+    The copy is disposable and rebuilt every round, so nothing about it has to
+    survive a crash; what carries over between rounds is the immutable
+    delivery.patch of an earlier run, chosen by Runtime.
+    """
+    if plan["profile"] == "readonly":
+        return {"profile": "readonly", "execution_cwd": packet["cwd"], "source_root": packet["cwd"]}
+    lineage = Path(plan["lineage_root"])
+    source = source_root_of(packet["cwd"])
+    original = worktree_state(source)
+    carry = plan.get("carry") or {}
+    carried = Path(carry["patch"]).read_bytes() if carry.get("patch") else b""
+    (run_dir / "carried.patch").write_bytes(carried)
+    mode = "none"
+    if carried.strip():
+        fits, problem = copy_workspace.patch_applies(source, carried)
+        if fits:
+            mode = "replayed"
+        elif copy_workspace.patch_applies(source, carried, reverse=True)[0]:
+            mode = "already_in_original"
         else:
-            item["collection"] = {"status": "not_attempted", "reason_code": None,
-                                  "detail": "no unambiguous structured task notification names an output file"}
-        item["reason_codes"] = workflow_delivery.invocation_reasons(item)
-        invocations.append(item)
-    verdict = workflow_delivery.evaluate(
-        invocations, final_after_completion=bool(meta.get("workflow_final_after_completion")),
-        final_result_observed=meta["result_selection"]["final_stream_line"] is not None)
-    return {"schema_version": 1, "adapter": workflow_delivery.ADAPTER, **verdict, "invocations": invocations,
-            "temp_root": {"env": workflow_delivery.TMPDIR_ENV, "path": (root or {}).get("path")},
-            "stream_diagnostics": meta.get("workflow_stream_diagnostics"),
-            "note": ("Delivery means every bound Workflow call completed, its whole output file was captured from "
-                     "the run-owned provider root, and the parent result followed. It is not semantic acceptance.")}
+            raise copy_workspace.CopyWorkspaceError(
+                f"the undelivered work of {carry['from_run']} no longer applies to the original: {problem[:800]}. "
+                "If its delivery.patch was applied to the original and then corrected, record that with "
+                "claude_decide(..., applied=true) and continue again; otherwise reconcile the files first")
+    if os.path.lexists(lineage / copy_workspace.COPY_NAME):
+        copy_workspace.discard_copy(lineage)
+    (lineage / copy_workspace.METADATA_NAME).unlink(missing_ok=True)
+    metadata = copy_workspace.prepare_copy(packet["cwd"], lineage, plan.get("task_paths") or [])
+    store, index = run_dir / "baseline.git", run_dir / "baseline.index"
+    base_tree = copy_workspace.record_tree(store, metadata, index, track=metadata["included_task_files"])
+    carried_paths: list[str] = []
+    if mode == "replayed":
+        copy_workspace.apply_patch(metadata, carried)
+        carried_paths = copy_workspace.patch_paths(Path(metadata["workspace_root"]), carried)
+    start_tree = copy_workspace.record_tree(store, metadata, index, track=carried_paths)
+    outbox = Path(metadata["outbox"]) / plan["run_id"]
+    outbox.mkdir()
+    workflow = copy_workspace.install_workflow_template(metadata) if packet["kind"] == "analyze" else None
+    return {"profile": "copy", "execution_cwd": metadata["cwd"], "source_root": metadata["source_root"],
+            "copy": metadata, "outbox": str(outbox), "workflow": workflow, "store": str(store), "index": str(index),
+            "base_tree": base_tree, "start_tree": start_tree, "original_before": original,
+            "carried": {"from_run": carry.get("from_run"), "mode": mode, "files": len(carried_paths),
+                        "now_ignored": copy_workspace.ignored_paths(metadata, carried_paths)}}
 
 
-def status(run_dir: Path) -> int:
-    if not run_dir.is_dir() or not (run_dir / "state.json").exists():
-        raise BridgeError("run-dir has no bridge state")
-    s = load(run_dir / "state.json")
-    if s.get("status") == "running":
-        s["status"] = "unknown"
-        s["note"] = "bridge may have died; do not retry automatically; inspect process and artifacts manually."
-    print(json.dumps(s, ensure_ascii=False))
-    return 0
+def build_command(packet: dict[str, Any], context: dict[str, Any], cli_path: str, run_dir: Path,
+                  session: tuple[str, str]) -> list[str]:
+    web = WEB_TOOLS if packet["web"] else ()
+    command = [cli_path, "-p", "--model", packet["model"], "--effort", packet["effort"],
+               "--output-format", "stream-json", "--verbose", "--permission-mode", "dontAsk",
+               "--strict-mcp-config", "--mcp-config", str(run_dir / "mcp.json")]
+    if context["profile"] == "copy":
+        denied = COPY_DENIED + (() if packet["web"] else WEB_TOOLS)
+        command += ["--tools", "default", "--allowedTools", ",".join(COPY_ALLOWED + web),
+                    "--disallowedTools", ",".join(denied)]
+    else:
+        tools = ",".join(READONLY_TOOLS + web)
+        command += ["--tools", tools, "--allowedTools", tools, "--disable-slash-commands",
+                    "--json-schema", json.dumps(result_schema.json_schema(with_report=True), ensure_ascii=False)]
+    if packet["max_budget_usd"] is not None:
+        command += ["--max-budget-usd", repr(packet["max_budget_usd"])]
+    mode, value = session
+    command += ["--resume", value] if mode == "resume" else ["--session-id", value]
+    if context["profile"] == "copy":
+        state_root = Path(context["state_root"])
+        protected = [state_root, PLUGIN_ROOT, Path(sys.prefix).resolve(), Path(sys.base_prefix).resolve(),
+                     Path(sys.executable).resolve(), Path(cli_path).resolve()]
+        command = copy_workspace.protected_command(
+            command, context["copy"], extra_protected=protected,
+            writable_exceptions=[Path(context["copy"]["workspace_root"]), (run_dir / "stderr").resolve()])
+    return command
 
 
-def cancel(run_dir: Path, reason: str) -> int:
-    if not run_dir.is_dir() or not (run_dir / "state.json").exists():
-        raise BridgeError("run-dir has no bridge state")
-    current = load(run_dir / "state.json")
-    if current.get("status") in FINAL:
-        raise BridgeError("run is already final; cancellation marker was not written")
-    dump(run_dir / "cancel.json", {"reason": reason, "requested_at": time.time()})
-    print(f"cancel marker written: {run_dir}")
-    return 0
+def supervise(run_dir: Path, command: list[str], cwd: str, env: dict[str, str], payload: bytes, timeout: float,
+              stream_name: str) -> dict[str, Any]:
+    """Run one Claude process group to its end; return the facts of how it ended."""
+    family = Family()
+    env = {**env, **family.environment}
+    deadline = time.monotonic() + timeout
+    with (run_dir / stream_name).open("w", encoding="utf-8") as stream, (run_dir / "stderr").open("a", encoding="utf-8") as err:
+        proc = subprocess.Popen(command, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=err,
+                                start_new_session=True, env=env)
+        dump(run_dir / "child.json", {"pid": proc.pid, "process_group": proc.pid, "identity": process_control.identity(proc.pid),
+                                      "family_marker": env[FAMILY_KEY], "started_at": time.time(), "stream": stream_name})
+        activity(run_dir, "executing", "Claude started", status="executing")
+        transport = ProcessStream(proc, stream, memoryview(payload), run_dir, True)
+        facts: dict[str, Any] = {"timed_out": False, "cancelled": False, "cleanup_error": None}
+        next_observation = 0.0
+        try:
+            while proc.poll() is None:
+                if time.monotonic() >= next_observation:
+                    family.observe()
+                    next_observation = time.monotonic() + .5
+                transport.drain(.15)
+                if cancel_requested(run_dir):
+                    facts["cancelled"] = True
+                elif time.monotonic() > deadline:
+                    facts["timed_out"] = True
+                if facts["cancelled"] or facts["timed_out"]:
+                    facts["cleanup_error"] = process_control.terminate_group(proc)
+                    break
+        except KeyboardInterrupt:
+            facts["cancelled"] = True
+            facts["cleanup_error"] = process_control.terminate_group(proc)
+        transport.close_input("incomplete")
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            facts["cleanup_error"] = process_control.terminate_group(proc) or "direct child still running after stop"
+        facts["residual_group"] = not process_control.wait_group_absent(proc.pid, .75)
+        if facts["residual_group"]:
+            facts["cleanup_error"] = process_control.terminate_group(proc) or facts["cleanup_error"]
+        facts["residual_descendants"] = family.observe().get("live_count", 0)
+        family_evidence = family.finish()
+        eof_deadline = time.monotonic() + 3
+        while not transport.eof and time.monotonic() < eof_deadline:
+            transport.drain(.1)
+        transport.finish()
+        facts.update(exit_code=proc.returncode, prompt_delivery=transport.delivery, family=family_evidence,
+                     stdout_eof=transport.eof)
+        if family_evidence.get("state") != "stopped" and not facts["cleanup_error"]:
+            facts["cleanup_error"] = "detached descendants could not be confirmed stopped"
+    return facts
+
+
+def execute(run_dir: Path) -> int:
+    packet = load(run_dir / "packet.json")
+    plan = load(run_dir / "plan.json")
+    execution: dict[str, Any] = {"started_at": time.time(), "launched": False}
+
+    def finish(outcome: str, note: str | None = None) -> int:
+        execution.update(ended_at=time.time(), note=note)
+        dump(run_dir / "execution.json", execution)
+        result = finalize(run_dir, outcome, note)
+        return 0 if result["run_outcome"] in {"ok", "cancelled"} else 1
+
+    try:
+        activity(run_dir, "preflight", "checking the local Claude CLI", status="preflight")
+        if cancel_requested(run_dir):
+            return finish("cancelled", "cancelled before launch")
+        environment = cli_env.check(Path(packet["cwd"]))
+        dump(run_dir / "environment.json", environment)
+        if not environment["ready"]:
+            return finish("not_started", f"Claude CLI is not ready ({environment['status']}): {environment['action']}")
+        if packet["max_budget_usd"] is not None and not environment["cli"]["budget_flag"]:
+            return finish("not_started", "max_budget_usd was requested but the local Claude CLI has no --max-budget-usd")
+        activity(run_dir, "preflight", "preparing the workspace", status="preflight")
+        try:
+            context = prepare_workspace(packet, plan, run_dir)
+        except copy_workspace.CopyWorkspaceError as exc:
+            hint = "; analyze tasks can use profile=readonly" if packet["kind"] == "analyze" and "undelivered" not in str(exc) else ""
+            return finish("not_started", f"copy preparation failed: {exc}{hint}")
+        context["state_root"] = plan["state_root"]
+        context["inputs"], context["inputs_skipped"] = freeze_inputs(packet["inputs"], run_dir / "inputs")
+        dump(run_dir / "inputs.json", {"inputs": context["inputs"], "skipped": context["inputs_skipped"]})
+        layer = instruction_layer.scan(Path(context["execution_cwd"]))
+        dump(run_dir / "instruction-layer.json", layer)
+        context.update(deadline=time.time() + packet["timeout_seconds"], brief_path=str(run_dir / "brief.md"),
+                       cli={"path": environment["cli"]["path"], "version": environment["cli"]["version"]})
+        brief_bytes = brief_renderer.render(packet, {**plan, **context, "instruction_layer": layer}).encode("utf-8")
+        (run_dir / "brief.md").write_bytes(brief_bytes)
+        context["brief_sha256"] = hashlib.sha256(brief_bytes).hexdigest()
+        dump(run_dir / "mcp.json", {"mcpServers": {}})
+        dump(run_dir / "context.json", context)
+        env = {key: value for key, value in cli_environment(locate_claude()).items() if not key.startswith("CODEX_CLAUDE_")}
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        if context["profile"] == "copy":
+            # claude -p otherwise stops waiting for a background Workflow after its own idle ceiling.
+            env[PRINT_BG_WAIT_CEILING] = str(max(1000, int(packet["timeout_seconds"] * 1000)))
+        resume = plan.get("resume_session")
+        attempts = [("resume", resume)] if resume else []
+        attempts.append(("session", str(uuid.uuid4())))
+        for position, session in enumerate(attempts):
+            command = build_command(packet, context, environment["cli"]["path"], run_dir, session)
+            dump(run_dir / "command.json", {"argv": command, "cwd": context["execution_cwd"], "session": list(session)})
+            if cancel_requested(run_dir):
+                return finish("cancelled", "cancelled before launch")
+            remaining = max(1.0, context["deadline"] - time.time())
+            execution["launched"] = True
+            stream_name = "stream.jsonl" if position == len(attempts) - 1 else "stream-resume-attempt.jsonl"
+            facts = supervise(run_dir, command, context["execution_cwd"], env, brief_bytes, remaining, stream_name)
+            execution.update(facts, session=list(session))
+            if session[0] == "resume":
+                attempt = stream_parser.parse_stream(run_dir / stream_name)
+                if attempt["init"] is None and not (facts["cancelled"] or facts["timed_out"]) and facts["exit_code"] != 0:
+                    execution["resume_fallback"] = f"--resume {session[1]} did not start (exit {facts['exit_code']}); a fresh session was used"
+                    continue
+                (run_dir / stream_name).rename(run_dir / "stream.jsonl")
+            break
+        if execution.get("cancelled"):
+            return finish("cancelled", "cancelled by request")
+        if execution.get("timed_out"):
+            return finish("timeout", f"stopped at the {packet['timeout_seconds']:g}s deadline")
+        facts = stream_parser.parse_stream(run_dir / "stream.jsonl")
+        if facts["final"] is None:
+            return finish("crashed", f"Claude exited (code {execution.get('exit_code')}) without a final result")
+        return finish("ok")
+    except Exception as exc:
+        traceback.print_exc()
+        execution["error"] = f"{type(exc).__name__}: {exc}"
+        return finish("crashed" if execution["launched"] else "not_started", execution["error"][:600])
+
+
+def _collect(source: Path, target: Path, limit: int) -> bytes | None:
+    try:
+        data: bytes = read_regular(source, limit)
+    except (ValueError, OSError):
+        return None
+    target.write_bytes(data)
+    return data
+
+
+def _deliverables(run_dir: Path, context: dict[str, Any], facts: dict[str, Any],
+                  warnings: list[dict[str, Any]]) -> tuple[Any, bytes | None]:
+    """Copy the report and result header into run state; return (result, report bytes)."""
+    final = facts["final"] or {}
+    if isinstance(final.get("result"), str) and final["result"].strip():
+        (run_dir / "final-message.md").write_text(final["result"], encoding="utf-8")
+    result: Any = None
+    report: bytes | None = None
+    raw_result: bytes | None = None
+    if context.get("profile") == "copy" and context.get("outbox"):
+        outbox = Path(context["outbox"])
+        report = _collect(outbox / "report.md", run_dir / "report.md", REPORT_LIMIT)
+        raw_result = _collect(outbox / "result.json", run_dir / "result.json", RESULT_LIMIT)
+    elif isinstance(final.get("structured_output"), dict):
+        structured = dict(final["structured_output"])
+        markdown = structured.pop("report_markdown", None)
+        if isinstance(markdown, str):
+            report = markdown.encode("utf-8")
+            (run_dir / "report.md").write_bytes(report)
+        raw_result = json.dumps(structured, ensure_ascii=False, indent=2).encode("utf-8")
+        (run_dir / "result.json").write_bytes(raw_result)
+    if report is None:
+        warnings.append({"code": "report_missing", "detail": "Claude did not deliver report.md; final-message.md holds its last reply if any"})
+    if raw_result is None:
+        warnings.append({"code": "result_missing", "detail": "Claude did not deliver result.json"})
+        return None, report
+    try:
+        result = json.loads(raw_result)
+    except ValueError as exc:
+        warnings.append({"code": "result_malformed", "detail": f"result.json is not JSON: {exc}"})
+        return None, report
+    problems = result_schema.validate(result)
+    if problems:
+        warnings.append({"code": "result_malformed", "detail": "; ".join(problems[:10])})
+    return result, report
+
+
+def _changes(run_dir: Path, packet: dict[str, Any], context: dict[str, Any],
+             warnings: list[dict[str, Any]]) -> dict[str, Any] | None:
+    if context.get("profile") != "copy" or not context.get("start_tree"):
+        return None
+    metadata = context["copy"]
+    store, index = Path(context["store"]), Path(context["index"])
+    try:
+        end_tree = copy_workspace.record_tree(store, metadata, index)
+        patch = copy_workspace.tree_patch(store, metadata, index, context["start_tree"], end_tree)
+        files = copy_workspace.tree_changes(store, metadata, index, context["start_tree"], end_tree)
+        (run_dir / "changes.patch").write_bytes(patch)
+        base = context.get("base_tree") or context["start_tree"]
+        (run_dir / "delivery.patch").write_bytes(copy_workspace.tree_patch(store, metadata, index, base, end_tree))
+        delivery_files = [{"path": item["path"], "status": item["status"]}
+                          for item in copy_workspace.tree_changes(store, metadata, index, base, end_tree)]
+    except (copy_workspace.CopyWorkspaceError, OSError) as exc:
+        warnings.append({"code": "patch_unavailable", "detail": f"changes could not be computed: {exc}"})
+        return None
+    protected = [item["path"] for item in files if matches(item["path"], packet["protected"])]
+    outside = [item["path"] for item in files if packet["write_hint"] and not matches(item["path"], packet["write_hint"])]
+    repo, patch = shlex.quote(metadata["source_root"]), shlex.quote(str(run_dir / "delivery.patch"))
+    for item in files:
+        item["class"] = "protected" if item["path"] in protected else "outside_hint" if item["path"] in outside else "in_scope"
+    if protected:
+        warnings.append({"code": "protected_touched", "count": len(protected), "paths": protected[:50],
+                         "detail": f"the patch changes {len(protected)} protected path(s); claude_decide must confirm each "
+                                   "(the full list is changes.files with class=protected)"})
+    if outside:
+        warnings.append({"code": "outside_hint", "count": len(outside), "paths": outside[:50],
+                         "detail": f"the patch changes {len(outside)} file(s) outside write_hint"})
+    return {"patch": "changes.patch", "delivery_patch": "delivery.patch", "base_tree": base,
+            "delivery_files": delivery_files, "delivery_file_count": len(delivery_files), "start_tree": context["start_tree"],
+            "end_tree": end_tree, "files": files, "file_count": len(files),
+            "insertions": sum(item["insertions"] or 0 for item in files),
+            "deletions": sum(item["deletions"] or 0 for item in files),
+            "copy_root": metadata["workspace_root"], "source_root": metadata["source_root"],
+            "base_head": metadata["source_head"],
+            # delivery.patch holds every change not yet recorded as applied, measured from the original's
+            # working tree (uncommitted edits included), so it applies to that tree; --3way would demand an index match.
+            # git apply rejects an empty patch, so there is no command when nothing is pending.
+            "check_hint": f"git -C {repo} apply --check {patch}" if delivery_files else None,
+            "apply_hint": f"git -C {repo} apply {patch}" if delivery_files else None}
+
+
+def _stream_warnings(packet: dict[str, Any], context: dict[str, Any], facts: dict[str, Any],
+                     execution: dict[str, Any], warnings: list[dict[str, Any]]) -> None:
+    if facts["denials"]:
+        names = sorted({entry.get("tool_name", "?") for entry in facts["denials"]})
+        warnings.append({"code": "tool_denied", "detail": f"{len(facts['denials'])} tool call(s) were denied: {', '.join(names)}",
+                         "items": facts["denials"][:20]})
+    pending = [record for record in facts["workflows"].values() if record["status"] == "launched"]
+    failed = [record for record in facts["workflows"].values() if record["status"] not in {"launched", "completed"}]
+    if pending or failed:
+        warnings.append({"code": "workflow_incomplete",
+                         "detail": f"{len(pending)} Workflow(s) never reported completion and {len(failed)} ended as failed/stopped"})
+    unread = [entry["copy"] for entry in context.get("inputs") or []
+              if entry["kind"] == "file" and entry["copy"] not in facts["read_paths"]]
+    if unread and facts["init"] is not None:
+        warnings.append({"code": "source_not_read", "paths": unread[:50],
+                         "detail": "these frozen inputs were not opened with Read in the main session (subagent reads may be missing)"})
+    final = facts["final"] or {}
+    if final and (final.get("is_error") or final.get("subtype") not in (None, "success")):
+        warnings.append({"code": "provider_error", "detail": f"the CLI result ended with subtype={final.get('subtype')!r}"})
+    if execution.get("residual_group") or execution.get("residual_descendants"):
+        warnings.append({"code": "residual_processes_stopped",
+                         "detail": "descendant processes were still running when Claude exited and were stopped"})
+    if execution.get("cleanup_error"):
+        warnings.append({"code": "process_stop_unconfirmed", "detail": execution["cleanup_error"]})
+    carried = context.get("carried") or {}
+    if carried.get("mode") == "already_in_original":
+        warnings.append({"code": "carried_already_in_original",
+                         "detail": f"the undelivered work of {carried.get('from_run')} is already in the original; "
+                                   "record applied=true when you apply a delivery.patch"})
+    if carried.get("now_ignored"):
+        warnings.append({"code": "undelivered_files_now_ignored", "paths": carried["now_ignored"][:50],
+                         "detail": "the original's ignore rules now match these undelivered files; they stay in "
+                                   "delivery.patch, but check whether they should still be delivered"})
+    if execution.get("resume_fallback"):
+        warnings.append({"code": "resume_fallback", "detail": execution["resume_fallback"]})
+    skipped = list(context.get("inputs_skipped") or []) + list((context.get("copy") or {}).get("skipped_untracked") or [])
+    if skipped:
+        warnings.append({"code": "sensitive_inputs_skipped", "paths": skipped[:50],
+                         "detail": "these paths were not copied for Claude (sensitive name, symlink or size limit)"})
+
+
+def _result_warnings(result: Any, warnings: list[dict[str, Any]]) -> None:
+    if not isinstance(result, dict):
+        return
+    for key, code, detail in (("questions", "questions_for_user", "Claude asks questions only the user can decide; relay them verbatim"),
+                              ("disputes", "disputes_present", "Claude reports conflicts with the user's words, inputs or constraints"),
+                              ("not_verified", "not_verified_present", "Claude lists work it could not verify")):
+        raw = result.get(key)
+        values = [value for value in raw if isinstance(value, str) and value.strip()] if isinstance(raw, list) else []
+        if values:
+            warnings.append({"code": code, "detail": detail, "items": values[:20]})
+
+
+def finalize(run_dir: Path, run_outcome: str, note: str | None = None) -> dict[str, Any]:
+    """Write outcome.json from what is on disk; idempotent once written, and always written."""
+    existing = _read_json(run_dir / "outcome.json")
+    if isinstance(existing, dict):
+        return existing
+    if run_outcome not in OUTCOMES:
+        raise ValueError(f"unknown run outcome {run_outcome}")
+    try:
+        outcome = _assemble(run_dir, run_outcome, note)
+    except Exception as exc:
+        # Whatever Claude delivered stays on disk as evidence; the run must still end.
+        traceback.print_exc()
+        packet = _read_json(run_dir / "packet.json") or {}
+        plan = _read_json(run_dir / "plan.json") or {}
+        outcome = {"schema": "codex-claude-orchestrator.outcome/1", "run_id": run_dir.name,
+                   "task_id": packet.get("task_id"), "kind": packet.get("kind"), "profile": plan.get("profile"),
+                   "round": plan.get("round"), "run_outcome": run_outcome, "note": note, "process_stopped": "unknown",
+                   "claimed_status": None, "summary": None, "report": None, "result": None, "items": 0, "changes": None,
+                   "brief": None, "instruction_layer": None, "session_id": None, "models": [], "usage": None,
+                   "cost_usd": None, "duration_seconds": None, "cli": None, "plugin_version": plugin_version(),
+                   "warnings": [{"code": "finalize_error",
+                                 "detail": f"the outcome could not be fully assembled ({type(exc).__name__}: {exc}); "
+                                           "read the raw artifacts"}],
+                   "ended_at": time.time()}
+    dump(run_dir / "outcome.json", outcome)
+    activity(run_dir, "finished", f"run ended: {run_outcome}", status=run_outcome)
+    return outcome
+
+
+def _assemble(run_dir: Path, run_outcome: str, note: str | None) -> dict[str, Any]:
+    packet = load(run_dir / "packet.json")
+    plan = _read_json(run_dir / "plan.json") or {}
+    context = _read_json(run_dir / "context.json") or {}
+    execution = _read_json(run_dir / "execution.json") or {}
+    child = _read_json(run_dir / "child.json")
+    facts = stream_parser.parse_stream(run_dir / "stream.jsonl")
+    warnings: list[dict[str, Any]] = []
+    result, report = _deliverables(run_dir, context, facts, warnings) if execution.get("launched") or child else (None, None)
+    if run_outcome == "not_started":
+        warnings = []
+    changes = _changes(run_dir, packet, context, warnings) if run_outcome != "not_started" else None
+    if context.get("original_before") and run_outcome != "not_started":
+        try:
+            changed = state_changes(context["original_before"], worktree_state(Path(context["source_root"])))
+        except OSError:
+            changed = []
+        if changed:
+            warnings.append({"code": "original_changed_during_run", "paths": changed[:50],
+                             "detail": "the original worktree changed while Claude worked in the copy; check that the patch still applies"})
+    if run_outcome != "not_started":
+        _stream_warnings(packet, context, facts, execution, warnings)
+        _result_warnings(result, warnings)
+    stopped = "unknown"
+    if child is None:
+        stopped = "not_launched"
+    elif not execution.get("cleanup_error") and execution.get("exit_code") is not None:
+        stopped = "confirmed"
+    elif run_outcome == "lost":
+        stopped = execution.get("lost_stop", "unknown")
+    final = facts["final"] or {}
+    summary = result.get("summary") if isinstance(result, dict) and isinstance(result.get("summary"), str) else None
+    layer = _read_json(run_dir / "instruction-layer.json") or {}
+    outcome = {
+        "schema": "codex-claude-orchestrator.outcome/1", "run_id": run_dir.name, "task_id": packet["task_id"],
+        "kind": packet["kind"], "profile": plan.get("profile"), "round": plan.get("round"),
+        "run_outcome": run_outcome, "note": note, "process_stopped": stopped,
+        "claimed_status": result.get("status") if isinstance(result, dict) and result.get("status") in result_schema.STATUSES else None,
+        "summary": summary[:SUMMARY_LIMIT] if summary else None,
+        "report": ({"path": "report.md", "bytes": len(report), "sha256": hashlib.sha256(report).hexdigest()}
+                   if report is not None else None),
+        "result": {"path": "result.json", "valid": not any(w["code"] == "result_malformed" for w in warnings)}
+                  if (run_dir / "result.json").is_file() else None,
+        "items": len(result.get("items") or []) if isinstance(result, dict) and isinstance(result.get("items"), list) else 0,
+        "changes": changes, "carried": {key: (context.get("carried") or {}).get(key) for key in ("from_run", "mode", "files")}
+        if context.get("carried") else None,
+        "brief": {"path": "brief.md", "sha256": context["brief_sha256"]} if context.get("brief_sha256") else None,
+        "instruction_layer": {"path": "instruction-layer.json", "files": len(layer.get("files") or []),
+                              "hooks": len(layer.get("hooks") or []),
+                              "plugins": [item.get("name") for item in ((facts["init"] or {}).get("plugins") or [])
+                                          if isinstance(item, dict)]} if layer else None,
+        "warnings": warnings,
+        "session_id": facts["session_id"], "models": facts["models"],
+        "usage": usage_report.usage_report(final, result_events=facts["result_events"],
+                                           resumed=(execution.get("session") or [None])[0] == "resume") if final else None,
+        "cost_usd": usage_report.cost_amount(final.get("total_cost_usd")) if final else None,
+        "duration_seconds": round(max(0.0, (execution.get("ended_at") or time.time()) - (execution.get("started_at") or time.time())), 1),
+        "cli": context.get("cli"), "plugin_version": plan.get("plugin_version") or plugin_version(),
+        "ended_at": time.time(),
+    }
+    return outcome
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Supervised Claude CLI bridge; invocation constraints are not an OS sandbox.")
+    parser = argparse.ArgumentParser(description="Supervised Claude CLI bridge")
     sub = parser.add_subparsers(dest="command", required=True)
-    d = sub.add_parser("doctor", help="check CLI installation/login; optionally verify one no-tool request")
-    # Resolved only for doctor: other subcommands must start without a valid parent cwd.
-    d.add_argument("--cwd", default=None, help="directory to check; defaults to the current directory")
-    d.add_argument("--verify", action="store_true", help="make one minimal request to verify effective authentication")
-    d.add_argument("--model", default="sonnet")
-    d.add_argument("--timeout", type=float, default=60)
-    r = sub.add_parser("run", help="start one supervised run")
-    r.add_argument("--packet", required=True); r.add_argument("--run-dir", required=True); r.add_argument("--resume-from")
-    r.add_argument("--timeout", type=float, required=True)
-    r.add_argument("--cli-descriptor", help=argparse.SUPPRESS)
-    r.add_argument("--cli-descriptor-sha256", help=argparse.SUPPRESS)
-    r.add_argument("--content-binding", help=argparse.SUPPRESS)
-    r.add_argument("--content-binding-sha256", help=argparse.SUPPRESS)
-    r.add_argument(startup_protocol.NONCE_ARGUMENT, dest="startup_nonce", help=argparse.SUPPRESS)
-    s = sub.add_parser("status"); s.add_argument("--run-dir", required=True)
-    c = sub.add_parser("cancel"); c.add_argument("--run-dir", required=True); c.add_argument("--reason", required=True)
-    h = sub.add_parser("hook"); h.add_argument("--packet", required=True); h.add_argument("--cwd", required=True)
+    run = sub.add_parser("run", help="execute one prepared run directory")
+    run.add_argument("--run-dir", required=True)
+    doctor = sub.add_parser("doctor", help="check the local Claude CLI; --verify makes one small paid request")
+    doctor.add_argument("--cwd", default=None)
+    doctor.add_argument("--verify", action="store_true")
+    doctor.add_argument("--model", default="sonnet")
     args = parser.parse_args()
-    try:
-        if args.command == "doctor":
-            if args.cwd is None:
-                try:
-                    args.cwd = os.getcwd()
-                except OSError as exc:
-                    raise BridgeError(f"the current directory is unavailable ({type(exc).__name__}: {exc}); "
-                                      "pass --cwd with an existing absolute directory") from exc
-            cwd = require_absolute(args.cwd, "cwd").resolve()
-            if not cwd.is_dir() or args.timeout <= 0:
-                raise BridgeError("doctor requires an existing cwd and a positive timeout")
-            report = check_environment(cwd, args.verify, args.model, args.timeout)
-            print(json.dumps(report, ensure_ascii=False))
-            return 0 if report["ready"] else 1
-        if args.command == "run": return run(args)
-        if args.command == "status": return status(require_absolute(args.run_dir, "run-dir"))
-        if args.command == "cancel": return cancel(require_absolute(args.run_dir, "run-dir"), args.reason)
-        return hook(require_absolute(args.packet, "packet"), args.cwd)
-    except BridgeError as exc:
-        print(f"bridge error: {exc}", file=sys.stderr)
-        return 2
+    if args.command == "run":
+        run_dir = Path(args.run_dir).resolve()
+
+        def stop(signum: int, _frame: Any) -> None:
+            # Route shutdown through cancellation so the Claude group is stopped and evidence is kept.
+            if not cancel_requested(run_dir):
+                dump(run_dir / "cancel.json", {"reason": f"bridge received {signal.Signals(signum).name}",
+                                               "requested_at": time.time()})
+
+        for signum in (signal.SIGTERM, signal.SIGHUP):
+            signal.signal(signum, stop)
+        return execute(run_dir)
+    if args.command == "doctor":
+        report = cli_env.check(Path(args.cwd or os.getcwd()).resolve(), verify=args.verify, model=args.model)
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 0 if report["ready"] else 1
+    return 2
 
 
 if __name__ == "__main__":

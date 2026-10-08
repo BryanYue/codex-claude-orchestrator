@@ -1,6 +1,6 @@
 [project]
 name = "codex-claude-orchestrator"
-version = "0.7.1"
+version = "1.0.0"
 description = "Supervised Claude Code execution with MCP and local progress views"
 requires-python = ">=3.11"
 dependencies = ["mcp==2.2.0"]
@@ -15,24 +15,32 @@ dev = ["ruff==0.16.10", "mypy==2.4.0"]
 target-version = "py311"
 
 [tool.ruff.lint]
-# Baseline f1cbe20 measured with Ruff 0.16.10; prevent increases beyond its maxima.
+# 1.0 maxima measured with Ruff 0.16.10 (copy_workspace.prepare_copy, install.main); do not raise them.
 select = ["F", "C901", "PLR0912", "PLR0915"]
 
 [tool.ruff.lint.mccabe]
-max-complexity = 59
+max-complexity = 33
 
 [tool.ruff.lint.pylint]
-max-branches = 59
-max-statements = 145
+max-branches = 33
+max-statements = 110
 
 [tool.mypy]
 python_version = "3.11"
 strict = true
 follow_imports = "skip"
+mypy_path = "scripts:skills/codex-claude-orchestrator/scripts"
 files = [
-    "scripts/identity_manifest.py",
     "scripts/shared_io.py",
-    "skills/codex-claude-orchestrator/scripts/lane_lock.py",
+    "scripts/viewer.py",
+    "skills/codex-claude-orchestrator/scripts/bridge.py",
     "skills/codex-claude-orchestrator/scripts/bridge_errors.py",
+    "skills/codex-claude-orchestrator/scripts/brief.py",
+    "skills/codex-claude-orchestrator/scripts/cli_env.py",
+    "skills/codex-claude-orchestrator/scripts/instruction_layer.py",
+    "skills/codex-claude-orchestrator/scripts/packet.py",
+    "skills/codex-claude-orchestrator/scripts/process_control.py",
     "skills/codex-claude-orchestrator/scripts/result_schema.py",
+    "skills/codex-claude-orchestrator/scripts/runtime.py",
+    "skills/codex-claude-orchestrator/scripts/stream_parser.py",
 ]

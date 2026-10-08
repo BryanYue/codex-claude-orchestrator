@@ -1,1678 +1,763 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Claude 协作工作台</title>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer"><title>Claude 协作工作台</title>
 <style>
 :root{color-scheme:light dark;
---bg-detail:#FBFAF7;--bg-list:#F4F2EE;--panel:#FFFFFF;--line:#E2DFD8;--line-strong:#D9D6CE;
---text:#1C1B19;--text-2:#3F3D39;--muted:#56544F;--muted-2:#6B6964;--focus:#1F4FB8;
---primary-bg:#1C1B19;--primary-fg:#FFFFFF;
---active-fg:#1F4FB8;--active-bg:#EAF0FC;--active-border:#BFD0F3;
---settled-fg:#3F3D39;--settled-bg:#FFFFFF;--settled-border:#CFCBC2;
---ok-fg:#17704B;--ok-bg:#E6F3EC;--ok-border:#B7DBC7;
---attention-fg:#9A4B00;--attention-bg:#FCF1E3;--attention-border:#EDCB9E;
---bad-fg:#A8271B;--bad-bg:#FBEAE8;--bad-border:#EDBDB7;
---unknown-fg:#5E5C57;--unknown-bg:#F2F1ED;--unknown-border:#A9A59C;
---history-fg:#56544F;--history-bg:#F2F1ED;--history-border:#CFCBC2;
---none-fg:#6B6964;--none-bg:#FFFFFF;--none-border:#D9D6CE;
---banner-warn-fg:#6E3800;--banner-ok-fg:#0F5537;--banner-warn-bg:#FCF1E3;--banner-warn-line:#EDCB9E;--banner-ok-bg:#E6F3EC;--banner-ok-line:#B7DBC7;
-}
+--bg:#F4F2EE;--bg2:#FBFAF7;--panel:#FFFFFF;--line:#E2DFD8;--text:#1C1B19;--muted:#5F5D58;--focus:#1F4FB8;
+--active-fg:#1F4FB8;--active-bg:#EAF0FC;--active-bd:#BFD0F3;--ok-fg:#17704B;--ok-bg:#E6F3EC;--ok-bd:#B7DBC7;
+--warn-fg:#9A4B00;--warn-bg:#FCF1E3;--warn-bd:#EDCB9E;--bad-fg:#A8271B;--bad-bg:#FBEAE8;--bad-bd:#EDBDB7;
+--plain-fg:#3F3D39;--plain-bg:#F2F1ED;--plain-bd:#CFCBC2}
 @media(prefers-color-scheme:dark){:root{
---bg-detail:#1B1C1F;--bg-list:#17181B;--panel:#232529;--line:#34373C;--line-strong:#43464C;
---text:#F3F4F6;--text-2:#D5D7DB;--muted:#AFB3BA;--muted-2:#9A9EA6;--focus:#8FB0FF;
---primary-bg:#F3F4F6;--primary-fg:#1B1C1F;
---active-fg:#9DB8FF;--active-bg:#1E2A45;--active-border:#3A5184;
---settled-fg:#D5D7DB;--settled-bg:#232529;--settled-border:#55585E;
---ok-fg:#7FD3A8;--ok-bg:#16302A;--ok-border:#2F6B50;
---attention-fg:#FFC870;--attention-bg:#3A2A10;--attention-border:#8A6424;
---bad-fg:#FFB0A6;--bad-bg:#3D1D1A;--bad-border:#8C4A42;
---unknown-fg:#C9C6BF;--unknown-bg:#2A2B2E;--unknown-border:#6E6B64;
---history-fg:#AFB3BA;--history-bg:#2A2B2E;--history-border:#4A4D52;
---none-fg:#AFB3BA;--none-bg:transparent;--none-border:#43464C;
---banner-warn-fg:#FFE6A6;--banner-ok-fg:#BFF0D4;--banner-warn-bg:#3A2A10;--banner-warn-line:#8A6424;--banner-ok-bg:#16302A;--banner-ok-line:#2F6B50;
-}}
+--bg:#17181B;--bg2:#1B1C1F;--panel:#232529;--line:#34373C;--text:#F3F4F6;--muted:#AFB3BA;--focus:#8FB0FF;
+--active-fg:#9DB8FF;--active-bg:#1E2A45;--active-bd:#3A5184;--ok-fg:#7FD3A8;--ok-bg:#16302A;--ok-bd:#2F6B50;
+--warn-fg:#FFC870;--warn-bg:#3A2A10;--warn-bd:#8A6424;--bad-fg:#FFB0A6;--bad-bg:#3D1D1A;--bad-bd:#8C4A42;
+--plain-fg:#D5D7DB;--plain-bg:#2A2B2E;--plain-bd:#4A4D52}}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg-list);color:var(--text);font:14px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",sans-serif}
-button,input,select{font:inherit;color:inherit}
-button{cursor:pointer;background:var(--panel);border:1px solid var(--line);border-radius:7px}
-button:disabled{cursor:default;opacity:.5}
-button:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
-.mono{font:12px ui-monospace,Menlo,monospace;overflow-wrap:anywhere}
-.meta{color:var(--muted);font-size:12px}
-.hidden{display:none!important}
-.visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
-.quiet{background:var(--panel);color:var(--text);padding:6px 10px}
-.quiet.small{padding:3px 8px;font-size:12px}
-.primary{background:var(--primary-bg);color:var(--primary-fg);border:0;padding:9px 16px;border-radius:7px;font-weight:600;min-height:36px}
-.icon-btn{width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center;border-radius:7px}
-.app{display:flex;flex-direction:column;min-height:100vh}
-.topbar{min-height:56px;padding:10px 20px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:12px;background:var(--bg-detail);position:sticky;top:0;z-index:5}
-.topbar-left,.topbar-right{display:flex;align-items:center;gap:12px}
-.brand{font-size:15px;font-weight:600}
-.readonly-note{font-size:12px;color:var(--muted)}
-.connection-pill{font-size:12px;border:1px solid var(--line);border-radius:999px;padding:4px 10px;display:inline-flex;align-items:center;gap:6px}
-.connection-pill::before{content:'';width:7px;height:7px;border-radius:50%;background:#2f9e5c;display:inline-block}
-.connection-pill.offline::before{background:#c98a1f}
-.connection-pill.offline{color:var(--attention-fg);border-color:var(--attention-border)}
-.connection-pill.token-invalid::before{background:#b3271b}
-.connection-pill.token-invalid{color:var(--bad-fg);border-color:var(--bad-border)}
-.dot{width:7px;height:7px;border-radius:50%;background:#e08a1e;display:inline-block;margin-left:4px}
-.dot.unavailable{background:var(--muted-2)}
-#bannerArea{display:flex;flex-direction:column}
-.banner{padding:10px 20px;font-size:13px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
-.banner.warn{background:var(--banner-warn-bg);color:var(--banner-warn-fg);border-bottom:1px solid var(--banner-warn-line)}
-.banner.ok{background:var(--banner-ok-bg);color:var(--banner-ok-fg);border-bottom:1px solid var(--banner-ok-line)}
-.layout{display:grid;grid-template-columns:392px minmax(0,1fr);flex:1;min-height:0}
-.list-pane{border-right:1px solid var(--line);background:var(--bg-list);padding:14px 12px;overflow:auto}
-.search{width:100%;padding:8px 10px;background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:7px;margin-bottom:10px}
-.chips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
-.chip{border-radius:15px;padding:5px 11px;font-size:12px;border:1px solid var(--line);background:var(--panel)}
-.chip[aria-pressed=true]{background:var(--primary-bg);color:var(--primary-fg);border-color:var(--primary-bg)}
-.new-task-notice{background:var(--active-bg);color:var(--active-fg);border:1px solid var(--active-border);border-radius:8px;padding:9px 11px;margin-bottom:10px;font-size:13px;display:flex;justify-content:space-between;gap:8px;align-items:center}
-.task-card{display:block;width:100%;text-align:left;padding:10px 11px;border-radius:10px;border:1px solid var(--line);background:var(--panel);margin-bottom:6px}
-.task-card:hover{background:var(--bg-detail)}
-.task-card[aria-current=true]{border-color:var(--text);background:var(--bg-detail)}
-.task-card.offline-card{border-style:dashed;border-color:var(--line-strong)}
-.card-title{font-size:14px;font-weight:600;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-.card-new-tag{font-size:10px;font-weight:600;background:var(--active-bg);color:var(--active-fg);border-radius:4px;padding:1px 5px;margin-left:6px}
-.card-reason{font-size:12px;font-weight:500;margin-top:3px}
-.card-flags{display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;margin-top:6px;font-size:11px;color:var(--muted)}
-.card-flags .flag-item{display:flex;align-items:center;gap:3px;white-space:nowrap;flex-shrink:0}
-.flag{width:16px;height:16px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:9.6px;font-weight:700}
-.flag.tone-active{color:var(--active-fg);background:var(--active-bg);border:1px solid var(--active-border);animation:pulse 1.6s ease-in-out infinite}
-.flag.tone-settled{color:var(--settled-fg);background:var(--settled-bg);border:1px solid var(--settled-border)}
-.flag.tone-ok{color:var(--ok-fg);background:var(--ok-bg);border:1px solid var(--ok-border)}
-.flag.tone-attention{color:var(--attention-fg);background:var(--attention-bg);border:1px solid var(--attention-border)}
-.flag.tone-bad{color:var(--bad-fg);background:var(--bad-bg);border:1px solid var(--bad-border)}
-.flag.tone-unknown{color:var(--unknown-fg);background:var(--unknown-bg);border:1px dashed var(--unknown-border)}
-.flag.tone-history{color:var(--history-fg);background:var(--history-bg);border:1px solid var(--history-border)}
-.flag.tone-none{color:var(--none-fg);background:var(--none-bg);border:1px solid var(--none-border)}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
-@media(prefers-reduced-motion:reduce){.flag.tone-active{animation:none}}
-.offline-card .flag.tone-active{animation:none}
-.card-meta{flex-basis:100%;overflow-wrap:anywhere}
-.list-footer{margin-top:10px}
-.narrow-block{display:none}
-.list-empty{padding:24px 8px;text-align:center;color:var(--muted)}
-.list-empty-title{color:var(--text);font-size:17px;font-weight:600;margin:0 0 6px}
-#loadMoreBtn{width:100%;margin-top:6px}
-.detail-pane{overflow:auto;padding:24px clamp(20px,4vw,54px) 60px;background:var(--bg-detail)}
-.detail-content{max-width:900px;margin:0 auto}
-.empty-state{max-width:520px;margin:60px auto;text-align:center;color:var(--muted)}
-.empty-state h1{color:var(--text);font-size:22px}
-.eyebrow{font-size:10px;letter-spacing:1.4px;text-transform:uppercase;color:var(--muted-2)}
-.breadcrumb{display:flex;gap:10px;align-items:center;color:var(--muted);margin-bottom:6px}
-.breadcrumb .spacer{flex:1}
-.detail-title{font-size:24px;font-weight:600;margin:6px 0 2px;overflow-wrap:anywhere}
-.detail-sub{margin:0 0 10px}
-.round-tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
-.round-tab{padding:5px 10px;border-radius:7px;font-size:12px;border:1px solid var(--line);background:var(--panel)}
-.round-tab[aria-selected=true]{border-color:var(--text);font-weight:600}
-.round-tab[aria-disabled=true]{opacity:.6;border-style:dashed}
-.round-select{display:none}
-.time-info{margin:0 0 10px}
-.round-banner{margin:10px 0;padding:10px 12px;border-radius:8px;background:var(--attention-bg);color:var(--attention-fg);border:1px solid var(--attention-border);font-size:13px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-.facts-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:16px 0}
-.fact-card{padding:14px;border-radius:10px;background:var(--panel);border:1px solid var(--line)}
-.fact-card[data-tone=active]{background:var(--active-bg);border-color:var(--active-border)}
-.fact-card[data-tone=attention]{background:var(--attention-bg);border-color:var(--attention-border)}
-.fact-card[data-tone=bad]{background:var(--bad-bg);border-color:var(--bad-border)}
-.fact-card[data-tone=ok]{background:var(--ok-bg);border-color:var(--ok-border)}
-.fact-card[data-tone=unknown]{background:var(--unknown-bg);border:1px dashed var(--unknown-border)}
-.fact-card[data-tone=history]{background:var(--history-bg);border-color:var(--history-border)}
-.fact-name{font-size:12px;color:var(--muted);display:flex;justify-content:space-between}
-.fact-value{font-size:16px;font-weight:600;margin:4px 0}
-.fact-note{font-size:13px;color:var(--muted)}
-.fact-stale{font-size:11px;color:var(--muted-2);margin-top:4px}
-@media(max-width:1099px){.facts-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.list-pane{width:340px}.layout{grid-template-columns:340px minmax(0,1fr)}}
-.next-step{margin:16px 0;padding:14px;border-radius:10px;background:var(--panel);border:1px solid var(--line)}
-.next-step-head{display:flex;align-items:center;gap:10px}
-.next-step-head h2{font-size:16px;margin:0}
-.tag{font-size:11px;border:1px solid var(--line);border-radius:4px;padding:2px 6px;color:var(--muted)}
-.prompt{display:block;margin-top:8px;padding:8px 10px;background:var(--bg-list);border-radius:6px;font:12px ui-monospace,monospace;overflow-wrap:anywhere;white-space:pre-wrap}
-.buttons{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
-.footnote{font-size:11px;color:var(--muted-2);margin:10px 0 0}
-.report-section{margin:16px 0}
-.report-head{display:flex;align-items:center;gap:10px;margin-bottom:6px}
-.report-head h2{font-size:16px;margin:0}
-.report-box{padding:14px;border-radius:10px;border:1px solid var(--line);background:var(--panel);white-space:pre-wrap;overflow-wrap:anywhere}
-.report-box.tone-attention{background:var(--attention-bg);border-color:var(--attention-border)}
-.report-box.tone-bad{background:var(--bad-bg);border-color:var(--bad-border)}
-.report-box.tone-ok{background:var(--ok-bg);border-color:var(--ok-border)}
-.report-box.tone-history{background:var(--history-bg);border-color:var(--history-border)}
-.report-box.tone-none{border-style:dashed}
-.evidence-list{margin:6px 0;padding-left:20px}
-details.expand{margin:14px 0;padding:12px 14px;border-radius:10px;border:1px solid var(--line);background:var(--panel)}
-details.expand summary{cursor:pointer;font-size:13px;font-weight:600}
-.identity{display:grid;grid-template-columns:max-content 1fr;gap:4px 12px;font-size:12px;margin:8px 0}
-.identity dt{color:var(--muted)}
-.identity dd{margin:0;overflow-wrap:anywhere}
-#usageText{white-space:pre-line;overflow-wrap:anywhere}
-.artifact{max-height:56vh;overflow:auto;padding:12px;margin-top:8px;background:var(--bg-list);border:1px solid var(--line);border-radius:8px;white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.7 ui-monospace,monospace}
-.event-row{display:grid;grid-template-columns:72px minmax(0,1fr);gap:10px;padding:8px 0;border-top:1px solid var(--line);font-size:12px}
-.event-row time{color:var(--muted)}
-.raw-record{margin-top:2px}
-.raw-record summary{cursor:pointer;color:var(--muted-2);font-size:11px}
-.narrow-only{display:none}
-.drawer-overlay{position:fixed;inset:0;background:rgba(0,0,0,.25);display:flex;justify-content:flex-end;z-index:20}
-.drawer{width:440px;max-width:100%;height:100%;background:var(--bg-detail);box-shadow:-12px 0 32px rgba(28,27,25,.10);padding:18px;overflow:auto}
-@media(prefers-color-scheme:dark){.drawer{box-shadow:-12px 0 32px rgba(0,0,0,.4)}}
-.drawer-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
-.drawer-body section{margin-bottom:16px}
-.drawer-body h3{font-size:13px;margin:0 0 6px}
-@media(max-width:899px){
-.topbar{min-height:48px;padding:8px 12px}
-.topbar{flex-wrap:wrap;gap:6px}
-.topbar-left,.topbar-right{width:100%;min-width:0;gap:8px}
-.topbar-left{justify-content:space-between}
-.brand,#maintenanceBtn{white-space:nowrap;flex-shrink:0}
-#projectFilter{max-width:46%;min-width:0}
-.connection-pill{margin-right:auto;min-width:110px;flex:1;font-size:11px;white-space:normal;padding:4px 6px}
-.connection-pill::before,.icon-btn{flex-shrink:0}
-.breadcrumb{flex-wrap:wrap;gap:6px 10px;margin-top:12px}
-#breadcrumbCwd{flex-basis:100%;order:1}
-#runIdLabel{flex-basis:calc(100% - 58px);order:2}
-#copyRunId{order:3;flex-shrink:0;white-space:nowrap}
-.breadcrumb .spacer{display:none}
-.readonly-note{display:none}
-.narrow-only{display:inline-flex}
-.narrow-block{display:block}
-.layout{grid-template-columns:1fr;display:block}
-.list-pane{border-right:0;width:auto}
-html[data-view=list] .detail-pane{display:none}
-html[data-view=detail] .list-pane{display:none}
-.detail-title{font-size:18px}
-.facts-grid{grid-template-columns:1fr}
-.round-tabs{display:none}
-.round-select{display:block;width:100%;padding:7px;border-radius:7px;border:1px solid var(--line);background:var(--panel);color:var(--text);margin-bottom:8px}
-.primary{width:100%}
-.drawer{width:100%}
-}
+[hidden]{display:none!important}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",sans-serif}
+button{font:inherit;color:inherit;cursor:pointer;background:var(--panel);border:1px solid var(--line);border-radius:7px;padding:4px 10px}
+button:disabled{cursor:default;opacity:.55}
+:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+h1,h2,h3,p{margin:0}
+code,pre,.mono{font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere}
+.muted{color:var(--muted);font-size:12px}
+.topbar{display:flex;align-items:center;gap:8px 14px;flex-wrap:wrap;padding:10px 20px;border-bottom:1px solid var(--line);background:var(--bg2)}
+.brand{font-weight:600;font-size:15px}
+.spacer{flex:1}
+.pill{font-size:12px;border:1px solid var(--ok-bd);color:var(--ok-fg);border-radius:999px;padding:1px 10px}
+.pill.down{color:var(--warn-fg);border-color:var(--warn-bd)}
+.pill.auth{color:var(--bad-fg);border-color:var(--bad-bd)}
+.banner{padding:10px 20px;font-size:13px;background:var(--warn-bg);color:var(--warn-fg);border-bottom:1px solid var(--warn-bd)}
+.banner.auth{background:var(--bad-bg);color:var(--bad-fg);border-color:var(--bad-bd)}
+.layout{display:grid;grid-template-columns:340px minmax(0,1fr);min-height:calc(100vh - 48px)}
+.list{border-right:1px solid var(--line);padding:12px;overflow:auto;max-height:calc(100vh - 48px);position:sticky;top:0}
+.list-head{display:flex;justify-content:space-between;margin:0 2px 8px}
+.card{display:block;width:100%;text-align:left;padding:9px 11px;border-radius:10px;margin-bottom:6px}
+.card:hover{background:var(--bg2)}
+.card[aria-current=true]{border-color:var(--text);background:var(--bg2)}
+.card-title{font-weight:600;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
+.badges{display:flex;flex-wrap:wrap;gap:6px;margin-top:5px}
+.badge{display:inline-block;font-size:12px;line-height:1.5;border-radius:5px;padding:0 7px;border:1px solid var(--plain-bd);background:var(--plain-bg);color:var(--plain-fg)}
+.t-active{color:var(--active-fg);background:var(--active-bg);border-color:var(--active-bd)}
+.t-ok{color:var(--ok-fg);background:var(--ok-bg);border-color:var(--ok-bd)}
+.t-warn{color:var(--warn-fg);background:var(--warn-bg);border-color:var(--warn-bd)}
+.t-bad{color:var(--bad-fg);background:var(--bad-bg);border-color:var(--bad-bd)}
+.t-wait{border-style:dashed}
+.detail{padding:18px clamp(14px,4vw,44px) 60px;background:var(--bg2);min-width:0}
+.inner{max-width:980px;margin:0 auto}
+.empty{max-width:520px;margin:60px auto;text-align:center;color:var(--muted)}
+.tabs{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 10px}
+.tab[aria-selected=true]{border-color:var(--text);font-weight:600}
+.title{font-size:21px;font-weight:600;overflow-wrap:anywhere;margin:2px 0 6px}
+.facts{display:flex;flex-wrap:wrap;gap:2px 18px;font-size:12px;color:var(--muted)}
+.facts span b{font-weight:500;color:var(--text);overflow-wrap:anywhere}
+.link{border:0;background:none;padding:0;color:var(--focus);text-decoration:underline;font-size:12px}
+.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:16px 0}
+.box{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:11px 14px;min-width:0}
+.box h2{font-size:13px;margin-bottom:6px}
+.box.t-ok,.box.t-warn,.box.t-bad,.box.t-active{color:var(--text)}
+.box.t-ok{border-color:var(--ok-bd);border-top:3px solid var(--ok-fg)}
+.box.t-warn{border-color:var(--warn-bd);border-top:3px solid var(--warn-fg)}
+.box.t-bad{border-color:var(--bad-bd);border-top:3px solid var(--bad-fg)}
+.box.t-active{border-color:var(--active-bd);border-top:3px solid var(--active-fg)}
+.box.t-wait{border-style:dashed}
+.big{font-size:16px;font-weight:600;margin-bottom:4px}
+.kv{display:grid;grid-template-columns:auto minmax(0,1fr);gap:3px 10px;margin:4px 0 0}
+.kv dt{color:var(--muted);font-size:12px;padding-top:1px}
+.kv dd{margin:0;overflow-wrap:anywhere}
+.kv ul{margin:0;padding-left:16px}
+.block{margin:20px 0}
+.block>h2{font-size:15px;margin-bottom:8px}
+.warn{background:var(--panel);border:1px solid var(--warn-bd);border-left:4px solid var(--warn-fg);border-radius:8px;padding:8px 12px;margin-bottom:8px}
+.warn ul{margin:4px 0 0;padding-left:18px}
+.verbatim{white-space:pre-wrap;overflow-wrap:anywhere}
+.scroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);font-size:13px}
+th,td{text-align:left;padding:5px 10px;border-bottom:1px solid var(--line);overflow-wrap:anywhere;vertical-align:top}
+th{font-size:12px;color:var(--muted);font-weight:500}
+.apply{display:flex;gap:8px;align-items:flex-start;margin-top:8px;flex-wrap:wrap}
+.apply code{flex:1 1 320px;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:7px;padding:6px 8px;user-select:all}
+.view{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px;margin:8px 0;max-height:70vh;overflow:auto}
+.add{color:var(--ok-fg)}.del{color:var(--bad-fg)}.hunk{color:var(--muted)}
+.msg{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:9px 12px;margin:8px 0}
+.msg .verbatim{margin-top:4px;font-size:14px}
+.ev{display:grid;grid-template-columns:72px 92px minmax(0,1fr);gap:8px;padding:4px 0;border-bottom:1px solid var(--line);font-size:13px}
+.art-meta{display:flex;flex-wrap:wrap;gap:2px 16px;font-size:12px;color:var(--muted)}
+@media(max-width:820px){.layout{grid-template-columns:1fr}.list{position:static;max-height:42vh;border-right:0;border-bottom:1px solid var(--line)}
+.grid{grid-template-columns:1fr}.ev{grid-template-columns:64px minmax(0,1fr)}.ev .k{display:none}.topbar,.banner{padding-left:14px;padding-right:14px}}
+@media(prefers-reduced-motion:no-preference){.pulse{animation:pulse 1.6s ease-in-out infinite}}
+@keyframes pulse{50%{opacity:.55}}
 </style></head><body>
-<div class="app">
 <header class="topbar">
-<div class="topbar-left"><strong class="brand">Claude 协作工作台</strong>
-<label class="visually-hidden" for="projectFilter">项目筛选</label>
-<select id="projectFilter"><option value="">全部项目</option></select></div>
-<div class="topbar-right"><span id="readonlyNote" class="readonly-note">只读视图 · 执行、停止与核验在 Codex 中进行</span>
-<span id="connection" class="connection-pill" role="status">正在连接</span>
-<button id="openWindowBtn" class="icon-btn narrow-only" type="button" aria-label="在独立窗口打开">⇱</button>
-<button id="maintenanceBtn" class="quiet" type="button" aria-expanded="false" aria-haspopup="dialog">环境与维护<span id="maintenanceDot" class="dot hidden" aria-hidden="true"></span></button>
-</div></header>
-<div id="bannerArea"></div>
+  <span class="brand">Claude 协作工作台</span><span class="muted">只读 · 插件只报告事实，裁决由 Codex 做出</span>
+  <span class="spacer"></span><span id="updated" class="muted"></span><span id="conn" class="pill">连接中</span>
+</header>
+<div id="banner" class="banner" role="status" hidden></div>
 <div class="layout">
-<aside id="listPane" class="list-pane">
-<input id="searchInput" class="search" type="search" placeholder="搜索任务标题（仅已载入记录）" aria-label="搜索任务">
-<div id="filterChips" class="chips" role="group" aria-label="状态筛选"></div>
-<div id="newTaskNotice" class="new-task-notice hidden" role="status" aria-live="polite"></div>
-<div id="taskGroups" class="task-groups"></div>
-<p id="listFooter" class="list-footer meta"></p>
-<button id="loadMoreBtn" class="quiet" type="button">加载更早记录</button>
-</aside>
-<main id="detailPane" class="detail-pane">
-<button id="backToList" class="quiet narrow-only" type="button">‹ 任务列表</button>
-<section id="emptyState" class="empty-state"><div class="eyebrow">准备就绪</div><h1>还没有执行任务</h1><p>在 Codex 描述要做的事；这里会显示真实活动和核验结果。</p></section>
-<section id="detailContent" class="hidden">
-<div class="breadcrumb"><span id="breadcrumbProject" class="mono"></span><span id="breadcrumbCwd" class="mono"></span><span class="spacer"></span><span id="runIdLabel" class="mono"></span><button id="copyRunId" class="quiet small" type="button">复制</button></div>
-<h1 id="detailTitle" class="detail-title"></h1>
-<p id="detailSub" class="meta detail-sub"></p>
-<div id="roundTabs" class="round-tabs" role="tablist" aria-label="执行轮次"></div>
-<select id="roundSelectNarrow" class="round-select narrow-only" aria-label="执行轮次"></select>
-<p id="timeInfo" class="meta time-info"></p>
-<div id="roundBanner" class="round-banner hidden" role="status"></div>
-<div id="facts" class="facts-grid"></div>
-<div id="nextStep" class="next-step hidden"><div class="next-step-head"><h2>下一步</h2><span class="tag">在 Codex 中处理</span></div>
-<p id="nextStepBody"></p><code id="nextStepPrompt" class="prompt hidden"></code>
-<div class="buttons"><button id="copyPromptBtn" class="primary hidden" type="button">复制给 Codex</button></div>
-<p class="footnote">本页只读：停止、重派、改派和验收都经 Codex 对话完成，页面不直接执行。</p></div>
-<section id="reportSection"><div class="report-head"><h2>报告</h2><span id="reportTag" class="tag"></span><span id="reportSource" class="meta"></span></div>
-<div id="reportBody" class="report-box"></div>
-<details id="evidenceDetails" class="expand"><summary id="evidenceSummary">核验依据与未确认项</summary><div id="evidenceBody"></div></details></section>
-<details id="activityDetails" class="expand"><summary>过程 · 公开活动 <span id="activityCount" class="meta"></span></summary>
-<input id="activityFilter" class="search" type="search" placeholder="筛选文件、工具、状态或活动（中文或原始值）" aria-label="筛选活动">
-<div id="activityBody"></div><p id="activityFootnote" class="meta">只显示公开活动记录，不含私有推理；工具行是权限检查结果，不证明工具已成功；一段时间没有新活动不等于执行已停止。</p></details>
-<details id="changesDetails" class="expand"><summary>文件变化</summary><p id="changesSummary" class="meta"></p><div id="changesButtons" class="buttons"></div></details>
-<details id="identityDetails" class="expand"><summary>本轮执行身份</summary><dl id="identityBody" class="identity"></dl><p id="usageText" class="meta"></p></details>
-<details id="technicalDetails" class="expand"><summary>技术记录</summary><dl id="technicalFields" class="identity"></dl><div id="technicalButtons" class="buttons"></div><pre id="technicalArtifact" class="artifact"></pre></details>
-</section></main></div></div>
-<div id="drawerOverlay" class="drawer-overlay hidden">
-<div id="drawer" class="drawer" role="dialog" aria-modal="true" aria-label="环境与维护">
-<div class="drawer-head"><h2>环境与维护</h2><button id="drawerClose" class="quiet" type="button" aria-label="关闭">✕</button></div>
-<div class="drawer-body">
-<section><h3>本机连接</h3><p id="drawerConnection" class="meta"></p></section>
-<section><h3>Claude CLI</h3><p id="drawerCli" class="meta"></p></section>
-<section><h3>维护</h3><p id="drawerMaintenance" class="meta"></p><p id="drawerMaintenanceDetail" class="meta"></p></section>
-<section><h3>用量说明</h3><p class="meta">Provider 回报的用量不等同订阅剩余额度。</p></section>
-</div></div></div>
+  <nav class="list" aria-label="任务列表">
+    <div class="list-head"><span class="muted">任务</span><span id="listMeta" class="muted"></span></div>
+    <div id="taskList"></div>
+    <button id="moreRuns" type="button" hidden>加载更早的记录</button>
+  </nav>
+  <main class="detail"><div class="inner">
+    <div id="empty" class="empty"><h1>还没有选中任务</h1><p>从 Codex 派发任务后，在这里查看运行事实、Claude 自称和 Codex 裁决。</p></div>
+    <article id="runView" hidden>
+      <div id="roundTabs" class="tabs" role="tablist" aria-label="轮次"></div>
+      <h1 id="runTitle" class="title"></h1>
+      <div id="runFacts" class="facts"></div>
+      <p id="runError" class="banner auth" hidden></p>
+      <div id="runBody" hidden>
+        <div class="grid">
+          <section id="boxRun" class="box"></section>
+          <section id="boxClaim" class="box"></section>
+          <section id="boxDecision" class="box"></section>
+        </div>
+        <section class="block"><h2>提醒</h2><div id="warnList"></div></section>
+        <section class="block"><h2>改动</h2><div id="changeBody"></div></section>
+        <section class="block"><h2>原始材料</h2>
+          <div id="artTabs" class="tabs" role="tablist" aria-label="原始材料"></div>
+          <div id="artMeta" class="art-meta"></div>
+          <div id="artBody"></div>
+          <button id="artMore" type="button" hidden>加载更多</button>
+        </section>
+      </div>
+    </article>
+  </div></main>
+</div>
 <script>
 'use strict';
+const PAGE_BYTES = 200000, RUN_PAGE = 100, MAX_EVENTS = 5000, SHOWN_EVENTS = 500;
+const L = {
+  status: {running: '运行中', ok: '正常结束', timeout: '超时', cancelled: '已取消', crashed: '异常退出', not_started: '未启动', lost: '失联'},
+  verdict: {accepted: '采纳', accepted_with_corrections: '修正后采纳', rejected: '不采纳'},
+  next: {done: '任务完成', next_round: '需要下一轮', codex_finishes: '由 Codex 收尾'},
+  claim: {completed: '已完成', partial: '部分完成', blocked: '受阻'},
+  stop: {confirmed: '已确认停止', stopped: '已停止', not_launched: '进程未启动', unknown: '未能确认停止'},
+  kind: {implement: '实现', analyze: '分析'},
+  profile: {copy: '独立副本', readonly: '只读'},
+  cls: {in_scope: '范围内', outside_hint: '超出预期范围', protected: '受保护'},
+  file: {A: '新增', M: '修改', D: '删除', R: '重命名', C: '复制', T: '类型变化'},
+  item: {accepted: '采纳', downgraded: '降级', rejected: '不采纳'},
+  source: {human: '用户本人', relayed: '他人转述'},
+  warn: {
+    original_changed_during_run: '运行期间原工作区有变动', protected_touched: '改动了受保护路径',
+    outside_hint: '改动超出预期范围', tool_denied: '有工具调用被拒绝', source_not_read: '有原件未被读取',
+    workflow_incomplete: '工作流未完成', report_missing: '缺少报告', result_missing: '缺少结果头',
+    result_malformed: '结果头格式不合规', residual_processes_stopped: '已清理残留进程',
+    process_stop_unconfirmed: '无法确认进程已停止', sensitive_inputs_skipped: '部分原件未复制给 Claude',
+    resume_fallback: '未能续接上一轮会话', questions_for_user: 'Claude 有需要用户决定的问题',
+    disputes_present: 'Claude 提出异议', not_verified_present: 'Claude 列出未验证的内容',
+    provider_error: '模型服务返回错误', patch_unavailable: '无法生成补丁',
+    carried_already_in_original: '此前的待交付改动已在原仓库中', finalize_error: '结果汇总不完整，请看原始材料',
+    undelivered_files_now_ignored: '待交付文件已被原仓库的忽略规则匹配'},
+};
+const ARTS = [['report', '报告'], ['brief', 'Claude 收到的任务书'], ['result', '结果头'], ['patch', 'Patch'],
+  ['delivery_patch', '待交付 Patch'], ['packet', '用户原话'], ['inputs', '原件'], ['instruction_layer', '指令层'],
+  ['final_message', '最终回复'], ['events', '活动']];
+const JSON_ARTS = new Set(['result', 'packet', 'inputs', 'instruction_layer']);
+
+const hashParams = new URLSearchParams(location.hash.slice(1));
+const S = {
+  token: hashParams.get('token') || '', sel: hashParams.get('run') || '', runs: new Map(), pageEnd: 0, hasMore: false,
+  listLoaded: false, listSeq: 0, listApplied: 0, listSig: '', snap: null, runSig: '', tabSig: '', runError: '', gen: 0,
+  events: [], cursor: 0, evTrimmed: false, artName: '', art: null, artSeq: 0, timers: {}, dead: false, conn: '',
+};
+
 const $ = id => document.getElementById(id);
-let hash = new URLSearchParams(location.hash.slice(1));
+const enc = encodeURIComponent;
 
-const ACTIVE_STATUSES = new Set(['preflight','starting','executing','running','collecting','cancelling']);
-const FAIL_END = new Set(['failed','timeout','blocked','cancelled']);
-const FORMAL = 'reported';
-const PAGE_SIZE = 50, MAX_LOADED = 500, MAX_CONTINUE_PAGES = 3, MAX_EVENTS = 300;
-const OBSERVE_LIMIT = 40, BACKGROUND_BUDGET = 2, PREFETCH_PER_REFRESH = 10, MAX_SUPERSEDE_HOPS = 5;
-// Refresh a current-round tip before the 60 s trust window used by currentRoundOf expires.
-const DETAIL_REFRESH_AGE = 45000;
-const LOCAL_CLI_UNAVAILABLE = '版本维护状态暂不可用；本轮执行记录仍可查询。';
-const gate = {B1:false, B2:false, B3:false};
-const TONE_SYMBOL = {active:'●',settled:'■',ok:'✓',attention:'!',bad:'✕',unknown:'?',history:'',none:'–'};
-function toneSymbol(fact){return fact.symbol||TONE_SYMBOL[fact.tone]||'';}
-
-function el(tag,text,cls){const n=document.createElement(tag);if(text!==undefined)n.textContent=String(text);if(cls)n.className=cls;return n;}
-function stamp(v){return typeof v==='number'?v*1000:Date.parse(v||'')||0;}
-function duration(v){const n=Math.max(0,Math.floor(Number(v)||0));return n>=3600?`${Math.floor(n/3600)} 时 ${Math.floor(n%3600/60)} 分`:n>=60?`${Math.floor(n/60)} 分 ${n%60} 秒`:`${n} 秒`;}
-function first(v){const t=typeof v==='string'?v.trim():'';return t.length>180?t.slice(0,180)+'…':t;}
-function firstSentence(v){const t=typeof v==='string'?v.trim():'';if(!t)return '';const m=t.match(/^[^。.!?！？\n]+[。.!?！？]?/);return first((m?m[0]:t).trim());}
-function decisionValue(v){return typeof v?.decision==='string'?v.decision:v?.decision?.decision||v?.decision?.status||'';}
-function structuredOf(result){return (result&&(result.structured||result.structured_output))||null;}
-function codexDone(v){const res=(typeof v?.decision==='object'&&v.decision)?v.decision.resolution:undefined;return decisionValue(v)==='returned'&&res==='completed_by_codex';}
-
-function taskKey(r){return r.task_id?r.task_id+'\u0000'+r.cwd:'run:'+r.run_id;}
-
-function emptyEntry(){return {summary:null,summaryAt:0,summarySeq:0,detail:null,detailAt:0,detailSeq:0,detailStale:false,attemptAt:0,events:[],cursor:0,moreEvents:false};}
-function mergeSummary(entry,row,now,seq){
-  entry=entry?{...entry}:emptyEntry();
-  if(seq!==undefined&&(seq<(entry.summarySeq||0)||seq<(entry.detailSeq||0)))return entry;
-  let stale=entry.detailStale;
-  if(entry.detail){
-    const changed=entry.detail.status!==row.status
-      ||JSON.stringify(entry.detail.decision||null)!==JSON.stringify(row.decision||null)
-      ||(entry.detail.superseded_by||null)!==(row.superseded_by||null);
-    if(changed)stale=true;
+function el(tag, cls, ...kids) {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  for (const kid of kids) {
+    if (kid === null || kid === undefined || kid === false) continue;
+    node.append(typeof kid === 'object' ? kid : document.createTextNode(String(kid)));
   }
-  entry.summary=row;entry.summaryAt=now;entry.summarySeq=seq??entry.summarySeq;entry.detailStale=stale;
-  return entry;
+  return node;
 }
-function mergeDetail(entry,row,now,seq){
-  entry=entry?{...entry}:emptyEntry();
-  if(seq!==undefined&&(seq<(entry.detailSeq||0)||seq<(entry.summarySeq||0)))return entry;
-  entry.detail=row;entry.detailAt=now;entry.detailSeq=seq??entry.detailSeq;entry.detailStale=false;
-  entry.summary=entry.summary?{...entry.summary,status:row.status,decision:row.decision,superseded_by:row.superseded_by}:row;
-  entry.summaryAt=now;entry.summarySeq=seq??entry.summarySeq;
-  return entry;
+function label(map, key, fallback) {
+  if (key === null || key === undefined || key === '') return fallback === undefined ? '—' : fallback;
+  return Object.hasOwn(map, key) ? map[key] : String(key);
 }
-function viewOf(entry){
-  if(!entry||(!entry.summary&&!entry.detail))return {view:null,hasDetail:false};
-  const hasDetail=Boolean(entry.detail)&&!entry.detailStale;
-  const view=hasDetail?entry.detail:{...(entry.detail||{}),...(entry.summary||{})};
-  return {view,hasDetail};
+const warnLabel = code => label(L.warn, code, '未命名提醒');
+function fill(node, ...kids) { node.replaceChildren(...kids.filter(Boolean)); }
+function badge(text, tone) { return el('span', 'badge' + (tone ? ' ' + tone : ''), text); }
+function list(items, cls) { return el('ul', cls, ...items.map(item => el('li', null, item))); }
+function kv(rows) {
+  const dl = el('dl', 'kv');
+  for (const [key, value] of rows) if (value !== undefined && value !== null && value !== '') dl.append(el('dt', null, key), el('dd', null, value));
+  return dl;
+}
+function table(heads, rows) {
+  const head = el('tr', null, ...heads.map(h => el('th', null, h)));
+  const body = el('tbody', null, ...rows.map(cells => el('tr', null, ...cells.map(c => el('td', null, c)))));
+  return el('div', 'scroll', el('table', null, el('thead', null, head), body));
+}
+function fmtDur(s) {
+  if (typeof s !== 'number' || !isFinite(s)) return '—';
+  if (s < 60) return s.toFixed(1) + ' 秒';
+  const m = Math.floor(s / 60);
+  return m < 60 ? `${m} 分 ${Math.round(s % 60)} 秒` : `${Math.floor(m / 60)} 小时 ${m % 60} 分`;
+}
+function fmtTime(sec, clockOnly) {
+  if (typeof sec !== 'number' || !isFinite(sec)) return '—';
+  const d = new Date(sec * 1000);
+  return clockOnly ? d.toLocaleTimeString('zh-CN', {hour12: false}) : d.toLocaleString('zh-CN', {hour12: false});
+}
+function fmtBytes(n) {
+  if (typeof n !== 'number' || !isFinite(n)) return '—';
+  return n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(1) + ' KB' : (n / 1048576).toFixed(1) + ' MB';
 }
 
-function currentRoundOf(runs,cache){
-  if(!runs.length)return {state:'not_loaded',pointer:null};
-  const tips=runs.filter(r=>!r.superseded_by);
-  if(tips.length===0){
-    const top=runs.reduce((a,b)=>(b.revision||1)>(a.revision||1)?b:a);
-    return {state:'not_loaded',pointer:top.superseded_by||null,from:top};
-  }
-  if(tips.length!==1)return {state:'pending',reason:'轮次链不一致'};
-  const tip=tips[0];
-  if(runs.some(r=>r.run_id!==tip.run_id&&(r.revision||1)>=(tip.revision||1)))return {state:'pending',reason:'轮次证据冲突'};
-  if(cache){
-    const entry=cache.get(tip.run_id);
-    if(!entry||!viewOf(entry).hasDetail||!entry.summaryAt||!entry.detailAt||Date.now()-Math.min(entry.summaryAt,entry.detailAt)>=60000)
-      return {state:'pending',reason:'当前轮待确认'};
-  }
-  return {state:'known',run:tip,inconsistent:false};
+const statusText = r => label(L.status, r && r.status, '状态未知');
+function statusTone(status) {
+  if (status === 'running') return 't-active pulse';
+  if (status === 'timeout' || status === 'crashed' || status === 'lost') return 't-bad';
+  if (status === 'cancelled' || status === 'not_started') return 't-warn';
+  return '';
 }
-function nextSupersedeHop(pointer,visited){
-  if(!pointer)return null;
-  if(visited.has(pointer))return null;
-  if(visited.size>=MAX_SUPERSEDE_HOPS)return null;
-  return pointer;
+function verdictText(decision) {
+  if (!decision || !decision.verdict) return '待核验';
+  return label(L.verdict, decision.verdict) + ' · ' + label(L.next, decision.next, '下一步未注明');
+}
+function verdictTone(decision) {
+  if (!decision || !decision.verdict) return 't-wait';
+  return {accepted: 't-ok', accepted_with_corrections: 't-warn', rejected: 't-bad'}[decision.verdict] || '';
 }
 
-function isUnsettled(v){
-  if(!v)return false;
-  if(ACTIVE_STATUSES.has(v.status))return true;
-  if(v.status==='unknown')return true;
-  if(v.status===FORMAL&&!decisionValue(v))return true;
-  return false;
-}
-function needsObservation(v){
-  if(!v)return false;
-  const status=v.status;
-  if(ACTIVE_STATUSES.has(status))return true;
-  if(status==='unknown')return true;
-  if(status===FORMAL&&!decisionValue(v))return true;
-  if(status==='failed'||status==='timeout'||status==='blocked')return true;
-  if(decisionValue(v)==='returned'&&!codexDone(v)&&!v.superseded_by)return true;
-  return false;
+function groupTasks(runs) {
+  const byTask = new Map();
+  for (const r of runs) {
+    if (!r || !r.run_id) continue;
+    const key = String(r.task_id ?? r.run_id);
+    if (!byTask.has(key)) byTask.set(key, []);
+    byTask.get(key).push(r);
+  }
+  const groups = [...byTask].map(([taskId, rows]) => {
+    rows.sort((a, b) => (a.round || 0) - (b.round || 0) || (a.started_at || 0) - (b.started_at || 0));
+    const latest = rows.reduce((best, r) => ((r.started_at || 0) >= (best.started_at || 0) ? r : best));
+    const activity = Math.max(...rows.map(r => Math.max(r.started_at || 0, r.updated_at || 0, r.ended_at || 0,
+      (r.decision && r.decision.recorded_at) || 0)));
+    return {task_id: taskId, runs: rows, latest, activity};
+  });
+  return groups.sort((a, b) => b.activity - a.activity || (a.task_id < b.task_id ? -1 : 1));
 }
 
-function withHistory(fact,hist){
-  if(!hist)return fact;
-  if(fact.tone==='bad'||fact.tone==='attention'){return {...fact,label:fact.label+' · 历史'};}
-  return {...fact,tone:'history',label:fact.label+' · 历史'};
+class ApiError extends Error {
+  constructor(status, message) { super(message); this.status = status; }
 }
-function lookup(map,key){return typeof key==='string'&&Object.hasOwn(map,key)?map[key]:undefined;}
-const PERMIT_TEXT={Read:'已允许读取',Glob:'已允许查找文件',Grep:'已允许搜索内容',Write:'已允许写入',Edit:'已允许编辑'};
-const PERMIT_NOTE='权限检查结果，不证明工具已执行或成功';
-const MILESTONES={preflight:'正在检查执行条件',starting:'正在启动 Claude',executing:'Claude 正在执行',collecting:'正在收集结果',reported:'Claude 已交回报告，等待核验',
-  cancelling:'已请求停止，尚待停止回执',cancelled:'已取消或中断',blocked:'已被阻止',failed:'执行失败',timeout:'已超时',unknown:'状态未确认，需要核对',reconciliation:'已记录恢复核对'};
-const SUMMARY_DETAIL_KINDS=new Set(['cancelling','cancelled','blocked','failed','timeout','unknown','reconciliation']);
-// Claude CLI status messages: they show what the CLI sent, never that the model call, permission or task succeeded.
-const PROVIDER_STATUS={
-  init:['Claude 会话已初始化','Claude CLI 状态消息，不证明模型调用成功'],
-  hook_started:['Claude CLI 钩子已开始','CLI 消息；不表示权限已验证通过'],
-  hook_response:['Claude CLI 钩子已返回消息','CLI 消息；不表示权限已验证通过'],
-  thinking_tokens:['生成用量已更新','只是用量计数，不含思考内容，不表示分析已完成'],
-  background_tasks_changed:['Claude CLI 后台任务有变化','CLI 状态消息，不表示任务成功'],
-  task_updated:['Claude CLI 任务状态已更新','CLI 状态消息，不表示任务成功'],
-  success:['Claude 已返回响应，等待插件检查','不等于已回报、已验收或 Workflow 已完结'],
-};
-const WORKFLOW_STATUS={
-  task_started:['Workflow 已启动','CLI 状态消息，不代表任务已完成'],
-  task_progress:['Workflow 有进展','CLI 进展消息，不代表任务完成或审查通过'],
-  task_notification:['Workflow 收到任务通知','通知未附状态'],
-  completed:['Workflow 通知已完成','这是 CLI 的完成通知；最终报告与验收仍须检查'],
-};
-const AGENT_STATE={start:'已启动',progress:'有进展',done:'已交回'};
-const RAW_FIELDS=['seq','kind','status','tool','file','summary','text','tool_use_id'];
-function activityInfo(event){
-  const s=k=>typeof event?.[k]==='string'?event[k].trim():'';
-  const kind=s('kind'),status=s('status'),tool=s('tool'),summary=s('summary');
-  const named=v=>v?`（${first(v)}）`:'';
-  if(kind==='tool'){
-    if(summary==='tool path permitted')return {text:lookup(PERMIT_TEXT,tool)||'已允许工具访问',note:PERMIT_NOTE};
-    if(summary==='artifact file permitted')return {text:!tool||tool==='Read'?'已允许读取指定资料文件':'已允许访问指定资料文件',note:PERMIT_NOTE};
-    if(summary==='saved workflow permitted')return {text:'已允许运行指定 Workflow',note:'权限检查结果，不代表 Workflow 已启动或完成'};
-    if(summary==='workflow structured output permitted')return {text:'已允许提交结构化输出',note:PERMIT_NOTE};
-    if(summary==='tool path denied'||status==='denied')return {text:'已拒绝工具访问',note:'权限检查拒绝，该工具调用未获放行'};
-    if(status==='allowed')return {text:'已允许工具访问',note:PERMIT_NOTE};
-    return {text:'未识别的工具事件',note:'插件未识别该工具事件，不推断其含义；原始记录见下'};
+async function api(path) {
+  let res;
+  try {
+    res = await fetch(path, {headers: {Authorization: 'Bearer ' + S.token}, cache: 'no-store'});
+  } catch (error) {
+    setConn('down', '无法连接本机工作台');
+    throw new ApiError(0, '无法连接本机工作台');
   }
-  if(kind==='decision')return {text:summary==='Codex completed the task; original report returned'?'Codex 已补齐并完成，原报告未采纳':status==='accepted'?'Codex 已记录验收通过':status==='returned'?'Codex 已记录退回原因':'Codex 已记录核验结论',note:''};
-  if(kind==='provider'){
-    const known=lookup(PROVIDER_STATUS,status);
-    if(known)return {text:known[0],note:known[1]};
-    return {text:`Claude CLI 状态消息：未识别类型${named(status)}`,note:'插件未识别该消息类型，不推断其含义；原始类型见原始记录'};
+  let body = null;
+  try { body = await res.json(); } catch (error) { body = null; }
+  if (res.status === 401) {
+    setConn('auth');
+    throw new ApiError(401, '链接失效');
   }
-  if(kind==='workflow'){
-    const known=lookup(WORKFLOW_STATUS,status);
-    return known?{text:known[0],note:known[1]}:{text:`Workflow 状态未识别${named(status)}`,note:'插件未识别该状态，不推断其含义'};
+  const message = (body && typeof body.error === 'string' && body.error) || ('HTTP ' + res.status);
+  if (res.status >= 500) {
+    setConn('down', '工作台服务出错：' + message);
+    throw new ApiError(res.status, message);
   }
-  if(kind==='workflow_agent'){
-    const label=`子任务「${first(summary)||'未命名'}」`,state=lookup(AGENT_STATE,status);
-    return {text:state?`${label}${state}`:`${label}状态${status?'未识别'+named(status):'未记录'}`,
-      note:status==='done'?'子任务已交回，不代表其结果经过审查或通过':'子任务进展消息，不代表工具成功或审查通过'};
+  setConn('ok');
+  if (!res.ok) throw new ApiError(res.status, message);
+  return body;
+}
+function setConn(state, detail) {
+  if (S.conn === 'auth') return;
+  S.conn = state;
+  if (state === 'auth') {
+    S.dead = true;
+    for (const key of Object.keys(S.timers)) clearTimeout(S.timers[key]);
   }
-  const milestone=lookup(MILESTONES,kind);
-  if(milestone)return {text:milestone,note:''};
-  return {text:`未识别活动类型${named(kind)}`,note:'插件未识别该活动类型，不推断其含义；原始记录见下'};
-}
-function activityDescription(event){return activityInfo(event).text;}
-function activityDetail(event){
-  const s=k=>typeof event?.[k]==='string'?event[k].trim():'';
-  const kind=s('kind'),tool=s('tool'),file=s('file')||s('path'),text=s('text'),summary=s('summary');
-  if(kind==='workflow_agent')return [tool&&`最近工具 ${tool}`,text&&`阶段 ${first(text)}`].filter(Boolean);
-  if(kind==='workflow')return [first(summary)].filter(Boolean);
-  if(kind==='tool')return [tool,file,text&&`${s('status')==='denied'?'拒绝原因':'说明'}：${first(text)}`].filter(Boolean);
-  const listed=kind==='provider'||kind==='decision'||Object.hasOwn(MILESTONES,kind);
-  return [(!listed||SUMMARY_DETAIL_KINDS.has(kind))&&first(summary),tool,file].filter(Boolean);
-}
-function activityRawFields(event){
-  return RAW_FIELDS.filter(k=>typeof event?.[k]==='string'&&event[k]||typeof event?.[k]==='number').map(k=>`${k}=${String(event[k]).slice(0,400)}`);
-}
-// Search covers the shown Chinese wording and the raw public fields, never the explanatory notes or unlisted fields.
-function activitySearchText(event){
-  return [activityInfo(event).text,...activityDetail(event),...activityRawFields(event)].join('\n').toLowerCase();
-}
-function activityAt(s,event){return stamp(event?.received_at||event?.at||event?.timestamp)||stamp(s?.last_activity_at);}
-function activityTimeText(value){return value?new Date(value).toLocaleString('zh-CN',{hour12:false}):'活动时间未记录';}
-function latestPublicEvent(v,events){
-  if(v&&Object.hasOwn(v,'last_meaningful_event'))return v.last_meaningful_event;
-  return [v?.last_event,...(events||[])].filter(e=>e&&e.kind!=='provider').sort((a,b)=>(b.seq||0)-(a.seq||0))[0]||null;
-}
-function workspaceChangeText(s){
-  const w=s?.workspace_changes;
-  if(!w||w.status==='unknown')return '文件影响尚不能确认，需核对前后快照。';
-  if(Array.isArray(w.changes))return w.changes.length?`资料快照观察到 ${w.changes.length} 项差异，需核对来源。`:'声明的资料内容与目录结构未观察到变化。';
-  return `前后快照观察到 ${w.changed_files.length} 个文件变化；开始前已有 ${w.preexisting_dirty_files.length} 个改动文件，结束时共 ${w.worktree_dirty_files.length} 个。变化不单独证明由 Claude 造成；忽略文件及中途变化不在此统计。`;
-}
-function runCliEvidence(s){
-  const environment=s?.environment&&typeof s.environment==='object'?s.environment:{};
-  const descriptor=s?.cli_descriptor&&typeof s.cli_descriptor==='object'?s.cli_descriptor:{};
-  const identity=s?.cli_identity||s?.cli_identity_id||descriptor.identity_id||descriptor.id||environment.cli_identity||environment.identity||null;
-  const identityText=typeof identity==='string'?identity:(identity&&typeof identity.id==='string'?identity.id:'本轮记录未提供');
-  return {version:s?.cli_version||environment.cli_version||descriptor.version||'本轮记录未提供',identity:identityText,environmentStatus:environment.status||'本轮记录未提供'};
-}
-function requestedValue(s,packet,key){return s?.[`requested_${key}`]||s?.[key]||packet?.[key]||'本轮记录未提供';}
-function actualModelText(s){
-  const models=Array.isArray(s?.actual_models)?s.actual_models.filter(x=>typeof x==='string'&&x):[];
-  if(models.length)return [...new Set(models)].join('、');
-  if(s?.actual_model&&s?.actual_model_source)return s.actual_model;
-  return '等待 Claude 回报实际模型';
-}
-function localCliText(m){
-  if(!m)return '';
-  if(m.state==='unavailable')return LOCAL_CLI_UNAVAILABLE;
-  const text=typeof m.message==='string'?m.message.trim():'';
-  return text.length>400?text.slice(0,400)+'…':text;
-}
-function localCliDetail(m){
-  const legacy=m?.legacy_managed_state;
-  return [legacy?.present&&`旧版本受管 CLI 记录 ${legacy.retained_versions||0} 项仍保留，只作历史，不参与派单。`,
-    legacy?.maintenance_worker_running&&'检测到旧版插件的维护进程仍在运行；本插件不会使用它的结果。',
-    legacy?.maintenance_worker_running===null&&'旧版插件的维护锁无法读取，不能确认其维护进程是否仍在运行；本插件不会使用它的结果。',
-    typeof m?.next_action==='string'&&m.next_action&&m.next_action.trim()&&`下一步：${m.next_action.trim()}`].filter(Boolean).join(' ');
-}
-function renderDrawerCli(){
-  const local=st.maintenance?.local_cli;
-  const runVersion=st.run?runCliEvidence(viewOf(st.cache.get(st.run)).view).version:'';
-  $('drawerCli').textContent=[st.run?`本轮 CLI ${runVersion}`:'尚未选择执行记录',
-    local?.path&&`本机 CLI ${local.path}${local.source?`（${local.source}）`:''}`].filter(Boolean).join(' · ');
-}
-function renderMaintenance(){
-  const m=st.maintenance,failed=Boolean(st.maintenanceFailure);
-  const syncedAt=st.maintenanceAt?new Date(st.maintenanceAt).toLocaleTimeString('zh-CN',{hour12:false}):'';
-  if(failed){
-    $('drawerMaintenance').textContent=LOCAL_CLI_UNAVAILABLE;
-    $('drawerMaintenanceDetail').textContent=m?`上次读取于 ${syncedAt}（可能已过时）：${localCliText(m)}`:'';
-  } else {
-    $('drawerMaintenance').textContent=m?localCliText(m):'正在读取本机 Claude CLI 状态…';
-    $('drawerMaintenanceDetail').textContent=m?localCliDetail(m):'';
-  }
-  const unavailable=failed||m?.state==='unavailable';
-  const dot=$('maintenanceDot');
-  dot.classList.toggle('hidden',!unavailable&&m?.state!=='cli_missing');
-  dot.classList.toggle('unavailable',unavailable);
-  dot.setAttribute('aria-label',unavailable?'维护状态暂不可用':'有说明');
-  renderDrawerCli();
+  const banner = $('banner');
+  banner.hidden = state === 'ok';
+  banner.className = 'banner' + (state === 'auth' ? ' auth' : '');
+  banner.textContent = state === 'auth' ? '链接失效，请从 Codex 重新获取' : state === 'down' ? '连接中断，正在重试' + (detail ? '：' + detail : '') : '';
+  const pill = $('conn');
+  pill.className = 'pill' + (state === 'ok' ? '' : ' ' + state);
+  pill.textContent = {ok: '已连接', down: '连接中断', auth: '链接失效'}[state];
+  if (state === 'ok') $('updated').textContent = '更新于 ' + fmtTime(Date.now() / 1000, true);
 }
 
-function execFact(v,hasDetail){
-  const status=v?.status;
-  const started=hasDetail?v.claude_started:undefined;
-  const by=hasDetail?((v.receipt&&v.receipt.blocked_by)||(v.result&&v.result.blocked_by)||null):undefined;
-  switch(status){
-    case 'preflight': return {tone:'none',label:'已创建 · 预检中',detail:''};
-    case 'starting':
-      return started===true?{tone:'active',label:'执行中',detail:''}:{tone:'active',label:'正在启动',detail:'Claude 尚未确认启动'};
-    case 'executing': case 'running': {
-      if(!hasDetail)return {tone:'active',label:'执行中',detail:'活动详情未载入'};
-      const event=latestPublicEvent(v,[]);
-      const at=activityAt(v,event);
-      const desc=event?activityDescription(event):'';
-      return {tone:'active',label:'执行中',detail:at?`${activityTimeText(at)}${desc?' · '+desc:''}`:(desc||'')};
+function later(key, fn, ms) {
+  clearTimeout(S.timers[key]);
+  if (!S.dead) S.timers[key] = setTimeout(fn, ms);
+}
+async function listLoop() {
+  await refreshList(false);
+  later('list', listLoop, document.hidden ? 30000 : 5000);
+}
+async function runLoop() {
+  if (!S.sel || S.dead) return;
+  await refreshRun();
+  const active = !S.snap || S.snap.active;
+  later('run', runLoop, document.hidden ? (active ? 15000 : 60000) : (active ? 2000 : 10000));
+}
+
+function mergeRun(row) {
+  const old = S.runs.get(row.run_id);
+  if (old && (old.updated_at || 0) > (row.updated_at || 0)) return;
+  S.runs.set(row.run_id, Object.assign({}, old, row));
+}
+async function refreshList(more) {
+  const seq = ++S.listSeq;
+  const offset = more ? S.pageEnd : 0;
+  const limit = more ? RUN_PAGE : Math.min(200, Math.max(RUN_PAGE, S.pageEnd));
+  try {
+    const data = await api(`/api/runs?limit=${limit}&offset=${offset}`);
+    if (!more && seq < S.listApplied) return;
+    if (!more) S.listApplied = seq;
+    for (const row of data.runs || []) mergeRun(row);
+    if (more || S.pageEnd <= limit) {
+      S.pageEnd = Math.max(S.pageEnd, data.next_offset || 0);
+      S.hasMore = !!data.has_more;
     }
-    case 'collecting': return {tone:'active',label:'收集结果',detail:''};
-    case 'cancelling': return {tone:'attention',label:'停止待确认',detail:'已请求停止，尚未收到进程停止回执。'};
-    case 'cancelled':
-      return started===false?{tone:'none',label:'启动前已取消',detail:''}:{tone:'none',label:'已停止',detail:'已按回执确认停止；工作区外副作用仍需核对。'};
-    case 'blocked': {
-      if(by==='preflight'&&started===false)return {tone:'bad',label:'预检阻止 · Claude 未启动',detail:''};
-      if(by==='preflight')return {tone:'bad',label:'预检阻止 · 启动状态未确认',detail:''};
-      if(by==='executor')return {tone:'bad',label:'执行者无法继续',detail:''};
-      if(by==='workflow_evidence')return {tone:'bad',label:'Workflow 报告未完整交回',detail:''};
-      if(by===undefined)return {tone:'bad',label:'被阻止',detail:'原因详情未载入'};
-      return {tone:'bad',label:'被阻止',detail:''};
+    S.listLoaded = true;
+  } catch (error) {
+    return;
+  }
+  renderList();
+  if (!S.sel) {
+    const first = groupTasks([...S.runs.values()])[0];
+    if (first) selectRun(first.latest.run_id);
+  }
+}
+
+function selectRun(id) {
+  if (!id || (id === S.sel && S.snap && S.snap.run_id === id)) return;
+  S.sel = id;
+  S.gen++;
+  S.artSeq++;
+  Object.assign(S, {snap: null, runSig: '', runError: '', events: [], cursor: 0, evTrimmed: false, art: null});
+  history.replaceState(null, '', '#token=' + enc(S.token) + '&run=' + enc(id));
+  clearTimeout(S.timers.run);
+  renderList();
+  renderRun();
+  runLoop();
+}
+async function refreshRun() {
+  const id = S.sel, gen = S.gen;
+  let snap;
+  try {
+    snap = await api('/api/snapshot?run_id=' + enc(id));
+  } catch (error) {
+    if (gen === S.gen && error.status >= 400 && error.status < 500 && error.status !== 401) {
+      S.runError = '无法读取这一轮：' + error.message;
+      renderRun();
     }
-    case 'failed':
-      return started===false?{tone:'bad',label:'启动失败 · Claude 未启动',detail:''}:{tone:'bad',label:'执行失败',detail:''};
-    case 'timeout': return {tone:'bad',label:'已超时',detail:''};
-    case 'unknown':
-      return v.reconciliation?.outcome==='confirmed_stopped'?{tone:'none',label:'已核对停止',detail:''}:{tone:'unknown',label:'状态未知',detail:'无法确认进程状态；不代表已失败。'};
-    case 'reported': return {tone:'settled',label:'执行已结束',detail:''};
-    default: return {tone:'unknown',label:'状态待确认',detail:String(status||'')};
+    return;
   }
+  if (gen !== S.gen) return;
+  const prev = S.snap;
+  S.snap = snap;
+  S.runError = '';
+  mergeRun(snap);
+  if (!S.artName) S.artName = snap.active ? 'events' : 'report';
+  renderList();
+  renderRun();
+  const justFinished = prev && prev.active && !snap.active;
+  if (S.artName !== 'events' && (!S.art || justFinished)) loadArtifact(S.artName, false);
+  const lastSeq = snap.last_event && typeof snap.last_event.seq === 'number' ? snap.last_event.seq : 0;
+  if (lastSeq > S.cursor) await loadEvents(gen);
 }
-function reportFact(v,hasDetail){
-  const status=v?.status,hist=Boolean(v?.superseded_by);
-  const r=hasDetail?v.result:undefined;
-  if(gate.B3&&v?.report?.contract_check?.passed===false){
-    const failures=v.report.contract_check.failures||[];
-    const allPlaceholder=failures.length>0&&failures.every(f=>f.kind==='placeholder');
-    return withHistory({tone:'bad',label:allPlaceholder?'缺乏实质内容（占位值）':'未通过报告契约',detail:'',kind:'contract_failed'},hist);
-  }
-  if(gate.B1&&v?.report?.integrity==='truncated')return withHistory({tone:'attention',label:'报告被截断',detail:'',kind:'truncated'},hist);
-  if(gate.B2&&v?.report?.collection_state==='pending')return withHistory({tone:'attention',label:'待收集',detail:'',kind:'pending'},hist);
-  if(status==='unknown'){
-    // Unknown is about process state; a loaded result is still recorded content.
-    if(!hasDetail)return withHistory({tone:'unknown',label:'详情未载入',detail:'',kind:'not_loaded'},hist);
-    if(v?.reconciliation?.outcome==='confirmed_stopped')return withHistory({tone:'attention',label:structuredOf(r)?'已核对停止 · 旧报告未验收':'已核对停止 · 未取得结构化报告',detail:'',kind:'reconciled_unknown'},hist);
-    if(structuredOf(r))return withHistory({tone:'unknown',label:'执行状态未知 · 已记录报告内容',detail:'',kind:'unknown_with_content'},hist);
-    return withHistory({tone:'unknown',label:'执行状态未知 · 未取得结构化报告',detail:'',kind:'unknown_no_structured'},hist);
-  }
-  if(status===FORMAL){
-    const complete=gate.B1&&v?.report?.integrity==='complete';
-    const decisionKind=codexDone(v)?'codex':decisionValue(v)==='accepted'?'accepted':decisionValue(v)==='returned'?'returned':'formal';
-    const kind=!hasDetail?'not_loaded':decisionKind;
-    const label=decisionKind==='accepted'?'已回报 · 已验收':decisionKind==='returned'?'已回报 · 已退回':decisionKind==='codex'?'已回报 · Codex 已补齐':complete?'已回报 · 完整':'已回报 · 待核验';
-    return withHistory({tone:'settled',label,detail:'',kind},hist);
-  }
-  if(FAIL_END.has(status)){
-    if(r===undefined)return withHistory({tone:'unknown',label:'详情未载入',detail:'',kind:'not_loaded'},hist);
-    if(structuredOf(r))return withHistory({tone:'attention',label:'有内容 · 未正常交回',detail:'',kind:'failed_with_content'},hist);
-    return withHistory({tone:'none',label:'未取得结构化报告',detail:'',kind:'failed_no_structured'},hist);
-  }
-  if(status==='collecting')return withHistory({tone:'none',label:'收集中',detail:'',kind:'none'},hist);
-  if(ACTIVE_STATUSES.has(status))return withHistory({tone:'none',label:'尚无报告',detail:'',kind:'none'},hist);
-  return withHistory({tone:'unknown',label:'状态待确认',detail:'',kind:'none'},hist);
-}
-function verifyFact(v,hasDetail){
-  const d=decisionValue(v);
-  const res=(typeof v?.decision==='object'&&v.decision)?v.decision.resolution:undefined;
-  const hist=Boolean(v?.superseded_by);
-  if(d==='returned'&&res==='completed_by_codex')
-    return hist?{tone:'history',symbol:'✓',label:'Codex 曾补齐完成 · 已有后续轮',detail:''}:{tone:'ok',label:'Codex 已补齐完成',detail:''};
-  if(d==='accepted')
-    return hist?{tone:'history',symbol:'✓',label:'已验收 · 已有后续轮',detail:''}:{tone:'ok',label:'通过',detail:''};
-  if(d==='returned')
-    return hist?{tone:'history',symbol:'✕',label:'已退回 · 已有后续轮',detail:''}:{tone:'bad',label:'已退回',detail:''};
-  if(FAIL_END.has(v?.status))return {tone:'none',label:'不适用',detail:'本轮未正常交回，不能记录验收结论。'};
-  const rp=reportFact(v,hasDetail);
-  let detail='报告交回后由 Codex 核验。';
-  if(rp.kind==='formal')detail='等待你在 Codex 核验。';
-  else if(rp.kind==='pending'||rp.kind==='truncated')detail='报告未收齐，暂时无法核验。';
-  else if(v?.status==='unknown')detail='执行状态未确认，暂不能据报告核验。';
-  return {tone:'none',label:'未核验',detail};
-}
-
-function groupFor(current,hasDetail){
-  if(current.state!=='known')return 'attention';
-  const c=current.run;
-  const vf=verifyFact(c,hasDetail);
-  if(vf.tone==='ok'||c.status==='cancelled')return 'closed';
-  if(ACTIVE_STATUSES.has(c.status))return 'active';
-  return 'attention';
-}
-function reasonLine(current,hasDetail){
-  if(current.state==='not_loaded')return {text:'当前轮待加载',tone:'unknown'};
-  if(current.state==='pending')return {text:'当前轮待确认',tone:'unknown'};
-  const c=current.run;
-  const ex=execFact(c,hasDetail),rp=reportFact(c,hasDetail),vf=verifyFact(c,hasDetail);
-  if(vf.tone==='ok'&&rp.kind==='codex')return {text:'Codex 已补齐完成 · 原报告未采纳',tone:'text2'};
-  if(c.status==='unknown')return c?.reconciliation?.outcome==='confirmed_stopped'?{text:'已核对停止 · 旧结果未验收',tone:'attention'}:{text:'状态未知 · 暂不要重派',tone:'unknown'};
-  if(rp.kind==='failed_with_content')return {text:'执行失败 · 有部分报告内容',tone:'attention'};
-  if(ex.label.indexOf('预检阻止')===0)return {text:ex.label,tone:'bad'};
-  if(vf.label==='已退回')return {text:'已退回 · 待决定下一步',tone:'bad'};
-  if(rp.kind==='formal'&&vf.tone==='none'&&!FAIL_END.has(c.status))return {text:'已交回报告 · 待你在 Codex 核验',tone:'text2'};
-  if(ACTIVE_STATUSES.has(c.status))return {text:ex.detail?`执行中 · ${ex.detail}`:'执行中',tone:'active'};
-  const priority={bad:0,unknown:1,attention:2};
-  const facts=[ex,rp,vf].sort((a,b)=>(priority[a.tone]??3)-(priority[b.tone]??3));
-  const top=facts[0];
-  const tone=(top.tone==='settled'||top.tone==='history'||top.tone==='none')?'text2':top.tone;
-  return {text:top.label,tone};
-}
-function nextStepFor(current,hasDetail){
-  if(current.state!=='known')return null;
-  const c=current.run;
-  if(c.superseded_by)return null;
-  const ex=execFact(c,hasDetail),rp=reportFact(c,hasDetail),vf=verifyFact(c,hasDetail);
-  if(rp.kind==='formal'&&vf.tone==='none'&&!FAIL_END.has(c.status))
-    return {body:'报告已交回，请在 Codex 核验后记录结论。',prompt:`核验执行 ${c.run_id} 的报告，并记录 accepted 或 returned 及依据。`};
-  if(vf.label==='已退回')
-    return {body:'原报告已退回。可在 Codex 带着退回原因开启新一轮，或让 Codex 直接完成。',prompt:'按退回原因修正这项任务。'};
-  if(ex.label.indexOf('预检阻止')===0)
-    return {body:ex.label==='预检阻止 · Claude 未启动'?'Claude 未启动。先处理预检问题，再开启新一轮。':'Claude 启动状态未确认。先核对执行回执并处理预检问题，再开启新一轮。',
-      prompt:`检查执行 ${c.run_id} 的预检阻止原因，并给出处理步骤。`};
-  if(c.status==='blocked'&&ex.label==='Workflow 报告未完整交回'){
-    const codes=Array.isArray(c.result?.workflow_delivery?.reason_codes)?c.result.workflow_delivery.reason_codes.join('、'):'';
-    return {body:`尚未取得完整的 Workflow 执行与报告证据${codes?'（'+codes+'）':''}。父级摘要不能代替完整报告。`,
-      prompt:`核对执行 ${c.run_id} 的 workflow_delivery 原因码与已保留证据，决定是否开启新一轮；不要对本轮记录验收结论。`};
-  }
-  if(c.status==='blocked'&&ex.label==='执行者无法继续'){
-    const value=structuredOf(c.result)||{};
-    const summary=typeof value.summary==='string'?value.summary:'执行者需要补充材料或澄清规格。';
-    const unresolved=Array.isArray(value.unresolved)&&value.unresolved.length?` 未确认项：${value.unresolved.join('；')}`:'';
-    return {body:`${summary}${unresolved}`,prompt:'根据执行者说明补充材料或澄清规格后，再决定下一步。'};
-  }
-  if(rp.kind==='failed_with_content')
-    return {body:'执行未正常交回，报告内容仅作失败证据。先核对失败原因和文件状态。',prompt:`核对执行 ${c.run_id} 的失败原因与文件状态；不要对本轮记录验收结论。`};
-  if(rp.kind==='failed_no_structured')
-    return {body:'执行未正常结束，需核对错误和文件状态。',prompt:'核对这项执行失败的原因和文件状态。'};
-  if(c.status==='unknown'){
-    return c.reconciliation?.outcome==='confirmed_stopped'
-      ?{body:'旧轮已核对停止，历史结果仍未验收；可在 Codex 指定新的任务方向。',prompt:'核对恢复记录后，按新方向开启新一轮。'}
-      :{body:'状态无法确认，不代表已经失败。先在 Codex 核对实际进程和文件；确认之前不要重派，避免同一目录出现两个执行。',prompt:`检查执行 ${c.run_id} 是否仍在运行；核对进程与工作区文件后给出结论，暂不重派。`};
-  }
-  if(c.status==='cancelling')return {body:'停止请求不等于已经停止。等待停止回执；确认前不要开启新一轮。',prompt:null};
-  if(c.status==='cancelled')return {body:'本轮已停止。工作区外副作用仍需按任务核对。',prompt:'核对残留文件后，按新的任务方向继续。'};
-  if(gate.B2&&c.completion_matched===false)
-    return {body:'执行已结束，但报告不完整。先在 Codex 核对子阶段产物，再决定补收还是开启新一轮。',prompt:`核对执行 ${c.run_id} 的子阶段产物与正式报告：列出已生成和缺失的部分；报告未齐前不要重派。`};
-  if(rp.kind==='truncated')
-    return {body:'只收到了报告前半部分。请在 Codex 读取正式报告产物；不要根据截断内容判断通过或失败。',prompt:`读取执行 ${c.run_id} 的正式报告产物（不是通知文本）；如果产物不存在，说明缺失原因。`};
-  if(rp.kind==='contract_failed')
-    return {body:'报告未通过交付契约校验（按 failures 列出原因）。请在 Codex 退回或重开。',prompt:`按契约校验失败项处理执行 ${c.run_id} 的报告，并决定是否重开。`};
-  return null;
-}
-
-function pollingDelay(terminal,hidden,more){return hidden?(terminal?60000:15000):more?250:terminal?15000:1800;}
-function homePollingDelay(hasUnsettled,hidden){return hidden?60000:hasUnsettled?5000:15000;}
-function scheduleBackground(backfillQueue,observeQueue,prefetchQueue,budget){
-  const picks=[];
-  const reserveObserve=observeQueue.length>0?1:0;
-  let otherBudget=Math.max(0,budget-reserveObserve);
-  const other=backfillQueue.concat(prefetchQueue);
-  while(otherBudget>0&&other.length){picks.push(other.shift());otherBudget--;}
-  let observeBudget=reserveObserve+otherBudget;
-  while(observeBudget>0&&observeQueue.length){picks.push(observeQueue.shift());observeBudget--;}
-  return picks;
-}
-function reconcileLoadedOrder(existingOrder,freshPageIds){
-  const freshSet=new Set(freshPageIds);
-  const rest=existingOrder.filter(id=>!freshSet.has(id));
-  return [...freshPageIds,...rest].slice(0,MAX_LOADED);
-}
-function isNewCandidate(run,baseline,seenRunIds){
-  if(baseline.has(run.run_id))return false;
-  if(seenRunIds.has(run.run_id))return false;
-  return true;
-}
-function isNewTaskCandidate(run,existingTaskKeys){return !existingTaskKeys.has(taskKey(run));}
-function classifyEndpoint(kind){return (kind==='runs'||kind==='snapshot-selected'||kind==='events-selected')?'critical':'local';}
-function nextBackoff(current){if(!current)return 15000;if(current<30000)return 30000;return 60000;}
-function recoveryReady(flags,hasValidSelection){if(!hasValidSelection)return Boolean(flags.homeOk);return Boolean(flags.homeOk&&flags.snapshotOk&&flags.eventsOk);}
-
-const st={
-  run:hash.get('run')||'',epoch:0,cache:new Map(),loadedOrder:[],loadedSet:new Set(),nextOffset:0,hasMore:false,
-  extraIds:new Set(hash.get('run')?[hash.get('run')]:[]),
-  baseline:null,seenRunIds:new Set(),newTasks:[],knownTaskKeys:new Set(),
-  tab:'activity',artifactName:'',filter:'all',search:'',
-  selController:new AbortController(),bgController:new AbortController(),
-  homeTimer:null,selTimer:null,bgTimer:null,maintenanceTimer:null,homeInFlight:false,selInFlight:false,bgInFlight:false,
-  selRequestKey:null,requestSeq:0,homeSeq:0,recentHomeIds:new Set(),pagesLoaded:false,invalidRun:null,
-  backfillQueue:new Set(),observeCursorMap:new Map(),prefetchQueue:new Set(),visitedByTask:new Map(),backfillFailedAt:new Map(),backfillStopped:new Set(),observerOverflow:0,
-  maintenance:null,maintenanceAt:0,maintenanceFailure:null,loadingMore:false,view:'list',focusReturn:null,taskFocusReturn:null,
-  cardElements:[],roundTabElements:[],roundFocusRun:null,openRaw:new Set(),workflowPages:new Map(),
-};
-const conn={connGen:0,status:'connecting',homeOk:false,snapshotOk:false,eventsOk:false,retryDelay:0,validSelection:false,lastCriticalSyncAt:0,failureLabel:'连接已断开'};
-
-function sameSelection(id,epoch,gen){return id===st.run&&epoch===st.epoch&&gen===conn.connGen;}
-async function api(path,params,opts){
-  opts=opts||{};
-  const controller=opts.controller||st.bgController;
-  const u=new URL(path,location.origin);
-  Object.entries(params||{}).forEach(([k,v])=>u.searchParams.set(k,String(v)));
-  const r=await fetch(u,{headers:{Authorization:'Bearer '+(hash.get('token')||'')},cache:'no-store',
-    signal:AbortSignal.any([AbortSignal.timeout(10000),controller.signal])});
-  const d=await r.json();
-  if(!r.ok){const err=new Error(d.error||'同步失败');err.status=r.status;throw err;}
-  return d;
-}
-
-function buildTasks(){
-  const tasks=new Map();
-  for(const runId of new Set([...st.loadedOrder,...st.extraIds])){
-    const entry=st.cache.get(runId);
-    const {view}=viewOf(entry);
-    if(!view)continue;
-    const key=taskKey(view);
-    if(!tasks.has(key))tasks.set(key,[]);
-    tasks.get(key).push(view);
-  }
-  return tasks;
-}
-function projectName(cwd){if(!cwd)return '';const parts=String(cwd).split('/').filter(Boolean);return parts.at(-1)||cwd;}
-// A demand's place in the list is its latest execution's start time: a fresh round moves it,
-// while polling, activity, completion or a coordinator decision never does.
-function latestStartOf(runs){return runs.reduce((max,r)=>Math.max(max,stamp(r.started_at)),0);}
-function compareTaskOrder(a,b){
-  if(a.latestStart!==b.latestStart){
-    if(!a.latestStart)return 1;
-    if(!b.latestStart)return -1;
-    return b.latestStart-a.latestStart;
-  }
-  const ka=taskKey(a.rep),kb=taskKey(b.rep);
-  return ka<kb?-1:ka>kb?1:0;
-}
-function taskDisplay(runs){
-  const sorted=[...runs].sort((a,b)=>(a.revision||1)-(b.revision||1));
-  const current=currentRoundOf(sorted,st.cache);
-  const rep=current.state==='known'?current.run:sorted.at(-1);
-  const title=firstSentence(rep.objective)||rep.task_id||rep.run_id;
-  return {runs:sorted,current,title,project:projectName(rep.cwd),cwd:rep.cwd,rep,latestStart:latestStartOf(sorted)};
-}
-
-function connectionLabel(){return ['online','recovered'].includes(conn.status)?'已连接':conn.status==='offline'?conn.failureLabel:conn.status==='token_invalid'?'凭证失效':'连接中';}
-function renderConnection(){
-  $('drawerConnection').textContent=connectionLabel();
-  const pill=$('connection');
-  pill.classList.remove('offline','token-invalid');
-  if(conn.status==='offline'){pill.classList.add('offline');pill.textContent=conn.failureLabel+' · 显示 '+(conn.lastCriticalSyncAt?new Date(conn.lastCriticalSyncAt).toLocaleTimeString('zh-CN',{hour12:false}):'--')+' 的记录';}
-  else if(conn.status==='token_invalid'){pill.classList.add('token-invalid');pill.textContent='需要重新打开';}
-  else if(['online','recovered'].includes(conn.status))pill.textContent='已连接 · 同步于 '+(conn.lastCriticalSyncAt?new Date(conn.lastCriticalSyncAt).toLocaleTimeString('zh-CN',{hour12:false}):'--');
-  else pill.textContent='正在连接';
-}
-function renderBanner(){
-  const root=$('bannerArea');root.replaceChildren();
-  if(conn.status==='offline'){
-    const b=el('div',undefined,'banner warn');b.setAttribute('role','alert');
-    b.append(el('span',`本机服务${conn.failureLabel}，${conn.lastCriticalSyncAt?new Date(conn.lastCriticalSyncAt).toLocaleTimeString('zh-CN',{hour12:false}):'--'} 之后未同步。下方是上次同步的记录，不代表执行已停止，也不要据此重派。恢复：在 Codex 中说"重新打开 Claude 协作工作台"。`));
-    const copy=el('button','复制恢复指令','quiet small');copy.type='button';
-    copy.onclick=()=>copyWithFeedback(copy,'复制恢复指令','重新打开 Claude 协作工作台');
-    b.append(copy);root.append(b);
-  } else if(conn.status==='token_invalid'){
-    const b=el('div','访问凭证已失效，请在 Codex 中重新打开工作台以获得新链接。','banner warn');b.setAttribute('role','alert');root.append(b);
-  } else if(conn.status==='recovered'){
-    const b=el('div',undefined,'banner ok');b.setAttribute('role','status');
-    b.append(el('span',`已恢复读取，${new Date().toLocaleTimeString('zh-CN',{hour12:false})} 完成同步。以下为最近同步的记录；断线期间的活动以各任务的公开活动记录为准。页面只读取记录，没有发起任何执行。`));
-    const ack=el('button','知道了','quiet small');ack.type='button';ack.onclick=()=>{conn.status='online';renderBanner();};
-    b.append(ack);root.append(b);
-  }
-}
-function markCriticalFailure(kind,err){
-  const previous=conn.status;
-  conn.homeOk=false;conn.snapshotOk=false;conn.eventsOk=false;
-  if(err&&err.status===401){
-    conn.status='token_invalid';conn.retryDelay=0;
-    clearTimeout(st.homeTimer);clearTimeout(st.selTimer);clearTimeout(st.bgTimer);clearTimeout(st.maintenanceTimer);
-    renderConnection();renderBanner();renderDetail();return;
-  }
-  conn.retryDelay=previous==='offline'?nextBackoff(conn.retryDelay):15000;
-  conn.failureLabel=err?.status?'同步失败':err?.name==='TimeoutError'?'读取超时':'连接已断开';
-  conn.status='offline';renderConnection();renderBanner();renderDetail();
-}
-function noteCriticalSuccess(kind){
-  if(kind==='runs')conn.homeOk=true;
-  if(kind==='snapshot-selected')conn.snapshotOk=true;
-  if(kind==='events-selected')conn.eventsOk=true;
-  conn.lastCriticalSyncAt=Date.now();
-  if(conn.status==='offline'){
-    if(recoveryReady(conn,conn.validSelection)){conn.status='recovered';conn.retryDelay=0;renderBanner();}
-  } else if(conn.status==='connecting'){conn.status='online';}
-  renderConnection();if(st.run)renderDetail();
-}
-function clearValidSelection(){conn.validSelection=false;}
-
-// Refresh rebuilds these controls. Read focus before removal (the browser then moves it to body)
-// and restore it without scrolling, only when it was on one of root's own controls.
-function focusedControlKey(root){
-  const active=document.activeElement;
-  return active&&[...root.children].includes(active)?active.dataset.focusKey||null:null;
-}
-function restoreControlFocus(root,key,fallback){
-  if(!key)return;
-  const target=[...root.children].find(n=>n.dataset?.focusKey===key);
-  (target||fallback)?.focus({preventScroll:true});
-}
-function renderChips(tasksByGroup){
-  const root=$('filterChips');const focused=focusedControlKey(root);root.replaceChildren();
-  const total=tasksByGroup.attention.length+tasksByGroup.active.length+tasksByGroup.closed.length;
-  const defs=[['all','全部',total],['attention','需处理',tasksByGroup.attention.length],['active','进行中',tasksByGroup.active.length],['closed','已收口',tasksByGroup.closed.length]];
-  for(const [key,label,count] of defs){
-    const b=el('button',`${label} ${count}`,'chip');b.type='button';b.setAttribute('aria-pressed',String(st.filter===key));
-    b.dataset.focusKey=key;b.onclick=()=>{st.filter=key;renderList();};root.append(b);
-  }
-  restoreControlFocus(root,focused,null);
-}
-function renderArtifactButtons(root,defs,fallback){
-  const focused=focusedControlKey(root);
-  root.replaceChildren(...defs.map(([name,label])=>{
-    const b=el('button',label,'quiet small');b.type='button';b.dataset.focusKey=name;
-    b.onclick=()=>loadArtifact(name,$('technicalArtifact'));return b;
-  }));
-  restoreControlFocus(root,focused,fallback);
-}
-const COPY_FEEDBACK_MS=2000,COPY_RUN_LABEL='复制',COPY_PROMPT_LABEL='复制给 Codex';
-const copyTokens=new WeakMap();
-function resetCopyFeedback(button,label){copyTokens.set(button,(copyTokens.get(button)||0)+1);button.textContent=label;}
-async function copyWithFeedback(button,label,text){
-  // A newer click, a selection change or a changed prompt bumps the token, so a
-  // late clipboard result or timer cannot relabel the button for another run.
-  const token=(copyTokens.get(button)||0)+1;copyTokens.set(button,token);
-  let message='已复制';
-  try{await navigator.clipboard.writeText(text);}catch(_){message='请手动复制';}
-  if(copyTokens.get(button)!==token)return;
-  button.textContent=message;
-  setTimeout(()=>{if(copyTokens.get(button)===token)resetCopyFeedback(button,label);},COPY_FEEDBACK_MS);
-}
-function matchesSearch(display,query){
-  if(!query)return true;
-  const q=query.toLowerCase();
-  return [display.title,display.rep.task_id,display.rep.run_id,display.project].filter(Boolean).some(v=>String(v).toLowerCase().includes(q));
-}
-function renderList(){
-  const tasks=buildTasks();
-  const displays=[...tasks.values()].map(taskDisplay);
-  const groups={attention:[],active:[],closed:[]};
-  for(const d of displays){
-    const entry=st.cache.get(d.current.state==='known'?d.current.run.run_id:d.rep.run_id);
-    const hasDetail=entry?viewOf(entry).hasDetail:false;
-    d.group=groupFor(d.current,hasDetail);d.hasDetail=hasDetail;
-    groups[d.group].push(d);
-  }
-  renderChips(groups);
-  const projects=new Set(displays.map(d=>d.project).filter(Boolean));
-  const projectSelect=$('projectFilter');
-  const currentProjects=[...projectSelect.options].slice(1).map(o=>o.value).join(',');
-  if(currentProjects!==[...projects].sort().join(',')){
-    const keep=projectSelect.value;
-    const allOption=document.createElement('option');allOption.value='';allOption.textContent='全部项目';
-    projectSelect.replaceChildren(allOption);
-    for(const p of [...projects].sort()){const opt=document.createElement('option');opt.value=p;opt.textContent=p;projectSelect.append(opt);}
-    projectSelect.value=keep&&projects.has(keep)?keep:'';
-  }
-  const projectFilterValue=projectSelect.value;
-  const root=$('taskGroups');
-  const focusedKey=document.activeElement?.dataset?.taskKey;
-  root.replaceChildren();st.cardElements=[];
-  // Chips only narrow membership; every view keeps the same latest-start order across statuses.
-  const list=displays.filter(d=>(st.filter==='all'||d.group===st.filter)&&(!projectFilterValue||d.project===projectFilterValue)&&matchesSearch(d,st.search));
-  list.sort(compareTaskOrder);
-  let shown=0;
-  for(const d of list){shown++;const card=taskCard(d);st.cardElements.push(card);root.append(card);}
-  const cards=st.cardElements;
-  const rovingCard=cards.find(c=>c.dataset.taskKey===focusedKey)||cards.find(c=>c.getAttribute('aria-current')==='true')||cards[0];
-  for(const card of cards)card.setAttribute('tabindex',card===rovingCard?'0':'-1');
-  if(focusedKey&&rovingCard?.dataset.taskKey===focusedKey)rovingCard.focus({preventScroll:true});
-  if(!shown){
-    if(displays.length)root.append(el('p','已载入的记录中没有匹配的任务。更早的记录需先"加载更早记录"。','meta'));
-    else if(st.baseline){
-      // Wide layouts show the same guidance in the detail pane.
-      const guide=el('div',undefined,'list-empty narrow-block');
-      guide.append(el('p','还没有执行任务','list-empty-title'),el('p','在 Codex 描述要做的事；这里会显示真实活动和核验结果。','meta'));
-      root.append(guide);
-    } else root.append(el('p',['offline','token_invalid'].includes(conn.status)?'尚未读取到任务记录。':'正在读取任务记录…','meta'));
-  }
-  const runCount=st.loadedOrder.length,taskCount=tasks.size;
-  $('listFooter').textContent=`已载入 ${taskCount} 个任务 · ${runCount} 轮执行 · 计数不含未载入历史${st.observerOverflow?' · 另有 '+st.observerOverflow+' 个较早任务未实时刷新':''}`;
-  $('loadMoreBtn').disabled=!st.hasMore||st.loadedOrder.length>=MAX_LOADED;
-  $('loadMoreBtn').textContent=st.loadedOrder.length>=MAX_LOADED?'已达到载入上限':st.hasMore?'加载更早记录':'没有更早记录';
-  renderNewTaskNotice();
-}
-function taskCard(d){
-  const b=el('button',undefined,'task-card');b.type='button';
-  b.dataset.taskKey=taskKey(d.rep);
-  if(conn.status==='offline'||conn.status==='token_invalid')b.classList.add('offline-card');
-  const isSelected=d.runs.some(r=>r.run_id===st.run);
-  b.setAttribute('aria-current',String(isSelected));
-  const titleRow=el('div',undefined,'card-title');titleRow.append(document.createTextNode(d.title));
-  if(st.newTasks.includes(taskKey(d.rep)))titleRow.append(el('span','新','card-new-tag'));
-  const reason=reasonLine(d.current,d.hasDetail);
-  const reasonRow=el('div',reason.text,'card-reason');
-  reasonRow.style.color=`var(--${reason.tone==='text2'?'text-2':reason.tone+'-fg'})`;
-  const flagsRow=el('div',undefined,'card-flags');
-  if(d.current.state==='known'){
-    const ex=execFact(d.current.run,d.hasDetail),rp=reportFact(d.current.run,d.hasDetail),vf=verifyFact(d.current.run,d.hasDetail);
-    if(vf.tone==='ok'&&!['online','recovered'].includes(conn.status)){
-      vf.tone='unknown';vf.symbol='?';vf.label='已记录结论 · 同步待确认';
+async function loadEvents(gen) {
+  for (let page = 0; page < 10; page++) {
+    let data;
+    try {
+      data = await api(`/api/events?run_id=${enc(S.sel)}&after=${S.cursor}&limit=200`);
+    } catch (error) {
+      return;
     }
-    for(const [name,fact] of [['执行',ex],['报告',rp],['核验',vf]]){
-      const item=el('span',undefined,'flag-item');
-      const flag=el('span',toneSymbol(fact)||'–','flag tone-'+fact.tone);
-      flag.setAttribute('aria-hidden','true');
-      item.append(flag,el('span',name,'visually-hidden'),document.createTextNode(' '+name));
-      flagsRow.append(item);
+    if (gen !== S.gen) return;
+    const fresh = (data.events || []).filter(e => typeof e.seq === 'number' && e.seq > S.cursor);
+    S.events.push(...fresh);
+    if (S.events.length > MAX_EVENTS) {
+      S.events.splice(0, S.events.length - MAX_EVENTS);
+      S.evTrimmed = true;
     }
+    S.cursor = Math.max(S.cursor, data.next_cursor || 0, ...fresh.map(e => e.seq));
+    if (!data.has_more || !fresh.length) break;
   }
-  const meta=[];
-  if(!$('projectFilter').value)meta.push(d.project);
-  if(d.rep.revision>1)meta.push(`第 ${d.rep.revision} 轮`);
-  const summaryAt=st.cache.get(d.rep.run_id)?.summaryAt||0;
-  const fresh=summaryAt&&(Date.now()-summaryAt)<60000;
-  const timeText=conn.status==='offline'?'断线前':!fresh&&summaryAt?'同步于 '+new Date(summaryAt).toLocaleTimeString('zh-CN',{hour12:false}):(d.rep.last_activity_at||d.rep.ended_at||d.rep.started_at)?activityTimeText(stamp(d.rep.last_activity_at||d.rep.ended_at||d.rep.started_at)):'';
-  meta.push(timeText);
-  flagsRow.append(el('span',meta.filter(Boolean).join(' · '),'card-meta'));
-  b.append(titleRow,reasonRow,flagsRow);
-  b.onclick=()=>{selectTask(d);};
-  return b;
+  if (S.artName === 'events') renderArtifact();
 }
-function taskListKeydown(e){
-  const cards=st.cardElements;if(!cards.length)return;
-  const index=cards.indexOf(document.activeElement);
-  let next=null;
-  if(e.key==='ArrowDown')next=cards[Math.min(cards.length-1,index+1)];
-  else if(e.key==='ArrowUp')next=cards[Math.max(0,index-1)];
-  else if(e.key==='Home')next=cards[0];
-  else if(e.key==='End')next=cards.at(-1);
-  else return;
-  e.preventDefault();
-  for(const card of cards)card.setAttribute('tabindex',card===next?'0':'-1');
-  next.focus();
+async function loadArtifact(name, more) {
+  const run = S.sel, gen = S.gen, seq = ++S.artSeq;
+  if (!more || !S.art || S.art.name !== name) S.art = {name, parts: [], next: 0, end: false, loading: true};
+  const art = S.art;
+  art.loading = true;
+  art.error = '';
+  renderArtifact();
+  try {
+    const data = await api(`/api/artifact?run_id=${enc(run)}&name=${enc(name)}&offset=${art.next}&limit=${PAGE_BYTES}`);
+    if (gen !== S.gen || seq !== S.artSeq) return;
+    art.available = !!data.available;
+    if (art.available) {
+      Object.assign(art, {size: data.size_bytes, sha: data.sha256, next: data.next_offset, end: !!data.end_of_artifact});
+      if (typeof data.content === 'string') art.parts.push(data.content);
+      else art.json = data.content;
+    }
+  } catch (error) {
+    if (gen !== S.gen || seq !== S.artSeq) return;
+    art.error = error.message;
+  }
+  art.loading = false;
+  renderArtifact();
 }
-function selectTask(d){
-  const target=d.current.state==='known'?d.current.run.run_id:d.rep.run_id;
-  st.newTasks=st.newTasks.filter(k=>k!==taskKey(d.rep));
-  st.taskFocusReturn=document.activeElement;
-  selectRun(target);
-  setView('detail');
-}
-function renderNewTaskNotice(){
-  const root=$('newTaskNotice');const focused=focusedControlKey(root);
-  const selectedCard=()=>st.cardElements.find(c=>c.getAttribute('aria-current')==='true')||st.cardElements[0]||null;
-  if(!st.newTasks.length){root.classList.add('hidden');root.replaceChildren();restoreControlFocus(root,focused,selectedCard());return;}
-  root.classList.remove('hidden');root.replaceChildren();
-  const taskRuns=st.newTasks.length===1?buildTasks().get(st.newTasks[0])||[]:[];
-  const confirmedStarted=taskRuns.some(r=>{const e=st.cache.get(r.run_id);return viewOf(e).hasDetail&&e.detail.claude_started===true;});
-  const text=st.newTasks.length===1?`新增任务：${st.newTasks[0].split('\u0000')[0]} · ${confirmedStarted?'Claude 已开始执行':'执行已创建'}。不会打断你当前查看的报告。`:`${st.newTasks.length} 个新增任务`;
-  root.append(el('span',text));
-  const btn=el('button',st.newTasks.length===1?'查看':'查看最新','quiet small');btn.type='button';btn.dataset.focusKey='view';
-  btn.onclick=()=>{const key=st.newTasks.at(-1);const tasks=buildTasks();const runs=tasks.get(key);if(runs){const d=taskDisplay(runs);selectTask(d);}st.newTasks=[];renderNewTaskNotice();};
-  root.append(btn);
-  restoreControlFocus(root,focused,selectedCard());
+function openArtifact(name) {
+  S.artName = name;
+  S.artSeq++;
+  S.art = null;
+  if (name === 'events') renderArtifact();
+  else loadArtifact(name, false);
 }
 
-function setView(view){st.view=view;document.documentElement.setAttribute('data-view',view);}
-function selectRun(id,updateHash=true){
-  if(id===st.run)return;
-  st.selController.abort();st.selController=new AbortController();
-  st.selInFlight=false;st.selRequestKey=null;
-  st.run=id;st.epoch++;st.artifactName='';st.invalidRun=null;
-  $('technicalArtifact').textContent='';
-  resetCopyFeedback($('copyRunId'),COPY_RUN_LABEL);resetCopyFeedback($('copyPromptBtn'),COPY_PROMPT_LABEL);
-  if(id&&!st.loadedSet.has(id))st.extraIds.add(id);
-  const entry=st.cache.get(id);
-  if(entry){entry.events=entry.events||[];entry.cursor=entry.cursor||0;}
-  conn.validSelection=Boolean(id);conn.snapshotOk=false;conn.eventsOk=false;
-  if(updateHash){hash.set('run',id);history.replaceState(null,'','#'+hash.toString());}
-  renderList();renderDetail();scheduleSelected(0);
+function renderList() {
+  const groups = groupTasks([...S.runs.values()]);
+  const sig = JSON.stringify([S.sel, S.hasMore, S.listLoaded, groups.map(g => [g.task_id, g.runs.length, g.latest.run_id,
+    g.latest.status, g.latest.title, g.latest.decision && [g.latest.decision.verdict, g.latest.decision.next]])]);
+  if (sig === S.listSig) return;
+  S.listSig = sig;
+  const box = $('taskList');
+  if (!groups.length) box.replaceChildren(el('p', 'muted', S.listLoaded ? '还没有任务记录。' : '正在读取任务…'));
+  else box.replaceChildren(...groups.map(taskCard));
+  $('moreRuns').hidden = !S.hasMore;
+  $('listMeta').textContent = groups.length ? `${groups.length} 个` + (S.hasMore ? '（仅已载入）' : '') : '';
 }
-
-function factCard(name,fact,stale){
-  const card=el('div',undefined,'fact-card');card.dataset.tone=fact.tone;
-  card.append(el('div',name,'fact-name'));
-  const value=el('div',(toneSymbol(fact))+' '+fact.label,'fact-value');
-  card.append(value);
-  if(fact.detail)card.append(el('div',fact.detail,'fact-note'));
-  if(stale)card.append(el('div','最近读取的记录 · 可能已过时','fact-stale'));
+function taskCard(group) {
+  const r = group.latest;
+  const card = el('button', 'card',
+    el('div', 'card-title', r.title || group.task_id),
+    el('div', 'muted', `${group.task_id} · ${label(L.kind, r.kind)} / ${label(L.profile, r.profile)} · 第 ${r.round ?? '?'} 轮`
+      + (group.runs.length > 1 ? `（已载入 ${group.runs.length} 轮）` : '')),
+    el('div', 'badges', badge(statusText(r), statusTone(r.status)), badge(verdictText(r.decision), verdictTone(r.decision))));
+  card.type = 'button';
+  card.setAttribute('aria-current', String(group.runs.some(x => x.run_id === S.sel)));
+  card.addEventListener('click', () => selectRun(r.run_id));
   return card;
 }
-function reportKindText(kind){
-  return ({not_loaded:'详情未载入',none:'无报告',formal:'已回报 · 待核验',accepted:'已通过核验',returned:'原 Claude 报告（已退回）',
-    codex:'Codex 补齐后的结果',failed_with_content:'有内容 · 未正常交回',failed_no_structured:'无结构化报告',
-    truncated:'报告被截断',pending:'待收集',contract_failed:'报告未通过契约校验',
-    unknown_with_content:'执行状态未知 · 已记录内容',unknown_no_structured:'执行状态未知 · 无结构化报告'})[kind]||'';
+
+function renderRun() {
+  $('empty').hidden = !!S.sel;
+  $('runView').hidden = !S.sel;
+  if (!S.sel) return;
+  const s = S.snap;
+  const err = $('runError');
+  err.hidden = !S.runError;
+  err.textContent = S.runError;
+  $('runBody').hidden = !s;
+  if (!s) {
+    $('roundTabs').replaceChildren();
+    S.tabSig = '';
+    $('runTitle').textContent = S.runError ? S.sel : '正在读取 ' + S.sel + ' …';
+    $('runFacts').replaceChildren();
+    return;
+  }
+  const o = s.outcome || null;
+  renderHeader(s, o);
+  const sig = JSON.stringify([s.run_id, s.status, s.decision, o, s.live, s.decision_history_count,
+    s.active && s.last_meaningful_event && s.last_meaningful_event.seq]);
+  if (sig === S.runSig) return;
+  S.runSig = sig;
+  renderBoxes(s, o);
+  renderWarnings(s, o);
+  renderChanges(s, o);
+  renderArtTabs();
+  if (!S.art && S.artName === 'events') renderArtifact();
 }
-function boundedJson(value){
-  try{const text=JSON.stringify(value);return text.length>200?text.slice(0,200)+'…':text;}catch(_){return '无法显示的记录';}
+function renderHeader(s, o) {
+  const group = groupTasks([...S.runs.values()].filter(r => r.task_id === s.task_id))[0];
+  const runs = group ? group.runs : [s];
+  const tabSig = JSON.stringify([s.run_id, runs.map(r => [r.run_id, r.round, r.status, r.decision && r.decision.verdict])]);
+  if (tabSig !== S.tabSig) {
+    S.tabSig = tabSig;
+    $('roundTabs').replaceChildren(...runs.map(roundTab));
+  }
+  $('runTitle').textContent = s.title || s.task_id || s.run_id;
+  const actual = o ? (o.models || []).join(', ') : s.live ? ((s.live.models || []).join(', ') || s.live.initialized_model) : '';
+  const fact = (key, value) => el('span', null, key + ' ', el('b', null, value));
+  const facts = [fact('任务', s.task_id ?? '—'), fact('运行', s.run_id),
+    fact('类型', `${label(L.kind, s.kind)} / ${label(L.profile, s.profile)} · 第 ${s.round ?? '?'} 轮`),
+    fact('模型', `请求 ${s.model || '—'} · effort ${s.effort || '—'} · 实际 ${actual || '待回报'}`),
+    fact('用时', fmtDur(s.elapsed_seconds) + (s.active && s.timeout_seconds ? ' / 上限 ' + fmtDur(s.timeout_seconds) : '')),
+    fact('开始', fmtTime(s.started_at))];
+  if (s.continue_from) {
+    const link = el('button', 'link', s.continue_from);
+    link.type = 'button';
+    link.addEventListener('click', () => selectRun(s.continue_from));
+    facts.push(el('span', null, '接续自 ', link));
+  }
+  $('runFacts').replaceChildren(...facts);
 }
-function denialText(item){
-  if(typeof item==='string')return first(item)||'（空）';
-  if(!item||typeof item!=='object')return String(item);
-  if(Array.isArray(item.permission_denials)&&item.permission_denials.length)return item.permission_denials.map(denialText).join('；');
-  const pick=keys=>keys.map(k=>item[k]).find(v=>typeof v==='string'&&v.trim());
-  const input=item.tool_input&&typeof item.tool_input==='object'?item.tool_input:{};
-  const tool=pick(['tool_name','toolName','tool']);
-  const target=['file_path','path','pattern'].map(k=>input[k]).find(v=>typeof v==='string'&&v.trim());
-  const reason=pick(['reason','message','permissionDecisionReason','decision_reason']);
-  if(tool||reason)return [tool,target,reason].filter(Boolean).map(first).join(' · ');
-  return boundedJson(item);
+function roundTab(r, index, runs) {
+  const twin = runs.filter(x => x.round === r.round).length > 1;
+  const tag = r.status === 'running' ? '运行中' : r.decision ? label(L.verdict, r.decision.verdict) : '待核验';
+  const tab = el('button', 'tab', `第 ${r.round ?? '?'} 轮` + (twin ? ' · ' + r.run_id.slice(-4) : '') + ' · ' + tag);
+  tab.type = 'button';
+  tab.setAttribute('role', 'tab');
+  tab.setAttribute('aria-selected', String(r.run_id === S.sel));
+  tab.addEventListener('click', () => selectRun(r.run_id));
+  return tab;
 }
-function workflowPageKey(runId,index,name='workflow_report'){return runId+'\u0000'+name+'\u0000'+index;}
-function renderReviewReport(box,view,focusKey){
-  const report=view.result?.review_report;
-  if(!report||typeof report!=='object')return;
-  const section=el('div',undefined,'workflow-report');
-  section.append(el('h3','完整审查报告'));
-  if(report.status!=='delivered'){section.append(el('p','完整报告未收集；父级摘要不能代替它。','meta'));box.append(section);return;}
-  section.append(el('p',`${report.bytes} 字节 · SHA-256 ${String(report.sha256||'').slice(0,12)}… · 内容仍需 Codex 核验。`,'meta'));
-  const page=st.workflowPages.get(workflowPageKey(view.run_id,0,'review_report'));
-  if(page?.text)section.append(el('div',page.text,'artifact'));
-  if(page?.error)section.append(el('p',page.error,'meta'));
-  let button=null;
-  if(page&&page.next===null)section.append(el('p',`已载入全文 ${page.total} 字节；每页均由本机服务按记录的 SHA-256 校验。`,'meta'));
-  else{button=el('button',page?.loading?'正在读取…':page?'继续加载':'加载完整报告','quiet small');button.type='button';button.dataset.focusKey='review-report';button.disabled=Boolean(page?.loading);button.onclick=()=>loadWorkflowPage(view.run_id,0,'review_report');section.append(button);}
-  box.append(section);if(button&&focusKey===button.dataset.focusKey)button.focus({preventScroll:true});
+function renderBoxes(s, o) {
+  const running = s.status === 'running';
+  const stopped = (o && o.process_stopped) || s.process_stopped;
+  const last = s.last_meaningful_event;
+  const cost = o && typeof o.cost_usd === 'number' ? '$' + o.cost_usd.toFixed(4) + '（CLI 估算）' : '—';
+  const boxRun = $('boxRun');
+  boxRun.className = 'box ' + (statusTone(s.status).replace(' pulse', '') || '');
+  boxRun.replaceChildren(el('h2', null, '运行事实'), el('p', 'big', statusText(s)), kv([
+    ['最近活动', running && last ? last.summary : undefined],
+    ['进程', running ? '运行中' : label(L.stop, stopped, '未记录')],
+    ['耗时', o ? fmtDur(o.duration_seconds) : fmtDur(s.elapsed_seconds) + (running ? '（进行中）' : '')],
+    ['费用', running ? '运行结束后汇总' : cost],
+    ['说明', o && o.note ? o.note : undefined]]));
+  const claimed = o ? o.claimed_status : s.claimed_status;
+  const summary = (o && o.summary) || s.summary;
+  fill($('boxClaim'), el('h2', null, 'Claude 自称'),
+    el('p', 'big', claimed ? label(L.claim, claimed) : running ? '运行中，尚未回报' : '未给出（结果头缺失或无效）'),
+    summary ? el('p', 'verbatim', summary) : null,
+    el('p', 'muted', '这是 Claude 自己的说法，不是核验结论。'));
+  const d = s.decision;
+  const boxDecision = $('boxDecision');
+  boxDecision.className = 'box ' + verdictTone(d);
+  if (!d || !d.verdict) {
+    boxDecision.replaceChildren(el('h2', null, 'Codex 裁决'), el('p', 'big', '尚未核验'),
+      el('p', 'muted', running ? '运行结束后由 Codex 核验。' : 'Codex 还没有给出裁决；运行事实和 Claude 自称都不等于验收。'));
+    return;
+  }
+  const items = (d.item_decisions || []).map(x => `${x.id}：${label(L.item, x.disposition)}`);
+  boxDecision.replaceChildren(el('h2', null, 'Codex 裁决'), el('p', 'big', '报告：' + label(L.verdict, d.verdict)), kv([
+    ['下一步', label(L.next, d.next, '未注明')],
+    ['说明', d.note ? el('span', 'verbatim', d.note) : undefined],
+    ['核验依据', d.evidence && d.evidence.length ? list(d.evidence) : '未列出'],
+    ['逐项', items.length ? list(items) : undefined],
+    ['已确认受保护路径', d.protected_confirmed && d.protected_confirmed.length ? list(d.protected_confirmed, 'mono') : undefined],
+    ['记录于', fmtTime(d.recorded_at)],
+    ['历史', s.decision_history_count > 1 ? `共 ${s.decision_history_count} 次裁决，显示最新一次` : undefined]]));
 }
-// The captured Workflow output is shown apart from the parent summary, page by page from the
-// hash-checked artifact; it is evidence for Codex, never an acceptance by itself.
-function renderWorkflowReport(box,view,focusKey){
-  const delivery=view.result?.workflow_delivery;
-  if(!delivery||typeof delivery!=='object')return;
-  const section=el('div',undefined,'workflow-report');
-  const codes=Array.isArray(delivery.reason_codes)?delivery.reason_codes:[];
-  section.append(el('h3','Workflow 完整报告（与父级摘要分开保存）'));
-  section.append(el('p',delivery.status==='delivered'?'每个 Workflow 调用的完整输出都已从绑定文件收齐；内容仍需 Codex 核验。':`完整报告未交付${codes.length?'：'+codes.join('、'):''}。父级摘要不能代替它。`,'meta'));
-  const invocations=Array.isArray(delivery.invocations)?delivery.invocations:[];
-  let refocus=null;
-  invocations.forEach((item,index)=>{
-    const collection=item&&typeof item.collection==='object'&&item.collection?item.collection:{};
-    if(collection.status!=='collected'){
-      section.append(el('p',`调用 ${index+1}：未收集${collection.reason_code?'（'+collection.reason_code+'）':''}`,'meta'));return;
-    }
-    const report=collection.report||{};
-    if(report.representation==='json_value')section.append(el('p','此报告以 JSON 展示对象或数组；原始输出文件另行完整保留。','meta'));
-    const page=st.workflowPages.get(workflowPageKey(view.run_id,index));
-    section.append(el('p',`调用 ${index+1}：${report.size_bytes} 字节 · SHA-256 ${String(report.sha256||'').slice(0,12)}…`,'meta'));
-    if(page?.text)section.append(el('div',page.text,'artifact'));
-    if(page?.error)section.append(el('p',page.error,'meta'));
-    if(page&&page.next===null){section.append(el('p',`已载入全文 ${page.total} 字节；每页均由本机服务按记录的 SHA-256 校验。`,'meta'));return;}
-    const b=el('button',page?.loading?'正在读取…':page?'继续加载':'加载完整报告','quiet small');
-    b.type='button';b.dataset.focusKey='workflow-'+index;b.disabled=Boolean(page?.loading);
-    b.onclick=()=>loadWorkflowPage(view.run_id,index);
-    section.append(b);
-    if(focusKey===b.dataset.focusKey)refocus=b;
+function renderWarnings(s, o) {
+  const raw = o ? (o.warnings || []) : (s.warnings || []);
+  const warnings = raw.map(w => (typeof w === 'string' ? {code: w} : w || {}));
+  const box = $('warnList');
+  if (!warnings.length) {
+    box.replaceChildren(el('p', 'muted', s.status === 'running' ? '运行结束后汇总提醒。' : '没有提醒。'));
+    return;
+  }
+  box.replaceChildren(...warnings.map(w => el('div', 'warn',
+    el('div', null, el('b', null, warnLabel(w.code)), ' ', el('code', 'muted', w.code || '')),
+    w.detail ? el('p', 'muted verbatim', w.detail) : null,
+    Array.isArray(w.paths) && w.paths.length ? list(w.paths.map(String), 'mono') : null,
+    Array.isArray(w.items) && w.items.length ? list(w.items.map(item => el('span', 'verbatim', String(item)))) : null)));
+}
+function renderChanges(s, o) {
+  const box = $('changeBody');
+  if (!o) {
+    box.replaceChildren(el('p', 'muted', s.status === 'running' ? '运行结束后生成改动清单。' : '没有运行结果记录。'));
+    return;
+  }
+  const c = o.changes;
+  if (!c) {
+    box.replaceChildren(el('p', 'muted', s.profile === 'readonly' ? '只读运行，没有改动。' : '没有改动记录。'));
+    return;
+  }
+  const files = Array.isArray(c.files) ? c.files : [];
+  const tone = {in_scope: '', outside_hint: 't-warn', protected: 't-bad'};
+  const parts = [el('p', null, `${c.file_count ?? files.length} 个文件 · +${c.insertions ?? 0} −${c.deletions ?? 0}`)];
+  if (files.length) {
+    parts.push(table(['文件', '变化', '行数', '归类'], files.map(f => [el('code', null, f.path || '—'), label(L.file, f.status),
+      `+${f.insertions ?? 0} −${f.deletions ?? 0}`, badge(label(L.cls, f['class'], '未归类'), tone[f['class']] || '')])));
+  }
+  if (c.apply_hint) {
+    const note = el('span', 'muted');
+    const button = el('button', null, '复制命令');
+    button.type = 'button';
+    const command = c.check_hint ? `${c.check_hint} && ${c.apply_hint}` : c.apply_hint;
+    button.addEventListener('click', () => copyText(command, note));
+    parts.push(el('p', 'muted', '把待交付补丁先检查再应用到原工作区（由你或 Codex 决定是否执行）：'),
+      el('div', 'apply', el('code', null, command), button, note));
+  }
+  if (c.delivery_patch) parts.push(el('p', 'muted', `待交付补丁含此前尚未应用到原仓库的全部改动（${c.delivery_file_count ?? 0} 个文件），见原始材料“待交付 Patch”。`));
+  box.replaceChildren(...parts);
+}
+function copyText(text, note) {
+  const done = message => { note.textContent = message; };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(() => done('已复制'), () => done('复制失败，请手动选中命令'));
+  } else {
+    done('浏览器不支持自动复制，请手动选中命令');
+  }
+}
+
+function renderArtTabs() {
+  const o = S.snap && S.snap.outcome;
+  const shown = ARTS.filter(([name]) => name !== 'delivery_patch' || (o && o.changes && o.changes.delivery_patch));
+  $('artTabs').replaceChildren(...shown.map(([name, text]) => {
+    const tab = el('button', 'tab', text);
+    tab.type = 'button';
+    tab.setAttribute('role', 'tab');
+    tab.setAttribute('aria-selected', String(name === S.artName));
+    tab.addEventListener('click', () => openArtifact(name));
+    return tab;
+  }));
+}
+function renderArtifact() {
+  renderArtTabs();
+  const meta = $('artMeta'), body = $('artBody'), more = $('artMore');
+  more.hidden = true;
+  if (S.artName === 'events') {
+    meta.replaceChildren(el('span', null, `共 ${S.events.length} 条公开活动`
+      + (S.evTrimmed ? `（早于这些的活动已丢弃，只保留最近 ${MAX_EVENTS} 条）` : '')));
+    body.replaceChildren(eventsView());
+    return;
+  }
+  const a = S.art;
+  if (!a) { meta.replaceChildren(); body.replaceChildren(); return; }
+  if (a.error && !a.parts.length && a.json === undefined) {
+    meta.replaceChildren();
+    body.replaceChildren(el('p', 'muted', '读取失败：' + a.error));
+    return;
+  }
+  if (a.available === false) {
+    meta.replaceChildren();
+    body.replaceChildren(el('p', 'muted', S.snap && S.snap.active ? '运行中，这份材料还没有生成。' : '本轮没有这份材料。'));
+    return;
+  }
+  if (a.available === undefined) {
+    meta.replaceChildren();
+    body.replaceChildren(el('p', 'muted', '正在读取…'));
+    return;
+  }
+  const o = S.snap && S.snap.outcome;
+  const recorded = o ? {report: o.report && o.report.sha256, brief: o.brief && o.brief.sha256}[a.name] : null;
+  fill(meta,
+    a.name === 'brief' ? el('b', null, 'Claude 实际收到的任务书') : null,
+    el('span', null, `大小 ${fmtBytes(a.size)} · 已载入 ${fmtBytes(a.next)}`),
+    el('span', null, 'sha256 ', el('code', null, a.sha || '—')),
+    recorded ? el('span', null, recorded === a.sha ? '与运行记录一致' : '与运行记录的 sha256 不一致') : null,
+    a.error ? el('span', null, '继续读取失败：' + a.error) : null);
+  if (!a.end) {
+    more.hidden = false;
+    more.disabled = !!a.loading;
+    more.textContent = a.loading ? '加载中…' : `加载更多（${fmtBytes(a.next)} / ${fmtBytes(a.size)}）`;
+  }
+  body.replaceChildren(artView(a));
+}
+function artView(a) {
+  const text = a.parts.join('');
+  let data = a.json;
+  if (data === undefined && a.end && JSON_ARTS.has(a.name)) {
+    try { data = JSON.parse(text); } catch (error) { data = undefined; }
+  }
+  if (data !== undefined && data !== null && typeof data === 'object') {
+    if (a.name === 'packet') return packetView(data);
+    if (a.name === 'inputs') return inputsView(data);
+    if (a.name === 'instruction_layer') return layerView(data);
+    return el('pre', 'view', JSON.stringify(data, null, 2));
+  }
+  if (data !== undefined) return el('pre', 'view', JSON.stringify(data));
+  if (a.name === 'patch' || a.name === 'delivery_patch') return diffView(text);
+  return el('pre', 'view', text);
+}
+function diffView(text) {
+  const pre = el('pre', 'view');
+  const lines = text.split('\n');
+  if (lines.length > 6000) {
+    pre.append(document.createTextNode(text));
+    return pre;
+  }
+  lines.forEach((line, i) => {
+    const content = line + (i < lines.length - 1 ? '\n' : '');
+    const cls = /^(\+\+\+|---)( |$)|^@@|^diff /.test(line) ? 'hunk' : line[0] === '+' ? 'add' : line[0] === '-' ? 'del' : '';
+    pre.append(cls ? el('span', cls, content) : document.createTextNode(content));
   });
-  box.append(section);
-  refocus?.focus({preventScroll:true});
+  return pre;
 }
-async function loadWorkflowPage(runId,index,name='workflow_report'){
-  const key=workflowPageKey(runId,index,name);
-  const page=st.workflowPages.get(key)||{text:'',next:0,total:null,sha:null,loading:false,error:''};
-  if(page.loading||page.next===null)return;
-  page.loading=true;page.error='';st.workflowPages.set(key,page);
-  if(st.run===runId)renderDetail();
-  try{
-    const a=await api('/api/artifact',{run_id:runId,name,index,offset:page.next,limit:65536},{});
-    if(!a.available)page.error='完整报告暂不可读（'+(a.state||'unknown')+'）；请核对报告交付记录。';
-    else if(a.offset_bytes!==page.next||(page.sha!==null&&a.sha256!==page.sha)||(page.total!==null&&a.total_bytes!==page.total))
-      page.error='分页与已载入部分不一致，已停止拼接；请核对报告产物。';
-    else{page.text+=a.content;page.next=a.next_offset_bytes;page.total=a.total_bytes;page.sha=a.sha256;}
-  }catch(_){page.error='完整报告读取失败，可稍后重试。';}
-  page.loading=false;
-  if(st.run===runId)renderDetail();
-}
-function renderReport(view,hasDetail){
-  const rp=reportFact(view,hasDetail);
-  $('reportTag').textContent=reportKindText(rp.kind)+(view.superseded_by?' · 历史':'');
-  const focused=document.activeElement?.dataset?.focusKey;
-  const workflowFocus=typeof focused==='string'&&(focused.startsWith('workflow-')||focused==='review-report')?focused:null;
-  const box=$('reportBody');box.className='report-box tone-'+rp.tone;box.replaceChildren();
-  const result=hasDetail?view.result:undefined;
-  const structured=structuredOf(result);
-  const d=(typeof view.decision==='object'&&view.decision)?view.decision:null;
-  if(rp.kind==='not_loaded'){box.append(el('p','报告详情未载入，正在读取…'));}
-  else if(rp.kind==='none'){
-    const text=ACTIVE_STATUSES.has(view.status)?'执行中，尚无结构化报告。':view.status==='collecting'?'正在收集结果。':view.status==='cancelling'?'已请求停止，本轮不再期待报告。':'本轮未取得结构化报告；可查看活动与回执。';
-    box.append(el('p',text));
+function packetView(p) {
+  const msgs = Array.isArray(p.user_messages) ? p.user_messages : [];
+  const box = el('div', null, el('p', 'muted', '逐字展示 Codex 转交给 Claude 的用户原话，未经改写。'));
+  msgs.forEach((m, i) => {
+    const head = `第 ${i + 1} 条 · ${label(L.source, m && m.source, '来源未注明')}` + (m && m.at ? ' · ' + m.at : '');
+    box.append(el('div', 'msg', el('div', 'muted', head), el('div', 'verbatim', String((m && m.text) ?? ''))));
+  });
+  if (!msgs.length) {
+    box.append(el('div', 'msg', el('div', 'muted', '没有用户原话。Codex 给出的原因：'),
+      el('div', 'verbatim', p.no_user_words_reason == null ? '（未提供原因）' : String(p.no_user_words_reason))));
   }
-  else if(rp.kind==='failed_with_content'||rp.kind==='failed_no_structured'){
-    box.append(el('p','以下内容来自未正常交回的执行，仅作失败证据，不能对本轮记录验收结论。'));
-    for(const key of ['invariant_error','scope_error','result_validation_error','workflow_error','session_error','hook_guard_error','tool_policy_error']){
-      if(result&&result[key])box.append(el('p','失败原因：'+result[key],'meta'));
-    }
-    if(result&&Array.isArray(result.permission_denials)&&result.permission_denials.length)box.append(el('p','权限拒绝：'+result.permission_denials.map(denialText).join('；'),'meta'));
-    if(structured&&typeof structured.summary==='string'){
-      const details=el('details');details.append(el('summary','失败执行中的部分报告内容'),el('p',structured.summary,'prose'));box.append(details);
-    }
+  return box;
+}
+function inputsView(d) {
+  const entries = Array.isArray(d.inputs) ? d.inputs : [];
+  const skipped = Array.isArray(d.skipped) ? d.skipped : [];
+  const box = el('div', null, el('p', 'muted', '运行开始时冻结给 Claude 的原件副本。'));
+  if (!entries.length) box.append(el('p', 'muted', '本轮没有原件。'));
+  else box.append(table(['原路径', '类型', '大小', 'sha256'], entries.map(x => [el('code', null, x.original || x.copy || '—'),
+    x.kind === 'directory' ? `目录 · ${x.files ?? 0} 个文件` : '文件', fmtBytes(x.bytes), el('code', null, x.sha256 || '—')])));
+  if (skipped.length) box.append(el('p', null, '未复制给 Claude：'), list(skipped.map(String), 'mono'));
+  return box;
+}
+function layerView(d) {
+  const files = Array.isArray(d.files) ? d.files : [];
+  const hooks = Array.isArray(d.hooks) ? d.hooks : [];
+  const o = S.snap && S.snap.outcome;
+  const plugins = (o && o.instruction_layer && o.instruction_layer.plugins) || [];
+  const box = el('div', null, el('p', 'muted', '除任务书外，Claude 会话按默认设置加载的指令文件、hooks 与插件（只列出，不修改）。'));
+  box.append(el('h3', null, `指令文件（${files.length}）`));
+  if (files.length) box.append(table(['路径', '范围', '大小', 'sha256'], files.map(f => [el('code', null, f.path || '—'), f.scope || '—',
+    f.readable === false ? '不可读' : fmtBytes(f.bytes), el('code', null, f.sha256 || '—')])));
+  box.append(el('h3', null, `Hooks（${hooks.length}）`));
+  if (hooks.length) box.append(list(hooks.map(h => el('code', null, [h.source, h.event, h.matcher, h.command || h.note].filter(Boolean).join(' · ')))));
+  box.append(el('h3', null, `插件（${plugins.length}）`), plugins.length ? list(plugins.map(String)) : el('p', 'muted', '会话未报告插件。'));
+  if (d.note) box.append(el('p', 'muted verbatim', d.note));
+  return box;
+}
+function eventsView() {
+  if (!S.events.length) return el('p', 'muted', S.snap && S.snap.active ? '等待第一条活动…' : '没有活动记录。');
+  const shown = S.events.slice(-SHOWN_EVENTS);
+  const box = el('div', null);
+  if (shown.length < S.events.length) box.append(el('p', 'muted', `只显示最近 ${SHOWN_EVENTS} 条。`));
+  for (const e of shown) {
+    const extra = [e.status, e.tool, e.file].filter(Boolean).join(' · ');
+    box.append(el('div', 'ev', el('span', 'muted', fmtTime(e.received_at, true)), el('span', 'k muted', e.kind || ''),
+      el('div', null, el('span', null, e.summary || ''), extra ? el('span', 'muted', ' · ' + extra) : null,
+        e.text ? el('div', 'muted verbatim', e.text) : null)));
   }
-  else if(rp.kind==='unknown_with_content'||rp.kind==='unknown_no_structured'){
-    box.append(el('p','执行状态尚未确认：以下只展示已记录的内容，不能据此验收、判定失败或重派。'));
-    if(typeof structured?.summary==='string')box.append(el('p',structured.summary,'prose'));
-    else box.append(el('p','记录中没有结构化报告；可查看公开活动、回执和工作区证据。','meta'));
-  }
-  else if(rp.kind==='truncated'){box.append(el('p','以下是通知中收到的部分内容，不是正式报告全文'));box.append(el('p','正式报告产物：未取得……截断的内容不能用来判断通过或失败。'+(view.report?.reason?' '+view.report.reason:''),'meta'));}
-  else if(rp.kind==='pending'){
-    const isExited=FAIL_END.has(view.status)||view.status===FORMAL;
-    box.append(el('p',isExited?'外层会话已退出，正式报告还没有收齐。':'正式报告待收集。'));
-    box.append(el('p','这些事件不等于最终报告。','meta'));
-  }
-  else if(rp.kind==='contract_failed'){
-    box.append(el('p','报告未通过交付契约校验，不能作为交付结果。'));
-    for(const f of (view.report?.contract_check?.failures||[])){
-      const line=el('p',`${f.kind}：${f.path||''} ${f.detail||''}`+(f.kind==='placeholder'?' · 占位':''));box.append(line);
-    }
-    box.append(el('p','语义是否正确仍由 Codex 核验。','meta'));
-  }
-  else {
-    if(view.superseded_by)box.append(el('p','本轮已被后续轮次替代，仅供回看。','meta'));
-    if(rp.kind==='codex'&&d)box.append(el('p','Codex 补齐结果：'+(d.completion_summary||''),'prose'));
-    else if(typeof structured?.summary==='string')box.append(el('p',(rp.kind==='returned'?'原 Claude 报告（未采纳）：\n':'')+structured.summary,'prose'));
-    else box.append(el('p','尚未产生可读报告；完成后在此展示。','meta'));
-    if(rp.kind==='codex'&&structured&&typeof structured.summary==='string'){
-      const details=el('details');details.append(el('summary','原 Claude 报告（已退回，未采纳）'),el('p',structured.summary,'prose'));box.append(details);
-    }
-  }
-  if(hasDetail){renderReviewReport(box,view,workflowFocus);renderWorkflowReport(box,view,workflowFocus);}
-  $('reportSource').textContent=view.superseded_by?'历史记录':'';
-  const evidenceRoot=$('evidenceBody');evidenceRoot.replaceChildren();
-  const title=(rp.kind==='failed_with_content'||rp.kind==='failed_no_structured')?'失败证据与未确认项':'核验依据与未确认项';
-  $('evidenceSummary').textContent=title;
-  for(const [heading,values] of [[rp.kind==='returned'?'原报告引用（未采纳）':'报告引用',structured?.evidence],['Claude 自报检查',structured?.checks],['未确认项',structured?.unresolved],['Codex 核验依据',d?.evidence]]){
-    if(!Array.isArray(values)||!values.length)continue;
-    evidenceRoot.append(el('h3',heading));const list=el('ul',undefined,'evidence-list');for(const item of values)list.append(el('li',String(item)));evidenceRoot.append(list);
-  }
-  if(!evidenceRoot.children.length)evidenceRoot.append(el('p','尚无可展示的核验依据。','meta'));
-  const usageText=usageLines(result);
-  $('usageText').textContent=!hasDetail?'详情未载入，用量待读取。':usageText.length?usageText.join('\n'):'Claude CLI 尚未提供可展示的用量。';
-}
-const USAGE_TOKEN_LABELS=[['input_tokens','未缓存输入'],['output_tokens','输出'],['cache_read_input_tokens','缓存读取'],['cache_creation_input_tokens','缓存写入']];
-const USAGE_COST_NOTE='费用为 Claude CLI 客户端估算，不是实际扣费或订阅剩余额度。';
-function usageCount(v){return Number.isInteger(v)&&v>=0?String(v):'未知';}
-function usageMoney(v){return typeof v==='number'&&Number.isFinite(v)&&v>=0?'$'+v.toFixed(4):'未知';}
-function usageTokensText(tokens){return USAGE_TOKEN_LABELS.map(([key,label])=>`${label} ${usageCount(tokens?.[key])}`).join(' · ');}
-function usageLines(result){
-  // usage covers only the main agent's final result; modelUsage/total_cost_usd are the CLI session's
-  // cumulative figures including subagents. They are separate scopes and are never added together.
-  if(!result||typeof result!=='object')return [];
-  const report=result.usage_report;
-  if(report&&typeof report==='object'&&report.schema_version===1){
-    const lines=[],cli=report.cli_session||{},main=report.main_agent_final||{};
-    const models=Array.isArray(cli.models)?cli.models:[];
-    if(models.length){
-      lines.push('CLI 会话累计估算（含子代理，按模型）：');
-      for(const m of models)lines.push(`· ${typeof m?.model==='string'&&m.model?m.model:'未知模型'}：${usageTokensText(m?.tokens)} · 估算 ${usageMoney(m?.cost_usd)}`);
-      lines.push(`合计：${usageTokensText(cli.totals)} · 估算 ${usageMoney(cli.total_cost_usd)}`);
-    } else {
-      lines.push(`CLI 会话累计估算（含子代理）：${usageMoney(cli.total_cost_usd)}；CLI 未提供按模型统计，整任务 token 合计未知。`);
-    }
-    if(cli.may_include_prior_turns)lines.push('本轮为续跑：CLI 会话累计可能包含此前轮次的支出，不是本轮新增，也不能与其他轮相加。');
-    if(main.available)lines.push(`主代理最终回报（不含子代理，不是整任务总量）：${usageTokensText(main.tokens)}`);
-    lines.push(USAGE_COST_NOTE);
-    return lines;
-  }
-  if(Object.hasOwn(result,'usage_report'))return [];
-  const lines=[],usage=result.usage_summary,cost=result.total_cost_usd??result.cost_usd;
-  if(usage&&typeof usage==='object'&&USAGE_TOKEN_LABELS.some(([key])=>Number.isInteger(usage[key])))
-    lines.push(`主代理最终回报（旧记录，统计范围未确认，不是整任务总量）：${usageTokensText(usage)}`);
-  if(typeof cost==='number'&&Number.isFinite(cost)&&cost>=0)
-    lines.push(`CLI 会话累计估算 ${usageMoney(cost)}（旧记录：可能含子代理，与上面的 token 不是同一统计范围；未记录按模型分项）`);
-  if(lines.length)lines.push(USAGE_COST_NOTE);
-  return lines;
-}
-function contentBindingText(v){
-  const b=v?.content_binding;
-  if(!b||typeof b!=='object')return '未固定（本轮记录未提供）';
-  const digest=typeof b.digest==='string'?b.digest.slice(0,12):'未知';
-  const kind=b.mode==='active'?'已审查的动态内容':b.mode==='bundled'?'插件内置内容':'未识别的来源';
-  return `${kind} · ${b.content_version||'版本未记录'} · ${digest}`;
-}
-function renderRoundTabs(taskRuns,view,current){
-  // Read focus before the old tabs are removed; afterwards the browser has already moved it to body.
-  const focusedRun=st.roundTabElements.includes(document.activeElement)?document.activeElement.dataset.runId:null;
-  const root=$('roundTabs');root.replaceChildren();
-  const narrow=$('roundSelectNarrow');narrow.replaceChildren();
-  st.roundTabElements=[];
-  let focusTarget=null,refocusTarget=null;
-  for(const r of taskRuns){
-    const isSelected=r.run_id===view.run_id;
-    const isCurrent=current.state==='known'&&current.run.run_id===r.run_id;
-    const tab=el('button',`第 ${r.revision||1} 轮${isCurrent?' · 当前':''}`,'round-tab');
-    tab.type='button';tab.setAttribute('role','tab');tab.setAttribute('aria-selected',String(isSelected));
-    tab.setAttribute('tabindex',isSelected?'0':'-1');tab.dataset.runId=r.run_id;
-    tab.onclick=()=>selectRun(r.run_id);root.append(tab);st.roundTabElements.push(tab);
-    if(st.roundFocusRun===r.run_id)focusTarget=tab;
-    if(focusedRun===r.run_id)refocusTarget=tab;
-    const opt=document.createElement('option');opt.value=r.run_id;opt.textContent=tab.textContent;opt.selected=isSelected;narrow.append(opt);
-  }
-  if(current.state==='not_loaded'){
-    const tab=el('button','待加载…','round-tab');tab.type='button';tab.setAttribute('role','tab');tab.setAttribute('aria-disabled','true');
-    tab.setAttribute('tabindex','-1');tab.disabled=true;root.append(tab);
-  }
-  narrow.onchange=e=>selectRun(e.target.value);
-  // Arrow/Home/End navigation may scroll to the new tab; a refresh restore must not move the page.
-  if(focusTarget){st.roundFocusRun=null;focusTarget.focus();}
-  else if(refocusTarget)refocusTarget.focus({preventScroll:true});
-}
-function roundTabKeydown(e){
-  const tabs=st.roundTabElements;if(!tabs.length)return;
-  let index=tabs.indexOf(document.activeElement);
-  if(index<0)index=Math.max(0,tabs.findIndex(t=>t.dataset.runId===st.run));
-  let target=null;
-  if(e.key==='ArrowRight')target=tabs[(index+1)%tabs.length];
-  else if(e.key==='ArrowLeft')target=tabs[(index-1+tabs.length)%tabs.length];
-  else if(e.key==='Home')target=tabs[0];
-  else if(e.key==='End')target=tabs.at(-1);
-  else return;
-  e.preventDefault();
-  if(target.dataset.runId===st.run){target.focus();return;}
-  st.roundFocusRun=target.dataset.runId;
-  selectRun(target.dataset.runId);
-}
-const EXECUTION_EVIDENCE_TEXT={
-  provider_event:'已观察到 Claude CLI 响应消息；不单独证明模型调用成功',
-  bridge_lifecycle:'只有本机执行管理记录，尚未观察到 Claude 响应',
-  unconfirmed:'证据不足，未确认',
-};
-function executionEvidenceText(value){
-  const known=lookup(EXECUTION_EVIDENCE_TEXT,value);
-  if(known)return known;
-  return typeof value==='string'&&value?'未确认 · 未识别的证据类型（原始值见技术记录）':'未确认 · 本轮记录未提供';
-}
-function renderIdentity(view){
-  const cli=runCliEvidence(view);
-  const requestedModel=requestedValue(view,null,'model'),requestedEffort=requestedValue(view,null,'effort');
-  $('identityBody').replaceChildren(...[['本轮 CLI 版本',cli.version],['CLI 标识',cli.identity],['请求模型',requestedModel],
-    ['请求推理档位',requestedEffort],['实际模型',actualModelText(view)],['执行证据',executionEvidenceText(view.execution_evidence)],
-    ['运行环境',cli.environmentStatus],['协调内容',contentBindingText(view)]].flatMap(([k,v])=>[el('dt',k),el('dd',v)]));
-  $('technicalFields').replaceChildren(...[['执行编号',view.run_id],['任务编号',view.task_id||'—'],['Claude 会话',view.session_id||'等待初始化'],
-    ['工作目录',view.cwd],['状态',`${view.status} · ${decisionValue(view)||'无核验'} · ${(typeof view.decision==='object'&&view.decision?.resolution)||'—'} · claude_started=${String(view.claude_started)}`],
-    ['CLI identity（原始）',cli.identity],['requested model / effort（原始）',`${requestedModel} / ${requestedEffort}`],
-    ['执行证据来源',view.execution_evidence||'未提供'],
-    ['上一轮',view.previous_run_id||'首轮 / 独立执行'],['后续轮',view.superseded_by||'无']].flatMap(([k,v])=>[el('dt',k),el('dd',v)]));
-}
-function actionReady(current){
-  if(current.state!=='known'||current.run.run_id!==st.run||st.invalidRun===st.run)return false;
-  const entry=st.cache.get(st.run);
-  return Boolean(conn.validSelection&&['online','recovered'].includes(conn.status)&&conn.homeOk&&conn.snapshotOk&&conn.eventsOk
-    &&entry&&viewOf(entry).hasDetail&&entry.summaryAt&&entry.detailAt&&Date.now()-Math.min(entry.summaryAt,entry.detailAt)<60000);
-}
-function renderFacts(view,hasDetail,current){
-  const ex=execFact(view,hasDetail),rp=reportFact(view,hasDetail),vf=verifyFact(view,hasDetail);
-  if(vf.tone==='ok'&&!actionReady(current)){
-    vf.tone='unknown';vf.symbol='?';vf.label='已记录结论 · 当前性待确认';
-  }
-  const stale=!['online','recovered'].includes(conn.status)||current.state!=='known';
-  $('facts').replaceChildren(factCard('执行',ex,stale),factCard('报告',rp,stale),factCard('核验',vf,stale));
-}
-function renderNextStep(current,hasDetail,isHistorical){
-  const box=$('nextStep');
-  const step=(!isHistorical&&actionReady(current))?nextStepFor(current,hasDetail):null;
-  if(!step){box.classList.add('hidden');return;}
-  const degraded=!actionReady(current);
-  box.classList.toggle('hidden',false);
-  $('nextStepBody').textContent=step.body;
-  if($('nextStepPrompt').textContent!==(step.prompt||''))resetCopyFeedback($('copyPromptBtn'),COPY_PROMPT_LABEL);
-  $('nextStepPrompt').textContent=step.prompt||'';
-  $('nextStepPrompt').classList.toggle('hidden',!step.prompt);
-  $('copyPromptBtn').classList.toggle('hidden',!step.prompt||degraded);
-  $('copyPromptBtn').disabled=degraded;
-}
-function renderPlaceholderDetail(title,message){
-  $('breadcrumbProject').textContent='';$('breadcrumbCwd').textContent='';
-  $('runIdLabel').textContent='执行编号 '+st.run;
-  $('detailTitle').textContent=title;$('detailSub').textContent='';$('timeInfo').textContent='';
-  $('roundTabs').replaceChildren();$('roundSelectNarrow').replaceChildren();st.roundTabElements=[];
-  $('roundBanner').classList.add('hidden');$('roundBanner').replaceChildren();
-  $('facts').replaceChildren();$('nextStep').classList.add('hidden');$('copyPromptBtn').classList.add('hidden');
-  $('reportTag').textContent='';$('reportSource').textContent='';
-  const box=$('reportBody');box.className='report-box tone-none';box.replaceChildren(el('p',message,'meta'));
-  $('evidenceBody').replaceChildren();$('activityBody').replaceChildren();$('activityCount').textContent='';
-  $('changesSummary').textContent='';renderArtifactButtons($('changesButtons'),[],detailsSummary('changesDetails'));
-  $('identityBody').replaceChildren();$('usageText').textContent='';
-  $('technicalFields').replaceChildren();renderArtifactButtons($('technicalButtons'),[],detailsSummary('technicalDetails'));$('technicalArtifact').textContent='';
-}
-const CHANGE_ARTIFACTS=[['diff','工作区 Diff'],['workspace_before','输入快照'],['workspace_after','结果快照']];
-const TECHNICAL_ARTIFACTS=[['packet','本轮要求'],['result','Claude 报告'],['receipt','执行回执'],['decision','Codex 核验'],['decision_history','核验历史'],['reconciliation','恢复核验'],['environment','运行环境'],['content_binding','协调内容']];
-function detailsSummary(id){return $(id).querySelector('summary');}
-function renderDetail(){
-  const entry=st.cache.get(st.run);
-  const {view,hasDetail}=viewOf(entry);
-  $('emptyState').classList.toggle('hidden',Boolean(st.run));
-  $('detailContent').classList.toggle('hidden',!st.run);
-  if(!st.run)return;
-  if(st.invalidRun===st.run){
-    renderPlaceholderDetail('该执行记录无法读取','服务返回该执行记录无效或不存在；此处不显示其他执行的内容，任务列表仍可使用。');
-    return;
-  }
-  if(!view){
-    renderPlaceholderDetail('正在读取执行记录','正在读取该执行记录；读取完成前不显示其他执行的报告或身份。');
-    return;
-  }
-  const tasks=buildTasks();
-  const key=taskKey(view);
-  const taskRuns=(tasks.get(key)||[view]).sort((a,b)=>(a.revision||1)-(b.revision||1));
-  const current=currentRoundOf(taskRuns,st.cache);
-  const isHistorical=Boolean(view.superseded_by)||current.state==='known'&&current.run.run_id!==view.run_id;
-  $('breadcrumbProject').textContent=projectName(view.cwd);
-  $('breadcrumbCwd').textContent=view.cwd||'';
-  $('runIdLabel').textContent='执行编号 '+view.run_id;
-  const title=firstSentence(view.objective)||view.task_id||view.run_id;
-  $('detailTitle').textContent=title;
-  $('detailSub').textContent=view.objective&&view.objective!==title?first(view.objective):'';
-  $('timeInfo').textContent=`${view.started_at?new Date(stamp(view.started_at)).toLocaleTimeString('zh-CN',{hour12:false}):'--'} 开始 · 用时 ${duration(view.elapsed_seconds)} · ${view.ended_at?'已结束':'已运行'}`;
-  renderRoundTabs(taskRuns,view,current);
-  const banner=$('roundBanner');
-  if(current.state==='not_loaded'){
-    banner.classList.remove('hidden');banner.replaceChildren(el('span',`本轮已有后续轮（第 ${(view.revision||1)+1} 轮），正在读取…`));
-    scheduleBackfill(key);
-  } else if(current.state==='pending'){
-    banner.classList.remove('hidden');banner.replaceChildren(el('span','当前轮待确认；请等待最新记录同步。'));
-  } else if(isHistorical){
-    banner.classList.remove('hidden');banner.replaceChildren();
-    const currentLabel=`第 ${current.run.revision||1} 轮`;
-    banner.append(el('span',`正在查看第 ${view.revision||1} 轮（历史记录）。当前是 ${currentLabel}；历史轮的结论不作为当前验收依据。`));
-    const btn=el('button','回到当前轮','quiet small');btn.type='button';btn.onclick=()=>selectRun(current.run.run_id);banner.append(btn);
-  } else banner.classList.add('hidden');
-  renderFacts(view,hasDetail,current);
-  renderNextStep(current,hasDetail,isHistorical||current.state!=='known');
-  renderReport(view,hasDetail);
-  renderIdentity(view);
-  $('changesSummary').textContent=workspaceChangeText(view);
-  renderArtifactButtons($('changesButtons'),CHANGE_ARTIFACTS,detailsSummary('changesDetails'));
-  renderArtifactButtons($('technicalButtons'),TECHNICAL_ARTIFACTS,detailsSummary('technicalDetails'));
-  renderEvents(entry);
-}
-function renderEvents(entry){
-  const events=(entry&&entry.events)||[];
-  const query=$('activityFilter').value.trim().toLowerCase();
-  const root=$('activityBody');
-  // Rows are rebuilt on every refresh: read focus first (removal moves it to body) and keep expanded raw records open.
-  const focusedRaw=document.activeElement?.dataset?.rawKey||null;
-  root.replaceChildren();
-  const filtered=query?events.filter(e=>activitySearchText(e).includes(query)):events;
-  const rows=filtered.slice(-200).reverse();
-  if(!rows.length)root.append(el('p',query?'没有匹配的已载入活动。':'尚无公开活动。没有活动不等于执行停止。','meta'));
-  let refocus=null;
-  for(const e of rows){
-    const row=el('div',undefined,'event-row');const when=stamp(e.received_at||e.at||e.timestamp);
-    const info=activityInfo(e);
-    const body=el('div');body.append(el('strong',info.text));
-    const detail=activityDetail(e).join(' · ');if(detail)body.append(el('div',detail,'meta'));
-    const rawKey=`${st.run}:${e.seq??'row'+rows.indexOf(e)}`;
-    const raw=el('details',undefined,'raw-record');
-    const rawSummary=el('summary','原始记录');rawSummary.dataset.rawKey=rawKey;
-    raw.open=st.openRaw.has(rawKey);
-    raw.addEventListener('toggle',()=>{if(raw.open)st.openRaw.add(rawKey);else st.openRaw.delete(rawKey);});
-    raw.append(rawSummary);
-    if(info.note)raw.append(el('div',info.note,'meta'));
-    raw.append(el('div',activityRawFields(e).join(' · '),'mono meta'));
-    body.append(raw);
-    if(focusedRaw===rawKey)refocus=rawSummary;
-    row.append(el('time',when?new Date(when).toLocaleTimeString('zh-CN',{hour12:false}):'#'+e.seq),body);root.append(row);
-  }
-  refocus?.focus({preventScroll:true});
-  $('activityCount').textContent=`已载入 ${events.length} 条 / 共 ${entry?.detail?.events_count??events.length} 条`;
-}
-async function loadArtifact(name,targetEl){
-  const id=st.run,epoch=st.epoch,gen=conn.connGen;
-  st.artifactName=name;targetEl.textContent='正在读取…';
-  try{
-    const a=await api('/api/artifact',{run_id:id,name},{});
-    if(!sameSelection(id,epoch,gen)||name!==st.artifactName)return;
-    targetEl.textContent=artifactText(a);
-  }catch(e){if(sameSelection(id,epoch,gen))targetEl.textContent='该项记录暂不可读';}
-}
-function artifactText(a){
-  if(!a?.available)return a?.state==='writing'||a?.note?'该项记录正在写入或暂不完整，请稍后重试；这不表示记录不存在。':'本项记录尚未产生。';
-  const body=typeof a.content==='string'?a.content:JSON.stringify(a.content,null,2);
-  if(!a.truncated)return body;
-  const limit=Number(a.display_limit_bytes)||300000,size=Number(a.size_bytes);
-  const notice=`展示已截断：仅显示前 ${limit} 字节${Number.isFinite(size)&&size>0?`（共 ${size} 字节）`:''}；完整记录保留在本机。`;
-  return `${notice}\n\n${body}\n\n…展示在此截断。${notice}`;
+  return box;
 }
 
-async function fetchEventsFor(id,epoch,gen){
-  const entry=st.cache.get(id);if(!entry)return false;
-  entry.events=entry.events||[];entry.cursor=entry.cursor||0;
-  let changed=false;
-  for(let page=0;page<3;page++){
-    const d=await api('/api/events',{run_id:id,after:entry.cursor,limit:200},{controller:st.selController});
-    if(!sameSelection(id,epoch,gen))return false;
-    const values=d.events||[];if(values.length)changed=true;
-    entry.events.push(...values);
-    if(entry.events.length>MAX_EVENTS)entry.events.splice(0,entry.events.length-MAX_EVENTS);
-    entry.cursor=d.next_cursor??entry.cursor;entry.moreEvents=Boolean(d.has_more);
-    if(!d.has_more)break;
-  }
-  return changed;
-}
-function scheduleSelected(ms){clearTimeout(st.selTimer);st.selTimer=setTimeout(selTick,ms);}
-async function selTick(){
-  if(!st.run||st.selInFlight||conn.status==='token_invalid'||st.invalidRun===st.run)return;
-  st.selInFlight=true;
-  const id=st.run,epoch=st.epoch,gen=conn.connGen;
-  const requestKey=`${gen}:${epoch}:${id}`;st.selRequestKey=requestKey;
-  const seq=++st.requestSeq;
-  try{
-    const s=await api('/api/snapshot',{run_id:id},{controller:st.selController});
-    if(!sameSelection(id,epoch,gen))return;
-    st.cache.set(id,mergeDetail(st.cache.get(id),s,Date.now(),seq));
-    st.seenRunIds.add(id);st.knownTaskKeys.add(taskKey(s));
-    noteCriticalSuccess('snapshot-selected');
-    const entry=st.cache.get(id);
-    if(!entry.cursor&&!entry.events.length)entry.cursor=Math.max(0,(s.last_event?.seq||0)-MAX_EVENTS);
-    await fetchEventsFor(id,epoch,gen);
-    if(!sameSelection(id,epoch,gen))return;
-    noteCriticalSuccess('events-selected');
-    renderDetail();
-  }catch(e){
-    if(!sameSelection(id,epoch,gen))return;
-    if(e.name==='AbortError')return;
-    if(e.status===400){clearValidSelection();st.invalidRun=id;renderDetail();return;}
-    markCriticalFailure('snapshot',e);
-  }finally{
-    if(st.selRequestKey===requestKey){st.selInFlight=false;st.selRequestKey=null;}
-    if(sameSelection(id,epoch,gen)&&conn.status!=='token_invalid'&&st.invalidRun!==id){
-      const entry=st.cache.get(id);const status=entry?.detail?.status;
-      const terminal=FAIL_END.has(status)||status===FORMAL;
-      scheduleSelected(conn.status==='offline'?conn.retryDelay:pollingDelay(terminal,document.hidden,Boolean(entry?.moreEvents)));
-    }
-  }
-}
-
-function hasAnyUnsettled(){for(const [,entry] of st.cache){const {view}=viewOf(entry);if(isUnsettled(view))return true;}return false;}
-function scheduleHome(ms){clearTimeout(st.homeTimer);st.homeTimer=setTimeout(homeTick,ms);}
-async function homeTick(){
-  if(conn.status==='token_invalid')return;
-  if(st.homeInFlight){scheduleHome(500);return;}
-  st.homeInFlight=true;const gen=conn.connGen,seq=++st.requestSeq;
-  try{
-    const list=await api('/api/runs',{offset:0,limit:PAGE_SIZE},{});
-    if(gen!==conn.connGen)return;
-    onHomeSuccess(list,seq);
-    noteCriticalSuccess('runs');
-  }catch(e){if(gen===conn.connGen&&e.name!=='AbortError')markCriticalFailure('runs',e);}
-  finally{st.homeInFlight=false;if(gen===conn.connGen&&conn.status!=='token_invalid')scheduleHome(conn.status==='offline'?conn.retryDelay:homePollingDelay(hasAnyUnsettled(),document.hidden));}
-}
-function onHomeSuccess(list,seq){
-  const rows=list.runs||[];
-  const now=Date.now();
-  if(seq!==undefined&&seq<st.homeSeq)return;
-  st.homeSeq=seq??st.homeSeq;
-  const knownTaskKeys=new Set(st.knownTaskKeys);
-  if(!st.baseline){
-    st.baseline=new Set(rows.map(r=>r.run_id));
-    for(const r of rows)st.knownTaskKeys.add(taskKey(r));
-  }
-  const freshIds=[];
-  for(const r of rows){
-    const previous=st.cache.get(r.run_id);
-    if(previous&&viewOf(previous).view?.superseded_by!==r.superseded_by)st.backfillStopped.delete(taskKey(r));
-    freshIds.push(r.run_id);
-    const isNewRun=isNewCandidate(r,st.baseline,st.seenRunIds);
-    const isNewTask=isNewTaskCandidate(r,knownTaskKeys);
-    st.cache.set(r.run_id,mergeSummary(st.cache.get(r.run_id),r,now,seq));
-    st.seenRunIds.add(r.run_id);
-    st.knownTaskKeys.add(taskKey(r));
-    if(isNewRun&&isNewTask&&st.baseline){
-      if(!st.run){selectRun(r.run_id);}
-      else if(!st.newTasks.includes(taskKey(r)))st.newTasks.push(taskKey(r));
-    }
-  }
-  st.loadedOrder=reconcileLoadedOrder(st.loadedOrder,freshIds);
-  st.loadedSet=new Set(st.loadedOrder);
-  st.recentHomeIds=new Set(freshIds);
-  if(!st.pagesLoaded){st.hasMore=Boolean(list.has_more);st.nextOffset=list.next_offset;}
-  refreshPrefetchQueue();
+function boot() {
+  $('moreRuns').addEventListener('click', () => refreshList(true));
+  $('artMore').addEventListener('click', () => {
+    if (S.art && !S.art.loading && !S.art.end) loadArtifact(S.art.name, true);
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden || S.dead) return;
+    listLoop();
+    runLoop();
+  });
+  window.addEventListener('hashchange', () => {
+    const params = new URLSearchParams(location.hash.slice(1));
+    if ((params.get('token') || '') !== S.token) location.reload();
+    else if (params.get('run')) selectRun(params.get('run'));
+  });
   renderList();
-  if(st.run)renderDetail();
-}
-function refreshPrefetchQueue(){
-  const tasks=buildTasks();
-  let added=0;
-  for(const [key,runs] of tasks){
-    if(added>=PREFETCH_PER_REFRESH)break;
-    const current=currentRoundOf(runs,st.cache);
-    if(current.state==='not_loaded'){scheduleBackfill(key);continue;}
-    const tips=runs.filter(r=>!r.superseded_by);
-    if(tips.length!==1||current.state==='known'&&current.run.run_id===st.run)continue;
-    const candidate=tips[0];
-    if(candidate.run_id===st.run)continue;
-    const entry=st.cache.get(candidate.run_id);
-    const {hasDetail}=viewOf(entry);
-    if(hasDetail||st.prefetchQueue.has(candidate.run_id))continue;
-    if(current.state==='known'&&groupFor(current,hasDetail)!=='attention')continue;
-    st.prefetchQueue.add(candidate.run_id);added++;
-  }
-}
-async function loadMore(){
-  if(st.loadingMore||!st.hasMore||st.loadedOrder.length>=MAX_LOADED||conn.status==='token_invalid')return;
-  st.loadingMore=true;$('loadMoreBtn').disabled=true;
-  let offset=st.nextOffset,attempt=0;
-  try{
-    while(attempt<1+MAX_CONTINUE_PAGES){
-      const gen=conn.connGen,seq=++st.requestSeq;
-      const page=await api('/api/runs',{offset,limit:PAGE_SIZE},{});
-      if(gen!==conn.connGen)return;
-      const before=st.loadedOrder.length;
-      for(const row of (page.runs||[])){
-        st.seenRunIds.add(row.run_id);st.knownTaskKeys.add(taskKey(row));
-        if(!st.loadedSet.has(row.run_id)&&st.loadedOrder.length>=MAX_LOADED)continue;
-        st.cache.set(row.run_id,mergeSummary(st.cache.get(row.run_id),row,Date.now(),seq));
-        if(!st.loadedSet.has(row.run_id)&&st.loadedOrder.length<MAX_LOADED){st.loadedSet.add(row.run_id);st.loadedOrder.push(row.run_id);}
-      }
-      const added=st.loadedOrder.length-before;
-      st.pagesLoaded=true;st.hasMore=Boolean(page.has_more);offset=page.next_offset;st.nextOffset=offset;attempt++;
-      if(added>0||!st.hasMore||st.loadedOrder.length>=MAX_LOADED)break;
-    }
-    if(st.loadedOrder.length>MAX_LOADED){st.loadedOrder=st.loadedOrder.slice(0,MAX_LOADED);st.loadedSet=new Set(st.loadedOrder);}
-  }catch(e){/* local pagination failure keeps existing list usable */}
-  finally{st.loadingMore=false;renderList();}
-}
-
-function currentTipIds(tasks){
-  const ids=new Set();
-  for(const runs of tasks.values()){const tips=runs.filter(r=>!r.superseded_by);if(tips.length===1)ids.add(tips[0].run_id);}
-  return ids;
-}
-function detailNeedsRefresh(entry){
-  return !entry||!entry.detail||entry.detailStale||Date.now()-(entry.detailAt||0)>=DETAIL_REFRESH_AGE;
-}
-const BACKFILL_RETRY_DELAY = 15000;
-function scheduleBackfill(taskKeyValue){
-  if(!st.backfillStopped.has(taskKeyValue))st.backfillQueue.add(taskKeyValue);
-}
-function backfillCandidates(tasks){
-  const queue=[];
-  for(const [key,runs] of tasks){
-    const current=currentRoundOf(runs,st.cache);
-    if(current.state==='not_loaded')scheduleBackfill(key);
-  }
-  for(const key of st.backfillQueue){
-    const current=currentRoundOf(tasks.get(key)||[],st.cache);
-    if(current.state!=='not_loaded'){st.backfillQueue.delete(key);st.visitedByTask.delete(key);continue;}
-    const visited=st.visitedByTask.get(key)||new Set();
-    if(!nextSupersedeHop(current.pointer,visited)){st.backfillStopped.add(key);st.backfillQueue.delete(key);continue;}
-    if(Date.now()-(st.backfillFailedAt.get(key)||0)<BACKFILL_RETRY_DELAY)continue;
-    queue.push('backfill:'+key);
-  }
-  return queue;
-}
-
-async function bgTick(){
-  if(conn.status==='token_invalid')return;
-  if(document.hidden){scheduleBg(60000);return;}
-  if(st.bgInFlight){scheduleBg(1000);return;}
-  st.bgInFlight=true;const gen=conn.connGen;
-  const tasks=buildTasks();
-  const backfill=backfillCandidates(tasks);
-  const observeQueue=[];
-  const tips=currentTipIds(tasks),prefetching=new Set(st.prefetchQueue);
-  for(const id of st.loadedOrder){
-    if(id===st.run||prefetching.has(id))continue;
-    const entry=st.cache.get(id);const {view}=viewOf(entry||{});
-    if(!view||view.superseded_by)continue;
-    // A fresh home summary is not a fresh detail: the current-round gate needs both.
-    const currency=tips.has(id)&&detailNeedsRefresh(entry);
-    const observed=!st.recentHomeIds.has(id)&&(entry?.detailStale||needsObservation(view));
-    if(currency||observed)observeQueue.push(id);
-  }
-  observeQueue.sort((a,b)=>(st.cache.get(a)?.attemptAt||0)-(st.cache.get(b)?.attemptAt||0));
-  st.observerOverflow=Math.max(0,observeQueue.length-OBSERVE_LIMIT);
-  const trimmedObserve=observeQueue.slice(0,OBSERVE_LIMIT);
-  const prefetch=[...st.prefetchQueue].slice(0,PREFETCH_PER_REFRESH);
-  const picks=scheduleBackground(backfill,trimmedObserve,prefetch,BACKGROUND_BUDGET);
-  try{
-    for(const pick of picks){
-      const isBackfill=pick.startsWith('backfill:');
-      const key=isBackfill?pick.slice(9):null;
-      const current=isBackfill?currentRoundOf(buildTasks().get(key)||[],st.cache):null;
-      if(isBackfill&&current.state!=='not_loaded')continue;
-      const runId=isBackfill?current.pointer:pick;
-      const entry=st.cache.get(runId);if(entry)entry.attemptAt=Date.now();
-      const seq=++st.requestSeq;
-      try{
-        const s=await api('/api/snapshot',{run_id:runId},{});
-        if(gen!==conn.connGen)return;
-        if(isBackfill){
-          if(s.run_id!==runId||taskKey(s)!==key||(s.revision||1)<=(current.from?.revision||1)){
-            st.backfillStopped.add(key);st.backfillQueue.delete(key);continue;
-          }
-          const visited=st.visitedByTask.get(key)||new Set();visited.add(runId);st.visitedByTask.set(key,visited);
-          st.backfillFailedAt.delete(key);
-        }
-        st.cache.set(runId,mergeDetail(st.cache.get(runId),s,Date.now(),seq));
-        if(isBackfill)st.extraIds.add(runId);
-        st.seenRunIds.add(runId);st.knownTaskKeys.add(taskKey(s));
-        st.prefetchQueue.delete(runId);
-      }catch(_){
-        if(isBackfill)st.backfillFailedAt.set(key,Date.now());
-        /* Keep last good snapshot and retry local reads on a later turn. */
-      }
-    }
-  }finally{st.bgInFlight=false;if(gen===conn.connGen&&conn.status!=='token_invalid'){renderList();if(st.run)renderDetail();scheduleBg(5000);}}
-}
-function scheduleBg(ms){clearTimeout(st.bgTimer);st.bgTimer=setTimeout(bgTick,ms);}
-
-function scheduleMaintenance(ms){clearTimeout(st.maintenanceTimer);st.maintenanceTimer=setTimeout(maintenanceTick,ms);}
-async function maintenanceTick(){
-  if(conn.status==='token_invalid')return;
-  const gen=conn.connGen;
-  try{
-    const value=await api('/api/cli-maintenance',{},{});
-    if(gen!==conn.connGen)return;
-    st.maintenance=value;st.maintenanceAt=Date.now();st.maintenanceFailure=null;
-  }catch(e){
-    if(gen!==conn.connGen||e?.name==='AbortError')return;
-    st.maintenanceFailure={at:Date.now()};
-  }finally{
-    if(gen===conn.connGen){renderMaintenance();if(conn.status!=='token_invalid')scheduleMaintenance(30000);}
-  }
-}
-
-function reconnect(){
-  conn.connGen++;conn.status='connecting';conn.homeOk=false;conn.snapshotOk=false;conn.eventsOk=false;
-  st.selController.abort();st.selController=new AbortController();
-  st.bgController.abort();st.bgController=new AbortController();
-  st.baseline=null;st.homeInFlight=false;st.selInFlight=false;st.selRequestKey=null;st.bgInFlight=false;st.invalidRun=null;
-  conn.validSelection=Boolean(st.run);
-  scheduleHome(0);scheduleBg(0);scheduleMaintenance(0);if(st.run)scheduleSelected(0);
-}
-window.addEventListener('hashchange',()=>{
-  const next=new URLSearchParams(location.hash.slice(1)),id=next.get('run')||'';
-  const tokenChanged=next.get('token')!==hash.get('token');
-  hash=next;
-  if(tokenChanged){reconnect();}
-  if(id!==st.run)selectRun(id,false);
-  if(id)setView('detail');
-});
-document.addEventListener('visibilitychange',()=>{scheduleHome(0);if(!document.hidden){scheduleBg(0);if(st.run)scheduleSelected(0);}});
-$('projectFilter').onchange=()=>renderList();
-$('searchInput').addEventListener('input',()=>{st.search=$('searchInput').value;renderList();});
-$('activityFilter').addEventListener('input',()=>renderEvents(st.cache.get(st.run)));
-$('loadMoreBtn').onclick=loadMore;
-$('taskGroups').onkeydown=taskListKeydown;
-$('roundTabs').onkeydown=roundTabKeydown;
-function returnToList(){
-  setView('list');
-  const selected=st.cache.get(st.run);const key=selected?taskKey(viewOf(selected).view):null;
-  const card=key?[...document.querySelectorAll('.task-card')].find(c=>c.dataset.taskKey===key):null;
-  if(card)card.focus();else if(st.taskFocusReturn)st.taskFocusReturn.focus();
-}
-$('backToList').onclick=returnToList;
-$('openWindowBtn').onclick=()=>window.open(location.href,'_blank');
-$('copyRunId').onclick=()=>copyWithFeedback($('copyRunId'),COPY_RUN_LABEL,st.run);
-$('copyPromptBtn').onclick=async()=>{
-  const entry=st.cache.get(st.run);const {view,hasDetail}=viewOf(entry);
-  if(!view||st.invalidRun===st.run)return;
-  const tasks=buildTasks();const runs=tasks.get(taskKey(view))||[view];const current=currentRoundOf(runs);
-  if(!actionReady(current))return;
-  const step=nextStepFor(current,hasDetail);if(!step||!step.prompt)return;
-  await copyWithFeedback($('copyPromptBtn'),COPY_PROMPT_LABEL,`${step.prompt}\n执行编号：${st.run}`);
-};
-$('maintenanceBtn').onclick=()=>{
-  $('drawerOverlay').classList.remove('hidden');$('maintenanceBtn').setAttribute('aria-expanded','true');
-  st.focusReturn=document.activeElement;$('drawerClose').focus();
-  $('drawerConnection').textContent=connectionLabel();
-  renderMaintenance();
-};
-function closeDrawer(){$('drawerOverlay').classList.add('hidden');$('maintenanceBtn').setAttribute('aria-expanded','false');if(st.focusReturn)st.focusReturn.focus();}
-$('drawerClose').onclick=closeDrawer;
-$('drawerOverlay').addEventListener('click',e=>{if(e.target===$('drawerOverlay'))closeDrawer();});
-document.addEventListener('keydown',e=>{
-  if(!$('drawerOverlay').classList.contains('hidden')){
-    if(e.key==='Escape'){e.preventDefault();closeDrawer();return;}
-    if(e.key==='Tab'){
-      const targets=[...$('drawer').querySelectorAll('button:not(:disabled),a[href],input:not(:disabled),select:not(:disabled),[tabindex="0"]')];
-      const first=targets[0]||$('drawerClose'),last=targets[targets.length-1]||first;
-      if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}
-      else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}
-    }
+  renderRun();
+  if (!S.token) {
+    setConn('auth');
     return;
   }
-  if(e.key==='Escape'){
-    if(st.view==='detail'&&getComputedStyle($('backToList')).display!=='none')returnToList();
+  listLoop();
+  if (S.sel) {
+    const id = S.sel;
+    S.sel = '';
+    selectRun(id);
   }
-  if(e.key==='/'&&document.activeElement.tagName!=='INPUT'){e.preventDefault();$('searchInput').focus();}
-});
-function boot(){
-  setView(st.run?'detail':'list');conn.validSelection=Boolean(st.run);
-  if(!hash.get('token')){markCriticalFailure('runs',new Error('请使用 Codex 返回的完整详情链接。'));return;}
-  scheduleHome(0);scheduleBg(2000);scheduleMaintenance(0);if(st.run)scheduleSelected(0);
 }
 boot();
 </script></body></html>
