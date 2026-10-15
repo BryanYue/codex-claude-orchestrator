@@ -86,7 +86,9 @@ def main() -> int:
             for ident, path in enumerate(re.findall(r"- `([^`]+)`（原路径", text)):
                 tool("Read", {"file_path": path}, f"read-{ident}")
         elif kind == "tool":
-            tool(action["tool"], action.get("input", {}), f"tool-{counter}")
+            value = {key: item.replace("{cwd}", os.getcwd()) if isinstance(item, str) else item
+                     for key, item in action.get("input", {}).items()}
+            tool(action["tool"], value, f"tool-{counter}")
         elif kind == "workflow":
             ident = f"workflow-{counter}"
             tool("Workflow", {"name": "codex-analyze", "args": {}}, ident)

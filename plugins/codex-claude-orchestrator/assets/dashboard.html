@@ -1,112 +1,126 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="referrer" content="no-referrer"><title>Claude 协作工作台</title>
+<meta name="referrer" content="no-referrer"><title>Claude 工作台</title>
 <style>
 :root{color-scheme:light dark;
---bg:#F4F2EE;--bg2:#FBFAF7;--panel:#FFFFFF;--line:#E2DFD8;--text:#1C1B19;--muted:#5F5D58;--focus:#1F4FB8;
---active-fg:#1F4FB8;--active-bg:#EAF0FC;--active-bd:#BFD0F3;--ok-fg:#17704B;--ok-bg:#E6F3EC;--ok-bd:#B7DBC7;
---warn-fg:#9A4B00;--warn-bg:#FCF1E3;--warn-bd:#EDCB9E;--bad-fg:#A8271B;--bad-bg:#FBEAE8;--bad-bd:#EDBDB7;
---plain-fg:#3F3D39;--plain-bg:#F2F1ED;--plain-bd:#CFCBC2}
+--bg:#F5F5F7;--bg2:#FBFBFD;--panel:#FFFFFF;--line:#E2E2E7;--text:#1D1D1F;--muted:#6E6E73;--focus:#0A66D8;
+--active-fg:#0A62CC;--active-bg:#EAF2FD;--active-bd:#B9D3F5;--ok-fg:#1B7A4B;--ok-bg:#E8F5EE;--ok-bd:#B5DCC6;
+--warn-fg:#A35200;--warn-bg:#FDF3E6;--warn-bd:#EFCB9C;--bad-fg:#B3261E;--bad-bg:#FCECEA;--bad-bd:#EEBDB8;
+--plain-fg:#3A3A3C;--plain-bg:#F2F2F5;--plain-bd:#D2D2D7;--shadow:0 1px 2px rgba(0,0,0,.04),0 4px 14px rgba(0,0,0,.05);--scrim:rgba(0,0,0,.28)}
 @media(prefers-color-scheme:dark){:root{
---bg:#17181B;--bg2:#1B1C1F;--panel:#232529;--line:#34373C;--text:#F3F4F6;--muted:#AFB3BA;--focus:#8FB0FF;
---active-fg:#9DB8FF;--active-bg:#1E2A45;--active-bd:#3A5184;--ok-fg:#7FD3A8;--ok-bg:#16302A;--ok-bd:#2F6B50;
+--bg:#161618;--bg2:#1C1C1E;--panel:#232326;--line:#38383C;--text:#F5F5F7;--muted:#A1A1A6;--focus:#8AB4FF;
+--active-fg:#8AB4FF;--active-bg:#1B2840;--active-bd:#34507F;--ok-fg:#7FD3A8;--ok-bg:#16302A;--ok-bd:#2F6B50;
 --warn-fg:#FFC870;--warn-bg:#3A2A10;--warn-bd:#8A6424;--bad-fg:#FFB0A6;--bad-bg:#3D1D1A;--bad-bd:#8C4A42;
---plain-fg:#D5D7DB;--plain-bg:#2A2B2E;--plain-bd:#4A4D52}}
+--plain-fg:#D5D7DB;--plain-bg:#2A2A2D;--plain-bd:#4A4A4F;--shadow:0 1px 2px rgba(0,0,0,.3);--scrim:rgba(0,0,0,.5)}}
 *{box-sizing:border-box}
 [hidden]{display:none!important}
-body{margin:0;background:var(--bg);color:var(--text);font:14px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",sans-serif}
-button{font:inherit;color:inherit;cursor:pointer;background:var(--panel);border:1px solid var(--line);border-radius:7px;padding:4px 10px}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
+button{font:inherit;color:inherit;cursor:pointer;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:3px 12px}
+button:hover{border-color:var(--plain-bd)}
 button:disabled{cursor:default;opacity:.55}
 :focus-visible{outline:2px solid var(--focus);outline-offset:2px}
 h1,h2,h3,p{margin:0}
 code,pre,.mono{font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere}
 .muted{color:var(--muted);font-size:12px}
-.topbar{display:flex;align-items:center;gap:8px 14px;flex-wrap:wrap;padding:10px 20px;border-bottom:1px solid var(--line);background:var(--bg2)}
-.brand{font-weight:600;font-size:15px}
-.spacer{flex:1}
-.pill{font-size:12px;border:1px solid var(--ok-bd);color:var(--ok-fg);border-radius:999px;padding:1px 10px}
-.pill.down{color:var(--warn-fg);border-color:var(--warn-bd)}
-.pill.auth{color:var(--bad-fg);border-color:var(--bad-bd)}
-.banner{padding:10px 20px;font-size:13px;background:var(--warn-bg);color:var(--warn-fg);border-bottom:1px solid var(--warn-bd)}
+.topbar{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:12px;height:48px;padding:0 20px;border-bottom:1px solid var(--line);background:var(--bg2)}
+.brand{font-weight:600;font-size:15px;white-space:nowrap}.sub{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}.spacer{flex:1}
+.switch{display:none;align-items:center;gap:6px;font-weight:600;padding:3px 10px}.switch .count{font-size:12px;font-weight:500;color:var(--muted)}
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);white-space:nowrap}
+.pill::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--plain-bd)}
+.pill.ok::before{background:var(--ok-fg)}.pill.down::before{background:var(--warn-fg)}.pill.auth::before{background:var(--bad-fg)}
+.banner{padding:9px 20px;font-size:13px;background:var(--warn-bg);color:var(--warn-fg);border-bottom:1px solid var(--warn-bd)}
 .banner.auth{background:var(--bad-bg);color:var(--bad-fg);border-color:var(--bad-bd)}
-.layout{display:grid;grid-template-columns:340px minmax(0,1fr);min-height:calc(100vh - 48px)}
-.list{border-right:1px solid var(--line);padding:12px;overflow:auto;max-height:calc(100vh - 48px);position:sticky;top:0}
-.list-head{display:flex;justify-content:space-between;margin:0 2px 8px}
-.card{display:block;width:100%;text-align:left;padding:9px 11px;border-radius:10px;margin-bottom:6px}
-.card:hover{background:var(--bg2)}
-.card[aria-current=true]{border-color:var(--text);background:var(--bg2)}
+.layout{display:grid;grid-template-columns:300px minmax(0,1fr);min-height:calc(100vh - 48px)}
+.list{border-right:1px solid var(--line);padding:12px 10px;overflow:auto;height:calc(100vh - 48px);position:sticky;top:48px;background:var(--bg)}
+.list-head{display:flex;justify-content:space-between;align-items:baseline;margin:2px 6px 10px;font-weight:600;font-size:13px}
+.card{display:block;width:100%;text-align:left;padding:10px 12px;border-radius:10px;margin-bottom:4px;border-color:transparent;background:transparent}
+.card:hover{background:var(--panel);border-color:var(--line)}
+.card[aria-current=true]{background:var(--panel);border-color:var(--line);box-shadow:var(--shadow)}
 .card-title{font-weight:600;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
-.badges{display:flex;flex-wrap:wrap;gap:6px;margin-top:5px}
-.badge{display:inline-block;font-size:12px;line-height:1.5;border-radius:5px;padding:0 7px;border:1px solid var(--plain-bd);background:var(--plain-bg);color:var(--plain-fg)}
+.card-meta{margin:1px 0 6px}#moreRuns{width:100%;margin-top:4px}
+.badge{display:inline-block;font-size:12px;line-height:1.6;border-radius:6px;padding:0 8px;border:1px solid var(--plain-bd);background:var(--plain-bg);color:var(--plain-fg);white-space:nowrap}
 .t-active{color:var(--active-fg);background:var(--active-bg);border-color:var(--active-bd)}
 .t-ok{color:var(--ok-fg);background:var(--ok-bg);border-color:var(--ok-bd)}
 .t-warn{color:var(--warn-fg);background:var(--warn-bg);border-color:var(--warn-bd)}
-.t-bad{color:var(--bad-fg);background:var(--bad-bg);border-color:var(--bad-bd)}
-.t-wait{border-style:dashed}
-.detail{padding:18px clamp(14px,4vw,44px) 60px;background:var(--bg2);min-width:0}
-.inner{max-width:980px;margin:0 auto}
-.empty{max-width:520px;margin:60px auto;text-align:center;color:var(--muted)}
+.t-bad{color:var(--bad-fg);background:var(--bad-bg);border-color:var(--bad-bd)}.t-wait{border-style:dashed}.scrim{display:none}
+.detail{padding:20px clamp(14px,4vw,40px) 64px;min-width:0}.inner{max-width:920px;margin:0 auto}
+.empty{max-width:420px;margin:72px auto;text-align:center;color:var(--muted)}.empty h1{font-size:18px;color:var(--text);margin-bottom:6px}
+.empty button{margin-top:14px;display:none}.rounds{display:flex;gap:6px;overflow-x:auto;margin:0 0 12px;padding:2px}
+.tab{white-space:nowrap;border-radius:999px;padding:2px 12px;font-size:13px}
+.tab[aria-selected=true]{background:var(--text);color:var(--bg);border-color:var(--text)}.tab-break{flex-basis:100%;height:0}
+.title{font-size:22px;line-height:1.35;font-weight:650;overflow-wrap:anywhere;margin:0 0 6px}
+.facts{display:flex;flex-wrap:wrap;font-size:12px;color:var(--muted)}.facts>span:not(:last-child)::after{content:"·";margin:0 7px;opacity:.6}
+.link{border:0;background:none;padding:0;color:var(--focus);font-size:inherit}
+.hero{display:flex;gap:12px;align-items:flex-start;margin:16px 0 12px;padding:14px 16px;border-radius:12px;background:var(--panel);border:1px solid var(--line);box-shadow:var(--shadow)}
+.hero .dot{flex:none;width:10px;height:10px;border-radius:50%;margin-top:8px;background:var(--plain-bd)}
+.hero.t-active .dot{background:var(--active-fg)}.hero.t-ok .dot{background:var(--ok-fg)}
+.hero.t-warn .dot{background:var(--warn-fg)}.hero.t-bad .dot{background:var(--bad-fg)}
+.hero.t-wait:not(.t-bad):not(.t-warn) .dot{background:none;border:2px dashed var(--muted)}.hero h2{font-size:17px;font-weight:600;line-height:1.45}
+.hero p{color:var(--muted);margin-top:2px}.hero.t-ok,.hero.t-warn,.hero.t-bad,.hero.t-active{color:var(--text);background:var(--panel)}
+.hero.t-ok{border-color:var(--ok-bd)}.hero.t-warn{border-color:var(--warn-bd)}.hero.t-bad{border-color:var(--bad-bd)}.hero.t-active{border-color:var(--active-bd)}
+.ask{margin:0 0 12px;padding:12px 16px;border-radius:12px;background:var(--active-bg);border:1px solid var(--active-bd)}
+.ask h2{font-size:15px;color:var(--active-fg)}.ask ul{margin:6px 0 4px;padding-left:20px}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:12px 0}#boxDecision{grid-column:1/-1}#boxDecision.lead{order:-1}
+.box{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px;min-width:0}
+.box h2{font-size:12px;font-weight:500;color:var(--muted);margin-bottom:2px}
+.box.t-ok,.box.t-warn,.box.t-bad,.box.t-active{color:var(--text);background:var(--panel)}
+.box.t-ok{border-top:3px solid var(--ok-fg)}.box.t-warn{border-top:3px solid var(--warn-fg)}
+.box.t-bad{border-top:3px solid var(--bad-fg)}.box.t-active{border-top:3px solid var(--active-fg)}.box.t-wait{border-style:dashed}
+.big{font-size:16px;font-weight:600;margin-bottom:2px}.kv{margin:4px 0 0}.kv dt{color:var(--muted);font-size:12px;margin-top:6px}
+.kv dd{margin:0;overflow-wrap:anywhere}.kv ul{margin:0;padding-left:18px}.block{margin:26px 0}.block>h2{font-size:15px;margin-bottom:8px}
+.warn{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--warn-fg);border-radius:10px;padding:9px 14px;margin-bottom:8px}
+.warn ul{margin:4px 0 0;padding-left:18px}details>summary{cursor:pointer;color:var(--muted);font-size:12px;width:max-content}.tech{margin-top:4px}
+.tech code{display:block;margin-top:2px}.verbatim{white-space:pre-wrap;overflow-wrap:anywhere}
+.files{background:var(--panel);border:1px solid var(--line);border-radius:10px;margin-top:6px}
+.file{display:flex;flex-wrap:wrap;align-items:center;gap:2px 10px;padding:7px 12px;border-top:1px solid var(--line);font-size:13px}
+.file:first-child{border-top:0}.file code{flex:1 1 200px;min-width:0}.apply-box{margin-top:12px}
+.apply{display:flex;gap:8px;align-items:flex-start;margin-top:6px;flex-wrap:wrap}
+.apply code{flex:1 1 260px;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px 8px;user-select:all}
 .tabs{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 10px}
-.tab[aria-selected=true]{border-color:var(--text);font-weight:600}
-.title{font-size:21px;font-weight:600;overflow-wrap:anywhere;margin:2px 0 6px}
-.facts{display:flex;flex-wrap:wrap;gap:2px 18px;font-size:12px;color:var(--muted)}
-.facts span b{font-weight:500;color:var(--text);overflow-wrap:anywhere}
-.link{border:0;background:none;padding:0;color:var(--focus);text-decoration:underline;font-size:12px}
-.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:16px 0}
-.box{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:11px 14px;min-width:0}
-.box h2{font-size:13px;margin-bottom:6px}
-.box.t-ok,.box.t-warn,.box.t-bad,.box.t-active{color:var(--text)}
-.box.t-ok{border-color:var(--ok-bd);border-top:3px solid var(--ok-fg)}
-.box.t-warn{border-color:var(--warn-bd);border-top:3px solid var(--warn-fg)}
-.box.t-bad{border-color:var(--bad-bd);border-top:3px solid var(--bad-fg)}
-.box.t-active{border-color:var(--active-bd);border-top:3px solid var(--active-fg)}
-.box.t-wait{border-style:dashed}
-.big{font-size:16px;font-weight:600;margin-bottom:4px}
-.kv{display:grid;grid-template-columns:auto minmax(0,1fr);gap:3px 10px;margin:4px 0 0}
-.kv dt{color:var(--muted);font-size:12px;padding-top:1px}
-.kv dd{margin:0;overflow-wrap:anywhere}
-.kv ul{margin:0;padding-left:16px}
-.block{margin:20px 0}
-.block>h2{font-size:15px;margin-bottom:8px}
-.warn{background:var(--panel);border:1px solid var(--warn-bd);border-left:4px solid var(--warn-fg);border-radius:8px;padding:8px 12px;margin-bottom:8px}
-.warn ul{margin:4px 0 0;padding-left:18px}
-.verbatim{white-space:pre-wrap;overflow-wrap:anywhere}
-.scroll{overflow-x:auto}
-table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);font-size:13px}
+.art-meta{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 14px;font-size:12px;color:var(--muted)}.bad-text{color:var(--bad-fg)}
+.view{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;margin:8px 0;max-height:70vh;overflow:auto}
+.add{color:var(--ok-fg)}.del{color:var(--bad-fg)}.hunk{color:var(--muted)}.scroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);font-size:13px;margin:6px 0}
 th,td{text-align:left;padding:5px 10px;border-bottom:1px solid var(--line);overflow-wrap:anywhere;vertical-align:top}
-th{font-size:12px;color:var(--muted);font-weight:500}
-.apply{display:flex;gap:8px;align-items:flex-start;margin-top:8px;flex-wrap:wrap}
-.apply code{flex:1 1 320px;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:7px;padding:6px 8px;user-select:all}
-.view{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px;margin:8px 0;max-height:70vh;overflow:auto}
-.add{color:var(--ok-fg)}.del{color:var(--bad-fg)}.hunk{color:var(--muted)}
-.msg{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:9px 12px;margin:8px 0}
+th{font-size:12px;color:var(--muted);font-weight:500}h3{font-size:13px;margin:12px 0 4px}
+.msg{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:9px 12px;margin:8px 0}
 .msg .verbatim{margin-top:4px;font-size:14px}
-.ev{display:grid;grid-template-columns:72px 92px minmax(0,1fr);gap:8px;padding:4px 0;border-bottom:1px solid var(--line);font-size:13px}
-.art-meta{display:flex;flex-wrap:wrap;gap:2px 16px;font-size:12px;color:var(--muted)}
-@media(max-width:820px){.layout{grid-template-columns:1fr}.list{position:static;max-height:42vh;border-right:0;border-bottom:1px solid var(--line)}
-.grid{grid-template-columns:1fr}.ev{grid-template-columns:64px minmax(0,1fr)}.ev .k{display:none}.topbar,.banner{padding-left:14px;padding-right:14px}}
+.ev{display:grid;grid-template-columns:70px 56px minmax(0,1fr);gap:8px;padding:5px 0;border-bottom:1px solid var(--line);font-size:13px}
+.ids{margin-top:30px}.idrow{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;margin-top:6px;font-size:12px}
+@media(max-width:899px){
+.switch{display:inline-flex}.sub,#updated{display:none}.topbar{padding:0 14px}.layout{display:block}
+.list{display:none;position:fixed;top:48px;left:0;right:0;height:auto;max-height:min(72vh,560px);z-index:25;border-right:0;border-bottom:1px solid var(--line);box-shadow:0 14px 32px rgba(0,0,0,.18)}
+.layout.open .list{display:block}.layout.open .scrim{display:block;position:fixed;inset:48px 0 0 0;z-index:20;background:var(--scrim)}
+.empty button{display:inline-block}.detail{padding-top:14px}.title{font-size:19px}
+.ev{grid-template-columns:62px minmax(0,1fr)}.ev .k{display:none}}
+@media(max-width:519px){.grid{grid-template-columns:minmax(0,1fr)}}
 @media(prefers-reduced-motion:no-preference){.pulse{animation:pulse 1.6s ease-in-out infinite}}
 @keyframes pulse{50%{opacity:.55}}
 </style></head><body>
 <header class="topbar">
-  <span class="brand">Claude 协作工作台</span><span class="muted">只读 · 插件只报告事实，裁决由 Codex 做出</span>
+  <button id="listToggle" class="switch" type="button" aria-controls="taskNav" aria-expanded="false">任务 <span id="listCount" class="count"></span></button>
+  <span class="brand">Claude 工作台</span><span class="sub muted">这里只看进度，验收交给 Codex</span>
   <span class="spacer"></span><span id="updated" class="muted"></span><span id="conn" class="pill">连接中</span>
 </header>
 <div id="banner" class="banner" role="status" hidden></div>
-<div class="layout">
-  <nav class="list" aria-label="任务列表">
-    <div class="list-head"><span class="muted">任务</span><span id="listMeta" class="muted"></span></div>
+<div id="layout" class="layout">
+  <nav id="taskNav" class="list" aria-label="任务列表">
+    <div class="list-head"><span>全部任务</span><span id="listMeta" class="muted"></span></div>
     <div id="taskList"></div>
-    <button id="moreRuns" type="button" hidden>加载更早的记录</button>
+    <button id="moreRuns" type="button" hidden>加载更多</button>
   </nav>
+  <div id="scrim" class="scrim"></div>
   <main class="detail"><div class="inner">
-    <div id="empty" class="empty"><h1>还没有选中任务</h1><p>从 Codex 派发任务后，在这里查看运行事实、Claude 自称和 Codex 裁决。</p></div>
+    <div id="empty" class="empty"><h1>选一个任务看看</h1><p>在 Codex 里派活后，进度会出现在这里</p>
+      <button id="emptyOpen" type="button">打开任务列表</button></div>
     <article id="runView" hidden>
-      <div id="roundTabs" class="tabs" role="tablist" aria-label="轮次"></div>
+      <div id="roundTabs" class="rounds" role="tablist" aria-label="轮次"></div>
       <h1 id="runTitle" class="title"></h1>
       <div id="runFacts" class="facts"></div>
       <p id="runError" class="banner auth" hidden></p>
       <div id="runBody" hidden>
+        <section id="hero" class="hero" aria-live="polite"></section>
+        <div id="askBox"></div>
         <div class="grid">
           <section id="boxRun" class="box"></section>
           <section id="boxClaim" class="box"></section>
@@ -114,12 +128,13 @@ th{font-size:12px;color:var(--muted);font-weight:500}
         </div>
         <section class="block"><h2>提醒</h2><div id="warnList"></div></section>
         <section class="block"><h2>改动</h2><div id="changeBody"></div></section>
-        <section class="block"><h2>原始材料</h2>
-          <div id="artTabs" class="tabs" role="tablist" aria-label="原始材料"></div>
+        <section class="block"><h2>详细资料</h2>
+          <div id="artTabs" class="tabs" role="tablist" aria-label="详细资料"></div>
           <div id="artMeta" class="art-meta"></div>
           <div id="artBody"></div>
           <button id="artMore" type="button" hidden>加载更多</button>
         </section>
+        <details class="ids"><summary>编号</summary><div id="idBody"></div></details>
       </div>
     </article>
   </div></main>
@@ -128,39 +143,50 @@ th{font-size:12px;color:var(--muted);font-weight:500}
 'use strict';
 const PAGE_BYTES = 200000, RUN_PAGE = 100, MAX_EVENTS = 5000, SHOWN_EVENTS = 500;
 const L = {
-  status: {running: '运行中', ok: '正常结束', timeout: '超时', cancelled: '已取消', crashed: '异常退出', not_started: '未启动', lost: '失联'},
-  verdict: {accepted: '采纳', accepted_with_corrections: '修正后采纳', rejected: '不采纳'},
-  next: {done: '任务完成', next_round: '需要下一轮', codex_finishes: '由 Codex 收尾'},
-  claim: {completed: '已完成', partial: '部分完成', blocked: '受阻'},
+  status: {running: '进行中', ok: '正常结束', timeout: '超时', cancelled: '已取消', crashed: '意外中断', not_started: '未启动', lost: '失联'},
+  verdict: {accepted: '通过', accepted_with_corrections: '改后通过', rejected: '退回'},
+  next: {done: '已完成', next_round: '再做一轮', codex_finishes: 'Codex 收尾'},
+  claim: {completed: '做完了', partial: '没做完', blocked: '卡住了'},
   stop: {confirmed: '已确认停止', stopped: '已停止', not_launched: '进程未启动', unknown: '未能确认停止'},
-  kind: {implement: '实现', analyze: '分析'},
-  profile: {copy: '独立副本', readonly: '只读'},
-  cls: {in_scope: '范围内', outside_hint: '超出预期范围', protected: '受保护'},
+  kind: {implement: '动手改', analyze: '只分析'},
+  profile: {copy: '副本模式', readonly: '只读模式'},
+  cls: {in_scope: '预期内', outside_hint: '超出预期', protected: '受保护'},
   file: {A: '新增', M: '修改', D: '删除', R: '重命名', C: '复制', T: '类型变化'},
   item: {accepted: '采纳', downgraded: '降级', rejected: '不采纳'},
-  source: {human: '用户本人', relayed: '他人转述'},
+  source: {human: '你说的', relayed: '别人转述'},
+  ev: {preflight: '准备', executing: '开始', provider: '模型', workflow: '子流程', workflow_agent: '子代理', tool: '工具',
+    text: '回复', finished: '结束', decision: '验收', cancelling: '取消'},
   warn: {
-    original_changed_during_run: '运行期间原工作区有变动', protected_touched: '改动了受保护路径',
-    outside_hint: '改动超出预期范围', tool_denied: '有工具调用被拒绝', source_not_read: '有原件未被读取',
-    workflow_incomplete: '工作流未完成', report_missing: '缺少报告', result_missing: '缺少结果头',
-    result_malformed: '结果头格式不合规', residual_processes_stopped: '已清理残留进程',
-    process_stop_unconfirmed: '无法确认进程已停止', sensitive_inputs_skipped: '部分原件未复制给 Claude',
-    resume_fallback: '未能续接上一轮会话', questions_for_user: 'Claude 有需要用户决定的问题',
-    disputes_present: 'Claude 提出异议', not_verified_present: 'Claude 列出未验证的内容',
-    provider_error: '模型服务返回错误', patch_unavailable: '无法生成补丁',
-    carried_already_in_original: '此前的待交付改动已在原仓库中', finalize_error: '结果汇总不完整，请看原始材料',
-    undelivered_files_now_ignored: '待交付文件已被原仓库的忽略规则匹配'},
+    original_changed_during_run: ['期间你的项目有改动', '合入前确认改动还能用上'], protected_touched: ['动了受保护的文件', '需要 Codex 逐个放行'],
+    outside_hint: ['改了预期外的文件', '确认这些改动是否需要'], tool_denied: ['有操作被拦下', 'Claude 的部分操作没获准'],
+    source_not_read: ['有附件没读', 'Claude 可能漏看了这些文件'], workflow_incomplete: ['子流程没跑完', '部分 Workflow 未完成或失败'],
+    report_missing: ['没交报告', '可以看“最后回复”'], result_missing: ['没交结果数据', '所以没有 Claude 自评'],
+    result_malformed: ['结果数据格式不对', '自评可能不完整'], residual_processes_stopped: ['已停掉遗留进程', 'Claude 退出后还有进程在跑'],
+    process_stop_unconfirmed: ['不确定进程已停', '请检查是否还有进程在跑'], sensitive_inputs_skipped: ['部分附件没给 Claude', '敏感、链接或过大的文件被跳过'],
+    resume_fallback: ['没能接上上一轮', '这一轮换了新会话'], questions_for_user: ['Claude 有问题问你', '需要你来定，Codex 不代答'],
+    disputes_present: ['Claude 有不同意见', '看看它反对的是哪条'], not_verified_present: ['有内容没验证', 'Claude 自己说这些没核实'],
+    provider_error: ['模型服务出错', 'Claude 那边返回了错误'], patch_unavailable: ['没能整理出改动', '改动清单暂不可用'],
+    carried_already_in_original: ['之前的改动已合入', '上一轮的改动已在项目里'], finalize_error: ['结果没汇总全', '请看下方详细资料'],
+    undelivered_files_now_ignored: ['有改动被忽略规则挡住', '这些文件现在被 Git 忽略']},
 };
-const ARTS = [['report', '报告'], ['brief', 'Claude 收到的任务书'], ['result', '结果头'], ['patch', 'Patch'],
-  ['delivery_patch', '待交付 Patch'], ['packet', '用户原话'], ['inputs', '原件'], ['instruction_layer', '指令层'],
-  ['final_message', '最终回复'], ['events', '活动']];
+const ASK = 'questions_for_user', QUIET_EV = new Set(['preflight', 'executing', 'finished', 'decision', 'cancelling', 'tool']);
+const TOOL_TEXT = {Read: '读取', NotebookRead: '读取', Write: '写入', Edit: '修改', MultiEdit: '修改', NotebookEdit: '修改',
+  Bash: '运行命令', Grep: '搜索', Glob: '查找文件', LS: '查看目录', Agent: '派子代理', Task: '派子代理', Skill: '使用技能',
+  WebFetch: '打开网页', WebSearch: '联网搜索', TodoWrite: '更新待办', Workflow: '启动子流程'};
+const EV_TEXT = {'checking the local Claude CLI': '检查本机 Claude', 'preparing the workspace': '准备工作目录',
+  'Claude started': 'Claude 开始工作', 'provider lifecycle event': '模型服务状态', 'cancellation requested': '已请求取消',
+  'workflow activity': '子流程活动', 'workflow agent': '子代理'};
+const ARTS = [['report', '报告'], ['patch', '本轮改动'], ['events', '过程记录']];
+const MORE_ARTS = [['brief', '任务书'], ['packet', '你的原话'], ['inputs', '附件'], ['instruction_layer', 'Claude 配置'],
+  ['result', '结果数据'], ['final_message', '最后回复'], ['delivery_patch', '累计改动']];
 const JSON_ARTS = new Set(['result', 'packet', 'inputs', 'instruction_layer']);
 
 const hashParams = new URLSearchParams(location.hash.slice(1));
 const S = {
   token: hashParams.get('token') || '', sel: hashParams.get('run') || '', runs: new Map(), pageEnd: 0, hasMore: false,
-  listLoaded: false, listSeq: 0, listApplied: 0, listSig: '', snap: null, runSig: '', tabSig: '', runError: '', gen: 0,
-  events: [], cursor: 0, evTrimmed: false, artName: '', art: null, artSeq: 0, timers: {}, dead: false, conn: '',
+  listLoaded: false, listSeq: 0, listApplied: 0, listSig: '', snap: null, runSig: '', tabSig: '', heroSig: '', runError: '', gen: 0,
+  events: [], cursor: 0, evTrimmed: false, artName: '', art: null, artSeq: 0, moreArts: false, drawer: false,
+  timers: {}, dead: false, conn: '',
 };
 
 const $ = id => document.getElementById(id);
@@ -175,11 +201,17 @@ function el(tag, cls, ...kids) {
   }
   return node;
 }
+function button(text, cls, onClick) {
+  const node = el('button', cls, text);
+  node.type = 'button';
+  node.addEventListener('click', onClick);
+  return node;
+}
 function label(map, key, fallback) {
   if (key === null || key === undefined || key === '') return fallback === undefined ? '—' : fallback;
   return Object.hasOwn(map, key) ? map[key] : String(key);
 }
-const warnLabel = code => label(L.warn, code, '未命名提醒');
+const warnInfo = code => (Object.hasOwn(L.warn, code || '') ? L.warn[code] : ['其他提醒', code || '']);
 function fill(node, ...kids) { node.replaceChildren(...kids.filter(Boolean)); }
 function badge(text, tone) { return el('span', 'badge' + (tone ? ' ' + tone : ''), text); }
 function list(items, cls) { return el('ul', cls, ...items.map(item => el('li', null, item))); }
@@ -196,17 +228,36 @@ function table(heads, rows) {
 function fmtDur(s) {
   if (typeof s !== 'number' || !isFinite(s)) return '—';
   if (s < 60) return s.toFixed(1) + ' 秒';
-  const m = Math.floor(s / 60);
-  return m < 60 ? `${m} 分 ${Math.round(s % 60)} 秒` : `${Math.floor(m / 60)} 小时 ${m % 60} 分`;
+  const m = Math.floor(s / 60), r = Math.round(s % 60);
+  if (m >= 60) return `${Math.floor(m / 60)} 小时 ${m % 60} 分`;
+  return r ? `${m} 分 ${r} 秒` : `${m} 分钟`;
 }
 function fmtTime(sec, clockOnly) {
   if (typeof sec !== 'number' || !isFinite(sec)) return '—';
   const d = new Date(sec * 1000);
   return clockOnly ? d.toLocaleTimeString('zh-CN', {hour12: false}) : d.toLocaleString('zh-CN', {hour12: false});
 }
+function fmtShort(sec) {
+  if (typeof sec !== 'number' || !isFinite(sec)) return '—';
+  const d = new Date(sec * 1000), pad = n => String(n).padStart(2, '0');
+  return `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
 function fmtBytes(n) {
   if (typeof n !== 'number' || !isFinite(n)) return '—';
   return n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(1) + ' KB' : (n / 1048576).toFixed(1) + ' MB';
+}
+function evText(e) {
+  if (e && e.kind === 'tool') {
+    const verb = Object.hasOwn(TOOL_TEXT, e.tool || '') ? TOOL_TEXT[e.tool] : '使用 ' + (e.tool || e.summary || '工具');
+    return verb + (e.file ? ' ' + e.file : '') + (e.text ? '：' + e.text : '');
+  }
+  const s = String((e && e.summary) || '');
+  if (Object.hasOwn(EV_TEXT, s)) return EV_TEXT[s];
+  let m = /^run ended: (\S+)$/.exec(s);
+  if (m) return '运行结束：' + label(L.status, m[1]);
+  m = /^Codex verdict: (\S+); next: (\S+)$/.exec(s);
+  if (m) return 'Codex 验收：' + label(L.verdict, m[1]) + ' · ' + label(L.next, m[2]);
+  return s;
 }
 
 const statusText = r => label(L.status, r && r.status, '状态未知');
@@ -217,12 +268,18 @@ function statusTone(status) {
   return '';
 }
 function verdictText(decision) {
-  if (!decision || !decision.verdict) return '待核验';
+  if (!decision || !decision.verdict) return '待验收';
   return label(L.verdict, decision.verdict) + ' · ' + label(L.next, decision.next, '下一步未注明');
 }
 function verdictTone(decision) {
   if (!decision || !decision.verdict) return 't-wait';
   return {accepted: 't-ok', accepted_with_corrections: 't-warn', rejected: 't-bad'}[decision.verdict] || '';
+}
+function stateBadge(r) {
+  if (r.status === 'running') return badge('进行中', 't-active pulse');
+  if (r.decision && r.decision.verdict) return badge(verdictText(r.decision), verdictTone(r.decision));
+  if (r.status === 'ok') return badge('待验收', 't-wait');
+  return badge(statusText(r) + ' · 待验收', (statusTone(r.status) || 't-warn') + ' t-wait');
 }
 
 function groupTasks(runs) {
@@ -251,18 +308,18 @@ async function api(path) {
   try {
     res = await fetch(path, {headers: {Authorization: 'Bearer ' + S.token}, cache: 'no-store'});
   } catch (error) {
-    setConn('down', '无法连接本机工作台');
-    throw new ApiError(0, '无法连接本机工作台');
+    setConn('down', '连不上本机工作台');
+    throw new ApiError(0, '连不上本机工作台');
   }
   let body = null;
   try { body = await res.json(); } catch (error) { body = null; }
   if (res.status === 401) {
     setConn('auth');
-    throw new ApiError(401, '链接失效');
+    throw new ApiError(401, '链接已过期');
   }
   const message = (body && typeof body.error === 'string' && body.error) || ('HTTP ' + res.status);
   if (res.status >= 500) {
-    setConn('down', '工作台服务出错：' + message);
+    setConn('down', '工作台出错了：' + message);
     throw new ApiError(res.status, message);
   }
   setConn('ok');
@@ -279,11 +336,11 @@ function setConn(state, detail) {
   const banner = $('banner');
   banner.hidden = state === 'ok';
   banner.className = 'banner' + (state === 'auth' ? ' auth' : '');
-  banner.textContent = state === 'auth' ? '链接失效，请从 Codex 重新获取' : state === 'down' ? '连接中断，正在重试' + (detail ? '：' + detail : '') : '';
+  banner.textContent = state === 'auth' ? '链接已过期，请回 Codex 重新打开' : state === 'down' ? '暂时连不上，正在重试' + (detail ? '：' + detail : '') : '';
   const pill = $('conn');
-  pill.className = 'pill' + (state === 'ok' ? '' : ' ' + state);
-  pill.textContent = {ok: '已连接', down: '连接中断', auth: '链接失效'}[state];
-  if (state === 'ok') $('updated').textContent = '更新于 ' + fmtTime(Date.now() / 1000, true);
+  pill.className = 'pill ' + state;
+  pill.textContent = {ok: '已连接', down: '已断开', auth: '链接过期'}[state];
+  if (state === 'ok') $('updated').textContent = fmtTime(Date.now() / 1000, true) + ' 更新';
 }
 
 function later(key, fn, ms) {
@@ -330,17 +387,27 @@ async function refreshList(more) {
   }
 }
 
+function setDrawer(open) {
+  S.drawer = open;
+  $('layout').className = 'layout' + (open ? ' open' : '');
+  $('listToggle').setAttribute('aria-expanded', String(open));
+}
 function selectRun(id) {
   if (!id || (id === S.sel && S.snap && S.snap.run_id === id)) return;
   S.sel = id;
   S.gen++;
   S.artSeq++;
-  Object.assign(S, {snap: null, runSig: '', runError: '', events: [], cursor: 0, evTrimmed: false, art: null});
+  Object.assign(S, {snap: null, runSig: '', heroSig: '', runError: '', events: [], cursor: 0, evTrimmed: false, art: null});
   history.replaceState(null, '', '#token=' + enc(S.token) + '&run=' + enc(id));
   clearTimeout(S.timers.run);
   renderList();
   renderRun();
   runLoop();
+}
+function pickRun(id) {
+  setDrawer(false);
+  selectRun(id);
+  if (typeof window.scrollTo === 'function') window.scrollTo(0, 0);
 }
 async function refreshRun() {
   const id = S.sel, gen = S.gen;
@@ -349,7 +416,7 @@ async function refreshRun() {
     snap = await api('/api/snapshot?run_id=' + enc(id));
   } catch (error) {
     if (gen === S.gen && error.status >= 400 && error.status < 500 && error.status !== 401) {
-      S.runError = '无法读取这一轮：' + error.message;
+      S.runError = '这一轮读不出来：' + error.message;
       renderRun();
     }
     return;
@@ -360,6 +427,7 @@ async function refreshRun() {
   S.runError = '';
   mergeRun(snap);
   if (!S.artName) S.artName = snap.active ? 'events' : 'report';
+  if (S.artName === 'patch' && snap.outcome && !snap.outcome.changes) S.artName = 'report';
   renderList();
   renderRun();
   const justFinished = prev && prev.active && !snap.active;
@@ -425,21 +493,20 @@ function renderList() {
   if (sig === S.listSig) return;
   S.listSig = sig;
   const box = $('taskList');
-  if (!groups.length) box.replaceChildren(el('p', 'muted', S.listLoaded ? '还没有任务记录。' : '正在读取任务…'));
+  if (!groups.length) box.replaceChildren(el('p', 'muted', S.listLoaded ? '还没有任务，去 Codex 里派一个' : '正在加载…'));
   else box.replaceChildren(...groups.map(taskCard));
   $('moreRuns').hidden = !S.hasMore;
-  $('listMeta').textContent = groups.length ? `${groups.length} 个` + (S.hasMore ? '（仅已载入）' : '') : '';
+  const count = groups.length ? (S.hasMore ? `已显示 ${groups.length} 个` : `共 ${groups.length} 个`) : '';
+  $('listMeta').textContent = count;
+  $('listCount').textContent = groups.length ? String(groups.length) : '';
 }
 function taskCard(group) {
   const r = group.latest;
-  const card = el('button', 'card',
-    el('div', 'card-title', r.title || group.task_id),
-    el('div', 'muted', `${group.task_id} · ${label(L.kind, r.kind)} / ${label(L.profile, r.profile)} · 第 ${r.round ?? '?'} 轮`
-      + (group.runs.length > 1 ? `（已载入 ${group.runs.length} 轮）` : '')),
-    el('div', 'badges', badge(statusText(r), statusTone(r.status)), badge(verdictText(r.decision), verdictTone(r.decision))));
-  card.type = 'button';
+  const card = button(null, 'card', () => pickRun(r.run_id));
+  card.append(el('div', 'card-title', r.title || group.task_id),
+    el('div', 'muted card-meta', `${label(L.kind, r.kind)} · 第 ${r.round ?? '?'} 轮 · ${fmtShort(r.started_at)}`),
+    stateBadge(r));
   card.setAttribute('aria-current', String(group.runs.some(x => x.run_id === S.sel)));
-  card.addEventListener('click', () => selectRun(r.run_id));
   return card;
 }
 
@@ -455,12 +522,13 @@ function renderRun() {
   if (!s) {
     $('roundTabs').replaceChildren();
     S.tabSig = '';
-    $('runTitle').textContent = S.runError ? S.sel : '正在读取 ' + S.sel + ' …';
+    $('runTitle').textContent = S.runError ? S.sel : '正在加载…';
     $('runFacts').replaceChildren();
     return;
   }
   const o = s.outcome || null;
   renderHeader(s, o);
+  renderHero(s, o);
   const sig = JSON.stringify([s.run_id, s.status, s.decision, o, s.live, s.decision_history_count,
     s.active && s.last_meaningful_event && s.last_meaningful_event.seq]);
   if (sig === S.runSig) return;
@@ -468,6 +536,7 @@ function renderRun() {
   renderBoxes(s, o);
   renderWarnings(s, o);
   renderChanges(s, o);
+  renderIds(s);
   renderArtTabs();
   if (!S.art && S.artName === 'events') renderArtifact();
 }
@@ -481,139 +550,180 @@ function renderHeader(s, o) {
   }
   $('runTitle').textContent = s.title || s.task_id || s.run_id;
   const actual = o ? (o.models || []).join(', ') : s.live ? ((s.live.models || []).join(', ') || s.live.initialized_model) : '';
-  const fact = (key, value) => el('span', null, key + ' ', el('b', null, value));
-  const facts = [fact('任务', s.task_id ?? '—'), fact('运行', s.run_id),
-    fact('类型', `${label(L.kind, s.kind)} / ${label(L.profile, s.profile)} · 第 ${s.round ?? '?'} 轮`),
-    fact('模型', `请求 ${s.model || '—'} · effort ${s.effort || '—'} · 实际 ${actual || '待回报'}`),
-    fact('用时', fmtDur(s.elapsed_seconds) + (s.active && s.timeout_seconds ? ' / 上限 ' + fmtDur(s.timeout_seconds) : '')),
-    fact('开始', fmtTime(s.started_at))];
-  if (s.continue_from) {
-    const link = el('button', 'link', s.continue_from);
-    link.type = 'button';
-    link.addEventListener('click', () => selectRun(s.continue_from));
-    facts.push(el('span', null, '接续自 ', link));
-  }
+  const asked = s.model && actual && !actual.includes(s.model) ? `（指定 ${s.model}）` : '';
+  const facts = [label(L.kind, s.kind), label(L.profile, s.profile), '模型 ' + (actual || s.model || '—') + asked,
+    s.effort ? '思考强度 ' + s.effort : null,
+    '用时 ' + fmtDur(s.elapsed_seconds) + (s.active && s.timeout_seconds ? `（上限 ${fmtDur(s.timeout_seconds)}）` : ''),
+    '开始于 ' + fmtShort(s.started_at)].filter(Boolean).map(text => el('span', null, text));
+  if (s.continue_from) facts.push(el('span', null, button('查看上一轮', 'link', () => selectRun(s.continue_from))));
   $('runFacts').replaceChildren(...facts);
 }
 function roundTab(r, index, runs) {
   const twin = runs.filter(x => x.round === r.round).length > 1;
-  const tag = r.status === 'running' ? '运行中' : r.decision ? label(L.verdict, r.decision.verdict) : '待核验';
-  const tab = el('button', 'tab', `第 ${r.round ?? '?'} 轮` + (twin ? ' · ' + r.run_id.slice(-4) : '') + ' · ' + tag);
-  tab.type = 'button';
+  const tag = r.status === 'running' ? '进行中' : r.decision ? label(L.verdict, r.decision.verdict) : '待验收';
+  const tab = button(`第 ${r.round ?? '?'} 轮` + (twin ? ' · ' + r.run_id.slice(-4) : '') + ' · ' + tag, 'tab', () => selectRun(r.run_id));
   tab.setAttribute('role', 'tab');
   tab.setAttribute('aria-selected', String(r.run_id === S.sel));
-  tab.addEventListener('click', () => selectRun(r.run_id));
   return tab;
+}
+function renderHero(s, o) {
+  const d = s.decision;
+  let tone, head, sub;
+  if (s.status === 'running') {
+    const last = s.last_meaningful_event;
+    tone = 't-active';
+    head = 'Claude 正在做';
+    sub = (last ? evText(last) + ' · ' : '') + '已用 ' + fmtDur(s.elapsed_seconds);
+  } else if (d && d.verdict) {
+    tone = verdictTone(d);
+    head = 'Codex 验收：' + label(L.verdict, d.verdict);
+    sub = '下一步：' + label(L.next, d.next, '未注明');
+  } else {
+    const claimed = o ? o.claimed_status : s.claimed_status;
+    tone = (statusTone(s.status) || '') + ' t-wait';
+    head = (s.status === 'ok' ? 'Claude 已交回' : statusText(s)) + '，等 Codex 验收';
+    sub = claimed ? 'Claude 自评：' + label(L.claim, claimed) : 'Claude 没给自评';
+  }
+  const sig = JSON.stringify([tone, head, sub]);
+  if (sig === S.heroSig) return;
+  S.heroSig = sig;
+  const hero = $('hero');
+  hero.className = 'hero ' + tone;
+  hero.replaceChildren(el('span', 'dot'), el('div', null, el('h2', null, head), el('p', null, sub)));
 }
 function renderBoxes(s, o) {
   const running = s.status === 'running';
   const stopped = (o && o.process_stopped) || s.process_stopped;
   const last = s.last_meaningful_event;
-  const cost = o && typeof o.cost_usd === 'number' ? '$' + o.cost_usd.toFixed(4) + '（CLI 估算）' : '—';
+  const cost = o && typeof o.cost_usd === 'number' ? '约 $' + o.cost_usd.toFixed(4) + '（Claude 估算）' : '—';
   const boxRun = $('boxRun');
   boxRun.className = 'box ' + (statusTone(s.status).replace(' pulse', '') || '');
-  boxRun.replaceChildren(el('h2', null, '运行事实'), el('p', 'big', statusText(s)), kv([
-    ['最近活动', running && last ? last.summary : undefined],
+  boxRun.replaceChildren(el('h2', null, '运行情况'), el('p', 'big', statusText(s)), kv([
+    ['正在做', running && last ? evText(last) : undefined],
     ['进程', running ? '运行中' : label(L.stop, stopped, '未记录')],
-    ['耗时', o ? fmtDur(o.duration_seconds) : fmtDur(s.elapsed_seconds) + (running ? '（进行中）' : '')],
-    ['费用', running ? '运行结束后汇总' : cost],
-    ['说明', o && o.note ? o.note : undefined]]));
+    ['用时', o ? fmtDur(o.duration_seconds) : running ? undefined : fmtDur(s.elapsed_seconds)],
+    ['费用', running ? '结束后统计' : cost],
+    ['备注', o && o.note ? o.note : undefined]]));
   const claimed = o ? o.claimed_status : s.claimed_status;
   const summary = (o && o.summary) || s.summary;
-  fill($('boxClaim'), el('h2', null, 'Claude 自称'),
-    el('p', 'big', claimed ? label(L.claim, claimed) : running ? '运行中，尚未回报' : '未给出（结果头缺失或无效）'),
+  fill($('boxClaim'), el('h2', null, 'Claude 自评'),
+    el('p', 'big', claimed ? label(L.claim, claimed) : running ? '还在做，没交回' : '没给自评'),
     summary ? el('p', 'verbatim', summary) : null,
-    el('p', 'muted', '这是 Claude 自己的说法，不是核验结论。'));
+    el('p', 'muted', 'Claude 自己说的，不算验收'));
   const d = s.decision;
   const boxDecision = $('boxDecision');
-  boxDecision.className = 'box ' + verdictTone(d);
+  boxDecision.className = 'box ' + verdictTone(d) + (d && d.verdict ? ' lead' : '');
   if (!d || !d.verdict) {
-    boxDecision.replaceChildren(el('h2', null, 'Codex 裁决'), el('p', 'big', '尚未核验'),
-      el('p', 'muted', running ? '运行结束后由 Codex 核验。' : 'Codex 还没有给出裁决；运行事实和 Claude 自称都不等于验收。'));
+    boxDecision.replaceChildren(el('h2', null, 'Codex 验收'), el('p', 'big', '待验收'),
+      el('p', 'muted', running ? '做完后 Codex 会来验收' : 'Codex 还没验收，可在对话里提醒它'));
     return;
   }
   const items = (d.item_decisions || []).map(x => `${x.id}：${label(L.item, x.disposition)}`);
-  boxDecision.replaceChildren(el('h2', null, 'Codex 裁决'), el('p', 'big', '报告：' + label(L.verdict, d.verdict)), kv([
+  boxDecision.replaceChildren(el('h2', null, 'Codex 验收'), el('p', 'big', label(L.verdict, d.verdict)), kv([
     ['下一步', label(L.next, d.next, '未注明')],
-    ['说明', d.note ? el('span', 'verbatim', d.note) : undefined],
-    ['核验依据', d.evidence && d.evidence.length ? list(d.evidence) : '未列出'],
-    ['逐项', items.length ? list(items) : undefined],
-    ['已确认受保护路径', d.protected_confirmed && d.protected_confirmed.length ? list(d.protected_confirmed, 'mono') : undefined],
-    ['记录于', fmtTime(d.recorded_at)],
-    ['历史', s.decision_history_count > 1 ? `共 ${s.decision_history_count} 次裁决，显示最新一次` : undefined]]));
+    ['备注', d.note ? el('span', 'verbatim', d.note) : undefined],
+    ['验收依据', d.evidence && d.evidence.length ? list(d.evidence) : '没写'],
+    ['逐条意见', items.length ? list(items) : undefined],
+    ['放行文件', d.protected_confirmed && d.protected_confirmed.length ? list(d.protected_confirmed, 'mono') : undefined],
+    ['验收时间', fmtTime(d.recorded_at)],
+    ['历史', s.decision_history_count > 1 ? `验收过 ${s.decision_history_count} 次，这是最新的` : undefined]]));
+}
+function warnParts(w) {
+  return [Array.isArray(w.paths) && w.paths.length ? list(w.paths.map(String), 'mono') : null,
+    Array.isArray(w.items) && w.items.length ? list(w.items.map(item => el('span', 'verbatim', String(item)))) : null];
+}
+function techView(w) {
+  return el('details', 'tech', el('summary', null, '技术细节'), el('code', 'muted', w.code || '—'),
+    w.detail ? el('p', 'muted verbatim', w.detail) : null);
 }
 function renderWarnings(s, o) {
   const raw = o ? (o.warnings || []) : (s.warnings || []);
   const warnings = raw.map(w => (typeof w === 'string' ? {code: w} : w || {}));
+  const asks = warnings.filter(w => w.code === ASK);
+  fill($('askBox'), ...asks.map(w => el('section', 'ask', el('h2', null, L.warn[ASK][0]),
+    el('p', 'muted', L.warn[ASK][1] + '，在 Codex 对话里回答即可'), ...warnParts(w), techView(w))));
+  const rest = warnings.filter(w => w.code !== ASK);
   const box = $('warnList');
-  if (!warnings.length) {
-    box.replaceChildren(el('p', 'muted', s.status === 'running' ? '运行结束后汇总提醒。' : '没有提醒。'));
+  if (!rest.length) {
+    box.replaceChildren(el('p', 'muted', s.status === 'running' ? '结束后汇总' : asks.length ? '没有其他提醒' : '没有提醒'));
     return;
   }
-  box.replaceChildren(...warnings.map(w => el('div', 'warn',
-    el('div', null, el('b', null, warnLabel(w.code)), ' ', el('code', 'muted', w.code || '')),
-    w.detail ? el('p', 'muted verbatim', w.detail) : null,
-    Array.isArray(w.paths) && w.paths.length ? list(w.paths.map(String), 'mono') : null,
-    Array.isArray(w.items) && w.items.length ? list(w.items.map(item => el('span', 'verbatim', String(item)))) : null)));
+  box.replaceChildren(...rest.map(w => {
+    const [title, desc] = warnInfo(w.code);
+    return el('div', 'warn', el('b', null, title), desc ? el('p', 'muted', desc) : null, ...warnParts(w), techView(w));
+  }));
 }
 function renderChanges(s, o) {
   const box = $('changeBody');
   if (!o) {
-    box.replaceChildren(el('p', 'muted', s.status === 'running' ? '运行结束后生成改动清单。' : '没有运行结果记录。'));
+    box.replaceChildren(el('p', 'muted', s.status === 'running' ? '结束后列出改动' : '还没有结果'));
     return;
   }
   const c = o.changes;
   if (!c) {
-    box.replaceChildren(el('p', 'muted', s.profile === 'readonly' ? '只读运行，没有改动。' : '没有改动记录。'));
+    box.replaceChildren(el('p', 'muted', s.profile === 'readonly' ? '只读模式，没有改动' : '没有改动记录'));
     return;
   }
   const files = Array.isArray(c.files) ? c.files : [];
   const tone = {in_scope: '', outside_hint: 't-warn', protected: 't-bad'};
   const parts = [el('p', null, `${c.file_count ?? files.length} 个文件 · +${c.insertions ?? 0} −${c.deletions ?? 0}`)];
   if (files.length) {
-    parts.push(table(['文件', '变化', '行数', '归类'], files.map(f => [el('code', null, f.path || '—'), label(L.file, f.status),
-      `+${f.insertions ?? 0} −${f.deletions ?? 0}`, badge(label(L.cls, f['class'], '未归类'), tone[f['class']] || '')])));
+    parts.push(el('div', 'files', ...files.map(f => el('div', 'file', el('code', null, f.path || '—'),
+      el('span', 'muted', `${label(L.file, f.status)} · +${f.insertions ?? 0} −${f.deletions ?? 0}`),
+      badge(label(L.cls, f['class'], '未归类'), tone[f['class']] || '')))));
   }
   if (c.apply_hint) {
     const note = el('span', 'muted');
-    const button = el('button', null, '复制命令');
-    button.type = 'button';
     const command = c.check_hint ? `${c.check_hint} && ${c.apply_hint}` : c.apply_hint;
-    button.addEventListener('click', () => copyText(command, note));
-    parts.push(el('p', 'muted', '把待交付补丁先检查再应用到原工作区（由你或 Codex 决定是否执行）：'),
-      el('div', 'apply', el('code', null, command), button, note));
+    parts.push(el('details', 'apply-box', el('summary', null, '手动合入'),
+      el('p', 'muted', '想自己合入？复制这条命令' + (c.delivery_patch ? `，含之前没合入的改动，共 ${c.delivery_file_count ?? 0} 个文件` : '')),
+      el('div', 'apply', el('code', null, command), button('复制命令', null, () => copyText(command, note)), note)));
   }
-  if (c.delivery_patch) parts.push(el('p', 'muted', `待交付补丁含此前尚未应用到原仓库的全部改动（${c.delivery_file_count ?? 0} 个文件），见原始材料“待交付 Patch”。`));
   box.replaceChildren(...parts);
+}
+function renderIds(s) {
+  const row = (name, value) => {
+    const note = el('span', 'muted');
+    return el('div', 'idrow', el('span', 'muted', name), el('code', null, value), button('复制', null, () => copyText(value, note)), note);
+  };
+  fill($('idBody'), row('任务号', String(s.task_id ?? '—')), row('运行号', s.run_id),
+    s.continue_from ? row('上一轮', s.continue_from) : null);
 }
 function copyText(text, note) {
   const done = message => { note.textContent = message; };
   if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(text).then(() => done('已复制'), () => done('复制失败，请手动选中命令'));
+    navigator.clipboard.writeText(text).then(() => done('已复制'), () => done('复制失败，请手动选中'));
   } else {
-    done('浏览器不支持自动复制，请手动选中命令');
+    done('浏览器不支持自动复制，请手动选中');
   }
 }
 
+function artTab([name, text]) {
+  const tab = button(text, 'tab', () => openArtifact(name));
+  tab.setAttribute('role', 'tab');
+  tab.setAttribute('aria-selected', String(name === S.artName));
+  return tab;
+}
 function renderArtTabs() {
   const o = S.snap && S.snap.outcome;
-  const shown = ARTS.filter(([name]) => name !== 'delivery_patch' || (o && o.changes && o.changes.delivery_patch));
-  $('artTabs').replaceChildren(...shown.map(([name, text]) => {
-    const tab = el('button', 'tab', text);
-    tab.type = 'button';
-    tab.setAttribute('role', 'tab');
-    tab.setAttribute('aria-selected', String(name === S.artName));
-    tab.addEventListener('click', () => openArtifact(name));
-    return tab;
-  }));
+  const primary = ARTS.filter(([name]) => name !== 'patch' || !o || o.changes);
+  const extra = MORE_ARTS.filter(([name]) => name !== 'delivery_patch' || (o && o.changes && o.changes.delivery_patch));
+  const inExtra = extra.some(([name]) => name === S.artName);
+  const open = S.moreArts || inExtra;
+  const more = button(open ? '收起' : '更多', 'tab', () => {
+    S.moreArts = !open;
+    if (open && inExtra) openArtifact('report');
+    else renderArtTabs();
+  });
+  more.setAttribute('aria-expanded', String(open));
+  $('artTabs').replaceChildren(...primary.map(artTab), more, ...(open ? [el('span', 'tab-break'), ...extra.map(artTab)] : []));
 }
 function renderArtifact() {
   renderArtTabs();
   const meta = $('artMeta'), body = $('artBody'), more = $('artMore');
   more.hidden = true;
   if (S.artName === 'events') {
-    meta.replaceChildren(el('span', null, `共 ${S.events.length} 条公开活动`
-      + (S.evTrimmed ? `（早于这些的活动已丢弃，只保留最近 ${MAX_EVENTS} 条）` : '')));
+    meta.replaceChildren(el('span', null, `共 ${S.events.length} 条` + (S.evTrimmed ? `（只留最近 ${MAX_EVENTS} 条）` : '')));
     body.replaceChildren(eventsView());
     return;
   }
@@ -626,21 +736,21 @@ function renderArtifact() {
   }
   if (a.available === false) {
     meta.replaceChildren();
-    body.replaceChildren(el('p', 'muted', S.snap && S.snap.active ? '运行中，这份材料还没有生成。' : '本轮没有这份材料。'));
+    body.replaceChildren(el('p', 'muted', S.snap && S.snap.active ? '还在进行，这份还没生成' : '这一轮没有这份资料'));
     return;
   }
   if (a.available === undefined) {
     meta.replaceChildren();
-    body.replaceChildren(el('p', 'muted', '正在读取…'));
+    body.replaceChildren(el('p', 'muted', '正在加载…'));
     return;
   }
   const o = S.snap && S.snap.outcome;
   const recorded = o ? {report: o.report && o.report.sha256, brief: o.brief && o.brief.sha256}[a.name] : null;
   fill(meta,
-    a.name === 'brief' ? el('b', null, 'Claude 实际收到的任务书') : null,
-    el('span', null, `大小 ${fmtBytes(a.size)} · 已载入 ${fmtBytes(a.next)}`),
-    el('span', null, 'sha256 ', el('code', null, a.sha || '—')),
-    recorded ? el('span', null, recorded === a.sha ? '与运行记录一致' : '与运行记录的 sha256 不一致') : null,
+    a.name === 'brief' ? el('b', null, '这是 Claude 实际收到的原文') : null,
+    el('span', null, a.end ? fmtBytes(a.size) : `已加载 ${fmtBytes(a.next)} / 共 ${fmtBytes(a.size)}`),
+    recorded ? el('span', recorded === a.sha ? null : 'bad-text', recorded === a.sha ? '校验一致' : '校验不一致，内容和记录对不上') : null,
+    el('details', null, el('summary', null, '校验码'), el('code', null, a.sha || '—')),
     a.error ? el('span', null, '继续读取失败：' + a.error) : null);
   if (!a.end) {
     more.hidden = false;
@@ -681,25 +791,25 @@ function diffView(text) {
 }
 function packetView(p) {
   const msgs = Array.isArray(p.user_messages) ? p.user_messages : [];
-  const box = el('div', null, el('p', 'muted', '逐字展示 Codex 转交给 Claude 的用户原话，未经改写。'));
+  const box = el('div', null, el('p', 'muted', 'Codex 原样转给 Claude 的话，一字没改'));
   msgs.forEach((m, i) => {
     const head = `第 ${i + 1} 条 · ${label(L.source, m && m.source, '来源未注明')}` + (m && m.at ? ' · ' + m.at : '');
     box.append(el('div', 'msg', el('div', 'muted', head), el('div', 'verbatim', String((m && m.text) ?? ''))));
   });
   if (!msgs.length) {
-    box.append(el('div', 'msg', el('div', 'muted', '没有用户原话。Codex 给出的原因：'),
-      el('div', 'verbatim', p.no_user_words_reason == null ? '（未提供原因）' : String(p.no_user_words_reason))));
+    box.append(el('div', 'msg', el('div', 'muted', 'Codex 没转你的原话，理由是：'),
+      el('div', 'verbatim', p.no_user_words_reason == null ? '（没写理由）' : String(p.no_user_words_reason))));
   }
   return box;
 }
 function inputsView(d) {
   const entries = Array.isArray(d.inputs) ? d.inputs : [];
   const skipped = Array.isArray(d.skipped) ? d.skipped : [];
-  const box = el('div', null, el('p', 'muted', '运行开始时冻结给 Claude 的原件副本。'));
-  if (!entries.length) box.append(el('p', 'muted', '本轮没有原件。'));
-  else box.append(table(['原路径', '类型', '大小', 'sha256'], entries.map(x => [el('code', null, x.original || x.copy || '—'),
-    x.kind === 'directory' ? `目录 · ${x.files ?? 0} 个文件` : '文件', fmtBytes(x.bytes), el('code', null, x.sha256 || '—')])));
-  if (skipped.length) box.append(el('p', null, '未复制给 Claude：'), list(skipped.map(String), 'mono'));
+  const box = el('div', null, el('p', 'muted', '开始时交给 Claude 的文件副本'));
+  if (!entries.length) box.append(el('p', 'muted', '这一轮没有附件'));
+  else box.append(table(['路径', '类型', '大小', '校验码'], entries.map(x => [el('code', null, x.original || x.copy || '—'),
+    x.kind === 'directory' ? `文件夹 · ${x.files ?? 0} 个文件` : '文件', fmtBytes(x.bytes), el('code', null, x.sha256 || '—')])));
+  if (skipped.length) box.append(el('p', null, '没交给 Claude 的：'), list(skipped.map(String), 'mono'));
   return box;
 }
 function layerView(d) {
@@ -707,26 +817,32 @@ function layerView(d) {
   const hooks = Array.isArray(d.hooks) ? d.hooks : [];
   const o = S.snap && S.snap.outcome;
   const plugins = (o && o.instruction_layer && o.instruction_layer.plugins) || [];
-  const box = el('div', null, el('p', 'muted', '除任务书外，Claude 会话按默认设置加载的指令文件、hooks 与插件（只列出，不修改）。'));
-  box.append(el('h3', null, `指令文件（${files.length}）`));
-  if (files.length) box.append(table(['路径', '范围', '大小', 'sha256'], files.map(f => [el('code', null, f.path || '—'), f.scope || '—',
-    f.readable === false ? '不可读' : fmtBytes(f.bytes), el('code', null, f.sha256 || '—')])));
+  const box = el('div', null, el('p', 'muted', 'Claude 按你的设置加载的规则和插件'));
+  box.append(el('h3', null, `规则文件（${files.length}）`));
+  if (files.length) box.append(table(['路径', '范围', '大小', '校验码'], files.map(f => [el('code', null, f.path || '—'), f.scope || '—',
+    f.readable === false ? '读不了' : fmtBytes(f.bytes), el('code', null, f.sha256 || '—')])));
   box.append(el('h3', null, `Hooks（${hooks.length}）`));
   if (hooks.length) box.append(list(hooks.map(h => el('code', null, [h.source, h.event, h.matcher, h.command || h.note].filter(Boolean).join(' · ')))));
-  box.append(el('h3', null, `插件（${plugins.length}）`), plugins.length ? list(plugins.map(String)) : el('p', 'muted', '会话未报告插件。'));
+  box.append(el('h3', null, `插件（${plugins.length}）`), plugins.length ? list(plugins.map(String)) : el('p', 'muted', '没有插件'));
   if (d.note) box.append(el('p', 'muted verbatim', d.note));
   return box;
 }
 function eventsView() {
-  if (!S.events.length) return el('p', 'muted', S.snap && S.snap.active ? '等待第一条活动…' : '没有活动记录。');
+  if (!S.events.length) return el('p', 'muted', S.snap && S.snap.active ? '等 Claude 开始…' : '没有过程记录');
   const shown = S.events.slice(-SHOWN_EVENTS);
   const box = el('div', null);
-  if (shown.length < S.events.length) box.append(el('p', 'muted', `只显示最近 ${SHOWN_EVENTS} 条。`));
+  if (shown.length < S.events.length) box.append(el('p', 'muted', `只显示最近 ${SHOWN_EVENTS} 条`));
+  const rows = [];
   for (const e of shown) {
-    const extra = [e.status, e.tool, e.file].filter(Boolean).join(' · ');
-    box.append(el('div', 'ev', el('span', 'muted', fmtTime(e.received_at, true)), el('span', 'k muted', e.kind || ''),
-      el('div', null, el('span', null, e.summary || ''), extra ? el('span', 'muted', ' · ' + extra) : null,
-        e.text ? el('div', 'muted verbatim', e.text) : null)));
+    const prev = rows[rows.length - 1];
+    if (prev && e.kind === 'provider' && prev.e.kind === 'provider') { prev.n++; prev.last = e; continue; }
+    rows.push({e, n: 1, last: e});
+  }
+  for (const {e, n, last} of rows) {
+    const quiet = QUIET_EV.has(e.kind), extra = n > 1 ? `共 ${n} 条` : [quiet ? '' : e.status, quiet ? '' : e.tool, quiet ? '' : e.file].filter(Boolean).join(' · ');
+    box.append(el('div', 'ev', el('span', 'muted', fmtTime(last.received_at, true)), el('span', 'k muted', label(L.ev, e.kind, '')),
+      el('div', null, el('span', null, evText(e)), extra ? el('span', 'muted', ' · ' + extra) : null,
+        e.text && e.kind !== 'tool' ? el('div', 'muted verbatim', e.text) : null)));
   }
   return box;
 }
@@ -736,6 +852,10 @@ function boot() {
   $('artMore').addEventListener('click', () => {
     if (S.art && !S.art.loading && !S.art.end) loadArtifact(S.art.name, true);
   });
+  $('listToggle').addEventListener('click', () => setDrawer(!S.drawer));
+  $('emptyOpen').addEventListener('click', () => setDrawer(true));
+  $('scrim').addEventListener('click', () => setDrawer(false));
+  document.addEventListener('keydown', event => { if (event.key === 'Escape' && S.drawer) setDrawer(false); });
   document.addEventListener('visibilitychange', () => {
     if (document.hidden || S.dead) return;
     listLoop();

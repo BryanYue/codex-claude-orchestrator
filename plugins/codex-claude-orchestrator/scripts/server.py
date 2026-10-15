@@ -171,7 +171,7 @@ async def claude_wait(run_id: str, after: int = 0, timeout_seconds: float = 25, 
         raise ValueError("timeout_seconds must be 0..25 and after non-negative")
     answer = await asyncio.to_thread(current().wait, run_id, after=after, timeout=timeout_seconds)
     if compact:
-        answer["events"] = [event for event in answer["events"] if event.get("kind") != "provider"]
+        answer["events"] = [event for event in answer["events"] if event.get("kind") not in {"provider", "tool"}]
     answer["snapshot"] = await present(answer["snapshot"], brief=compact)
     return answer
 
