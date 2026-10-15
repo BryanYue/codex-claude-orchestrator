@@ -1,4 +1,4 @@
-# Codex–Claude 协作 · 1.0.0
+# Codex–Claude 协作 · 1.0.1
 
 **简体中文** · [English](README.en.md)
 
@@ -32,7 +32,7 @@
 | 看进度 | 工作台里随时看做到哪 |
 | 接着改 | 在原对话补充，下一轮接着做 |
 
-当前版本：[`v1.0.0`](https://github.com/BryanYue/codex-claude-orchestrator/releases/tag/v1.0.0)（2026-10-08）· [更新记录](CHANGELOG.md) · [验证记录](RELEASE-VERIFICATION.md)
+当前版本：[`v1.0.1`](https://github.com/BryanYue/codex-claude-orchestrator/releases/tag/v1.0.1)（2026-10-15）· [更新记录](CHANGELOG.md) · [验证记录](RELEASE-VERIFICATION.md)
 
 ## 开始使用
 
@@ -49,7 +49,7 @@
 在终端里依次执行：
 
 ```bash
-codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v1.0.0
+codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v1.0.1
 codex plugin add codex-claude-orchestrator@codex-claude-team
 ```
 
@@ -146,9 +146,17 @@ codex plugin add codex-claude-orchestrator@codex-claude-team
 
 ## 版本
 
-正式版本：[`v1.0.0`](https://github.com/BryanYue/codex-claude-orchestrator/releases/tag/v1.0.0)（2026-10-08）。
+正式版本：[`v1.0.1`](https://github.com/BryanYue/codex-claude-orchestrator/releases/tag/v1.0.1)（2026-10-15）。
 
-1.0 是一次断代重构：
+1.0.1 改进了工作台：
+
+- Codex 面板较窄时，任务列表收进「任务」按钮，详情占满宽度。
+- 顶部一句话说明现状，文案全部改成日常说法。
+- 过程记录列出 Claude 每一步用了什么工具、读写了哪些文件。
+
+1.0.1 能接着做 1.0.0 开始的任务。
+
+[`v1.0.0`](https://github.com/BryanYue/codex-claude-orchestrator/releases/tag/v1.0.0)（2026-10-08）是一次断代重构：
 
 - 任务书改为按角色写的 Markdown，你的原话逐字直达 Claude。
 - 实现任务改到独立副本里执行，交回改动。

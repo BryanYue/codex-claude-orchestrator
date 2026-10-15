@@ -5,8 +5,8 @@ first-use preparation both share, upgrading from 0.7.x and recovering from a
 failed source switch. See [git-marketplace.md](git-marketplace.md) for the
 Git-specific commands and identity, and
 [RELEASE-VERIFICATION.md](../RELEASE-VERIFICATION.md) for which of the steps
-below have actually been exercised. This documentation targets `v1.0.0`, build
-`1.0.0+codex.20261007165220`. Any install, upgrade or rollback takes effect
+below have actually been exercised. This documentation targets `v1.0.1`, build
+`1.0.1+codex.20261015112934`. Any install, upgrade or rollback takes effect
 only in a new MCP connection, i.e. a new Codex task.
 
 Use the same `CODEX_HOME` as the desktop profile you intend to upgrade. Separate

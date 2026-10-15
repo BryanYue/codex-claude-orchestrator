@@ -4,13 +4,13 @@
 
 这里写给想了解运行细节的用户和开发者：本机 CLI 准入、一次运行怎样进行、结果里有什么、数据放在哪里，以及怎样开发和验证。首次使用请先看[快速开始](getting-started.zh-CN.md)；安装、升级与恢复另见英文的[安装与恢复](install-and-recovery.md)和 [Git 分发](git-marketplace.md)。
 
-本页按 **v1.0.0** 维护，完整构建 `1.0.0+codex.20261007165220`；发布状态与已验证范围以[验证记录](../RELEASE-VERIFICATION.md)为准。Codex 侧必须遵守的派单与核验规则在插件的 [SKILL.md](../plugins/codex-claude-orchestrator/skills/codex-claude-orchestrator/SKILL.md) 和 [guide.md](../plugins/codex-claude-orchestrator/skills/codex-claude-orchestrator/references/guide.md)。
+本页按 **v1.0.1** 维护，完整构建 `1.0.1+codex.20261015112934`；发布状态与已验证范围以[验证记录](../RELEASE-VERIFICATION.md)为准。Codex 侧必须遵守的派单与核验规则在插件的 [SKILL.md](../plugins/codex-claude-orchestrator/skills/codex-claude-orchestrator/SKILL.md) 和 [guide.md](../plugins/codex-claude-orchestrator/skills/codex-claude-orchestrator/references/guide.md)。
 
 ## 版本与文档的对应关系
 
 | 内容 | 身份与更新方式 |
 | --- | --- |
-| 插件代码与安装包 | 版本 `v1.0.0`，完整版本 `1.0.0+codex.20261007165220`；每轮运行在 `plan.json` 里记录实际执行的完整版本 |
+| 插件代码与安装包 | 版本 `v1.0.1`，完整版本 `1.0.1+codex.20261015112934`；每轮运行在 `plan.json` 里记录实际执行的完整版本 |
 | 旧版本 | `v0.7.1` 等标签保持冻结；1.0 不能续接旧版本的任务 |
 | README、docs、验证记录 | `main` 保存当前说明；旧标签和 ZIP 内保留各自发布时的文档，不能把新能力归给旧安装 |
 | Codex 侧规则 | `SKILL.md` 与 `references/` 随插件发布；安装新版本后需要新的 Codex 任务才会加载 |

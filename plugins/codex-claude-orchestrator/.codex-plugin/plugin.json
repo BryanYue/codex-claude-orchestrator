@@ -1,6 +1,6 @@
 {
   "name": "codex-claude-orchestrator",
-  "version": "1.0.0+codex.20261007165220",
+  "version": "1.0.1+codex.20261015112934",
   "description": "Delegate implementation and analysis to the local Claude CLI with verbatim user words, an isolated copy, patch and report evidence, and Codex verification.",
   "author": {
     "name": "BryanYue",
