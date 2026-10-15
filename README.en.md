@@ -1,4 +1,4 @@
-# Codex–Claude Collaboration · 1.0.0
+# Codex–Claude Collaboration · 1.0.1
 
 [简体中文](README.md) · **English**
 
@@ -32,7 +32,7 @@ If you use both Codex and Claude, you probably move requirements, code and revie
 | Track progress | See where it stands in the Workbench |
 | Keep going | Add to the chat; the next round continues |
 
-Current release: [`v1.0.0`](https://github.com/BryanYue/codex-claude-orchestrator/releases/tag/v1.0.0) (2026-10-08) · [Changelog](CHANGELOG.md) · [Verification record](RELEASE-VERIFICATION.md)
+Current release: [`v1.0.1`](https://github.com/BryanYue/codex-claude-orchestrator/releases/tag/v1.0.1) (2026-10-15) · [Changelog](CHANGELOG.md) · [Verification record](RELEASE-VERIFICATION.md)
 
 ## Get started
 
@@ -49,7 +49,7 @@ The plugin targets macOS. Implementation tasks and the default analysis tasks ne
 Run these commands in your terminal, one at a time:
 
 ```bash
-codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v1.0.0
+codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v1.0.1
 codex plugin add codex-claude-orchestrator@codex-claude-team
 ```
 
@@ -146,9 +146,17 @@ The Workbench shows "约 $X（Claude 估算）", meaning "about $X (Claude's est
 
 ## Release
 
-Stable release: [`v1.0.0`](https://github.com/BryanYue/codex-claude-orchestrator/releases/tag/v1.0.0) (2026-10-08).
+Stable release: [`v1.0.1`](https://github.com/BryanYue/codex-claude-orchestrator/releases/tag/v1.0.1) (2026-10-15).
 
-1.0 is a ground-up rebuild:
+1.0.1 improves the Workbench:
+
+- In a narrow Codex panel, the task list moves behind a "任务" button and details take the full width.
+- A one-line status sits on top, and all labels use plain words.
+- The activity log lists each tool Claude used and the files it read or changed.
+
+1.0.1 can continue tasks started with 1.0.0.
+
+[`v1.0.0`](https://github.com/BryanYue/codex-claude-orchestrator/releases/tag/v1.0.0) (2026-10-08) was a ground-up rebuild:
 
 - The brief Claude receives is role-specific Markdown that carries your words verbatim.
 - Implementation runs in an independent copy and returns its changes.

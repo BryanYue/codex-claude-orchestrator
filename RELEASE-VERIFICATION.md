@@ -1,3 +1,31 @@
+# Release verification
+
+## 1.0.1
+
+Full plugin version: `1.0.1+codex.20261015112934`. Fixed release ref: `v1.0.1`.
+Release date: **2026-10-15**.
+[Release and artifacts](https://github.com/BryanYue/codex-claude-orchestrator/releases/tag/v1.0.1).
+
+1.0.1 changes the workbench page, its copy and the documentation, and adds
+`kind=tool` activity events for main-session tool calls. The run record
+format, MCP tool surface (10 tools) and state root are unchanged.
+
+### Pre-release checks (2026-10-15)
+
+Run on the release source: **67 plugin tests**, **107 Bridge tests** and
+**28 distribution tests** passed with no skips; Ruff and strict Mypy for
+12 modules passed. The workbench was also checked by hand against synthetic
+runs at 390, 600 and 1280 px wide.
+
+### Not yet verified
+
+- Installation from the remote `v1.0.1` tag into a Codex profile, and a new MCP
+  connection reporting version 1.0.1.
+- A real Claude CLI run producing `kind=tool` activity, and the page inside
+  Codex's built-in browser.
+
+These will be recorded here once done; recording them does not move the tag.
+
 # 1.0.0 release verification
 
 Full plugin version: `1.0.0+codex.20261007165220`. Fixed release ref: `v1.0.0`.

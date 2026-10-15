@@ -11,8 +11,8 @@ open-source license has been selected.
 - Publisher: BryanYue.
 - Marketplace: `codex-claude-team`.
 - Plugin: `codex-claude-orchestrator` (display name: Codex–Claude 协作).
-- Release ref for this version: `v1.0.0`, build `1.0.0+codex.20261007165220`.
-  The [release page](https://github.com/BryanYue/codex-claude-orchestrator/releases/tag/v1.0.0)
+- Release ref for this version: `v1.0.1`, build `1.0.1+codex.20261015112934`.
+  The [release page](https://github.com/BryanYue/codex-claude-orchestrator/releases/tag/v1.0.1)
   provides the built ZIP, its checksum and both manifests. Source, installation
   and real Claude checks are recorded in
   [RELEASE-VERIFICATION.md](../RELEASE-VERIFICATION.md).
@@ -34,7 +34,7 @@ usage allowance are still required for actual delegation.
 First confirm that Git can reach the repository and that the ref exists:
 
 ```bash
-git ls-remote https://github.com/BryanYue/codex-claude-orchestrator.git refs/tags/v1.0.0
+git ls-remote https://github.com/BryanYue/codex-claude-orchestrator.git refs/tags/v1.0.1
 ```
 
 An empty result means the tag is not available; do not substitute a moving
@@ -46,14 +46,14 @@ marketplace. An SSH URL still requires working SSH authentication;
 For a machine without an existing `codex-claude-team` marketplace:
 
 ```bash
-codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v1.0.0
+codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v1.0.1
 codex plugin add codex-claude-orchestrator@codex-claude-team
 codex plugin marketplace list --json
 codex plugin list --json
 ```
 
 Check `marketplaceSource.sourceType=git` and the Git URL, plus the installed
-and enabled plugin's full manifest version (`1.0.0+codex.20261007165220`). The
+and enabled plugin's full manifest version (`1.0.1+codex.20261015112934`). The
 CLI omits the pinned ref from these list outputs: compare
 `git -C /market/root rev-parse HEAD` with the commit the tag points to. A
 plugin entry may still say `source=local` because it points into the fetched

@@ -16,7 +16,7 @@ Use a Mac and prepare the following:
 
 The plugin needs Python 3.11 or later. During dependency preparation, uv locates or downloads the required environment; the first download can take some time. Implementation tasks and the default analysis tasks in Git projects also use macOS's built-in `/usr/bin/sandbox-exec` to protect the original repository; normally there is nothing extra to install. Intel Macs have not been separately verified.
 
-> **About versions:** This page targets `v1.0.0`, full build `1.0.0+codex.20261007165220`. For release status and verified coverage, see the [verification record](../RELEASE-VERIFICATION.md). Older release tags stay frozen, and a fixed ref does not advance to another tag by itself; use the [version-switching steps](git-marketplace.md#change-a-fixed-ref-or-migrate-from-zip). If you are upgrading from 0.7.x, read [Upgrading from 0.7.x](install-and-recovery.md#upgrading-from-07x) first: 1.0 cannot continue old tasks.
+> **About versions:** This page targets `v1.0.1`, full build `1.0.1+codex.20261015112934`. For release status and verified coverage, see the [verification record](../RELEASE-VERIFICATION.md). Older release tags stay frozen, and a fixed ref does not advance to another tag by itself; use the [version-switching steps](git-marketplace.md#change-a-fixed-ref-or-migrate-from-zip). If you are upgrading from 0.7.x, read [Upgrading from 0.7.x](install-and-recovery.md#upgrading-from-07x) first: 1.0 cannot continue old tasks.
 
 ## Install with help from Codex
 
@@ -25,7 +25,7 @@ Paste this request into an existing Codex conversation:
 ```text
 Help me install the Codex–Claude collaboration plugin:
 https://github.com/BryanYue/codex-claude-orchestrator
-Use the fixed v1.0.0 release through a Git marketplace.
+Use the fixed v1.0.1 release through a Git marketplace.
 
 First check that I have a Codex desktop app with plugin commands and uv.
 If codex is not on PATH, check for the CLI bundled with the desktop app.
@@ -55,7 +55,7 @@ codex plugin --help
 Then run these commands one at a time:
 
 ```bash
-codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v1.0.0
+codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v1.0.1
 codex plugin add codex-claude-orchestrator@codex-claude-team
 ```
 
