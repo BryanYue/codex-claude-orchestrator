@@ -177,49 +177,78 @@ assert.deepEqual(order([RUNS.runs[0], DECIDED_LATER, RUNS.runs[2]]), ['T-2', 'T-
 await respond('/api/runs?limit=100&offset=0', 200, {...RUNS, runs: [ROUND_TWO, ...RUNS.runs]});
 const cards = byId('taskList').children;
 assert.equal(cards.length, 3);
-assert.match(cards[0].textContent, /T-1 · 实现 \/ 独立副本 · 第 2 轮（已载入 2 轮）/);
-assert.match(cards[0].textContent, /运行中/);
+assert.match(cards[0].textContent, /动手改 · 第 2 轮 · /);
+assert.equal(all(cards[0], n => n.tagName === 'SPAN' && /badge/.test(n.className)).length, 1, 'one state badge per card');
+assert.match(cards[0].textContent, /进行中/);
+assert.equal(byId('listCount').textContent, '3');
+assert.equal(byId('listMeta').textContent, '共 3 个');
 assert.equal(run('S.sel'), 'run-T1roundTwo00', 'the newest task is opened when the link names no run');
 await respond('run_id=run-T1roundTwo00', 200, {...ROUND_TWO, active: true, outcome: null, last_event: null});
 const tabs = byId('roundTabs').children;
-assert.deepEqual(tabs.map(t => t.textContent), ['第 1 轮 · 修正后采纳', '第 2 轮 · 运行中']);
+assert.deepEqual(tabs.map(t => t.textContent), ['第 1 轮 · 改后通过', '第 2 轮 · 进行中']);
 assert.deepEqual(tabs.map(t => t.getAttribute('aria-selected')), ['false', 'true']);
-assert.match(byId('runFacts').textContent, /接续自 run-gIatU6GfOd3jo3xk/);
+const back = all(byId('runFacts'), n => n.tagName === 'BUTTON')[0];
+assert.equal(back.textContent, '查看上一轮');
+back.click();
+assert.equal(run('S.sel'), 'run-gIatU6GfOd3jo3xk');
 ''', ROUND_TWO=round_two, DECIDED_LATER=decided_later)
+
+    def test_task_list_drawer_opens_closes_and_closes_on_pick(self):
+        self.run_node(r'''
+await respond('/api/runs?limit=100&offset=0', 200, RUNS);
+byId('listToggle').click();
+assert.equal(byId('layout').className, 'layout open');
+assert.equal(byId('listToggle').getAttribute('aria-expanded'), 'true');
+byId('scrim').click();
+assert.equal(byId('layout').className, 'layout');
+byId('listToggle').click();
+docListeners.keydown[0]({key: 'Escape'});
+assert.equal(byId('layout').className, 'layout');
+byId('emptyOpen').click();
+byId('taskList').children[1].click();
+assert.equal(byId('layout').className, 'layout', 'picking a task closes the drawer');
+assert.equal(run('S.sel'), 'run-JX_nxIwzbPyAibxQ');
+''')
 
     def test_status_and_verdict_texts_keep_report_verdict_and_next_step_apart(self):
         self.run_node(r'''
-assert.equal(run('verdictText(null)'), '待核验');
-assert.equal(run("verdictText({verdict:'accepted_with_corrections',next:'next_round'})"), '修正后采纳 · 需要下一轮');
-assert.equal(run("verdictText({verdict:'accepted',next:'done'})"), '采纳 · 任务完成');
-assert.equal(run("verdictText({verdict:'rejected',next:'codex_finishes'})"), '不采纳 · 由 Codex 收尾');
+assert.equal(run('verdictText(null)'), '待验收');
+assert.equal(run("verdictText({verdict:'accepted_with_corrections',next:'next_round'})"), '改后通过 · 再做一轮');
+assert.equal(run("verdictText({verdict:'accepted',next:'done'})"), '通过 · 已完成');
+assert.equal(run("verdictText({verdict:'rejected',next:'codex_finishes'})"), '退回 · Codex 收尾');
 assert.equal(run("statusText({status:'lost'})"), '失联');
 assert.equal(run("statusText({status:'shiny_new'})"), 'shiny_new');
+assert.equal(run("stateBadge({status:'timeout'}).textContent"), '超时 · 待验收');
+assert.equal(run("stateBadge({status:'ok'}).textContent"), '待验收');
 
 await respond('/api/runs', 200, RUNS);
-const cards = Object.fromEntries(byId('taskList').children.map(c => [c.textContent.match(/T-\d/)[0], c.textContent]));
-assert.match(cards['T-1'], /正常结束/);
-assert.match(cards['T-1'], /修正后采纳 · 需要下一轮/);
-assert.match(cards['T-2'], /正常结束.*待核验/);
-assert.match(cards['T-3'], /运行中.*待核验/);
-for (const text of Object.values(cards)) assert.doesNotMatch(text, /通过/);
+const [t3, t2, t1] = byId('taskList').children.map(c => c.textContent);
+assert.match(t1, /改后通过 · 再做一轮/);
+assert.doesNotMatch(t1, /正常结束/, 'a verdict replaces the run status on the card');
+assert.match(t2, /待验收/);
+assert.match(t3, /进行中/);
+for (const text of [t2, t3]) assert.doesNotMatch(text, /通过/);
 
+const detailText = () => ['roundTabs', 'hero', 'askBox', 'boxRun', 'boxClaim', 'boxDecision', 'warnList', 'changeBody']
+  .map(id => byId(id).textContent).join('\n');
 await respond('run_id=run-POaJz2M5Ml3AAjij', 200, RUNNING);
-assert.doesNotMatch(pageText(), /通过/);
+assert.doesNotMatch(detailText(), /通过/);
 await show(READONLY);
-assert.match(byId('boxDecision').textContent, /尚未核验/);
+assert.match(byId('hero').textContent, /Claude 已交回，等 Codex 验收Claude 自评：没做完/);
+assert.match(byId('boxDecision').textContent, /待验收/);
 assert.doesNotMatch(byId('boxDecision').textContent, /采纳|通过/);
-assert.match(byId('boxClaim').textContent, /部分完成.*可行但有风险.*不是核验结论/);
-assert.doesNotMatch(pageText(), /通过/);
+assert.match(byId('boxClaim').textContent, /没做完.*可行但有风险.*不算验收/);
+assert.doesNotMatch(detailText(), /通过/);
 await show(FINISHED);
+assert.match(byId('hero').textContent, /Codex 验收：改后通过下一步：再做一轮/);
 const verdict = byId('boxDecision').textContent;
-assert.match(verdict, /报告：修正后采纳/);
-assert.match(verdict, /下一步需要下一轮/);
-assert.match(verdict, /说明缺少 CSV/);
+assert.match(verdict, /改后通过/);
+assert.match(verdict, /下一步再做一轮/);
+assert.match(verdict, /备注缺少 CSV/);
 assert.match(verdict, /git apply --check/);
 assert.match(verdict, /F1：采纳/);
-assert.match(verdict, /已确认受保护路径migrations\/1\.sql/);
-assert.equal(byId('boxDecision').className, 'box t-warn');
+assert.match(verdict, /放行文件migrations\/1\.sql/);
+assert.equal(byId('boxDecision').className, 'box t-warn lead');
 assert.equal(byId('boxRun').className.trim(), 'box', 'a clean run outcome is not coloured like an accepted verdict');
 ''')
 
@@ -230,62 +259,87 @@ assert.equal(byId('boxRun').className.trim(), 'box', 'a clean run outcome is not
              "detail": "these paths were not copied for Claude (sensitive name, symlink or size limit)"}]))
         self.run_node(r'''
 for (const code of CODES) {
-  const text = run(`warnLabel(${JSON.stringify(code)})`);
-  assert.notEqual(text, code, code + ' needs a Chinese label');
-  assert.match(text, /[一-鿿]/);
+  const [title, desc] = out(`warnInfo(${JSON.stringify(code)})`);
+  assert.notEqual(title, code, code + ' needs a Chinese title');
+  assert.match(title, /[一-鿿]/);
+  assert.match(desc, /[一-鿿]/, code + ' needs a Chinese description');
 }
-assert.equal(run("warnLabel('brand_new_code')"), 'brand_new_code');
+assert.deepEqual(out("warnInfo('brand_new_code')"), ['其他提醒', 'brand_new_code']);
 await show(UNKNOWN);
 const box = byId('warnList');
 assert.equal(box.children.length, 2);
-assert.match(box.children[0].textContent, /^brand_new_code brand_new_codesomething new/);
+assert.match(box.children[0].textContent, /^其他提醒brand_new_code.*技术细节brand_new_codesomething new$/s);
 const items = all(box, n => n.className === 'verbatim').map(n => n.textContent);
 assert.deepEqual(items, ['<b>保留</b>\n  原样']);
-assert.match(box.children[1].textContent, /部分原件未复制给 Claude.*\/x\/\.env \(sensitive name\)/);
+assert.match(box.children[1].textContent, /部分附件没给 Claude.*\/x\/\.env \(sensitive name\)/);
 await show(FINISHED);
-assert.match(byId('warnList').textContent, /改动了受保护路径 protected_touched.*migrations\/1\.sql/);
-assert.match(byId('warnList').textContent, /Claude 有需要用户决定的问题.*要不要保留旧接口？/);
+assert.match(byId('askBox').textContent, /Claude 有问题问你.*要不要保留旧接口？/);
+assert.doesNotMatch(byId('warnList').textContent, /有问题问你/, 'questions for the user sit above, not in the list');
+assert.match(byId('warnList').textContent, /动了受保护的文件需要 Codex 逐个放行.*migrations\/1\.sql/);
+const tech = all(byId('warnList'), n => n.tagName === 'DETAILS');
+assert.equal(tech.length, 1);
+assert.match(tech[0].textContent, /^技术细节protected_touched.*claude_decide must confirm each/);
 ''', CODES=WARNING_CODES, UNKNOWN=unknown)
+
+    def test_activity_texts_are_translated_and_tool_steps_named(self):
+        self.run_node(r'''
+assert.equal(run("evText({kind:'tool', tool:'Edit', file:'src/a.py'})"), '修改 src/a.py');
+assert.equal(run("evText({kind:'tool', tool:'Bash', text:'Run tests'})"), '运行命令：Run tests');
+assert.equal(run("evText({kind:'tool', tool:'Brand', summary:'Brand'})"), '使用 Brand');
+assert.equal(run("evText({summary:'run ended: timeout'})"), '运行结束：超时');
+assert.equal(run("evText({summary:'Codex verdict: rejected; next: codex_finishes'})"), 'Codex 验收：退回 · Codex 收尾');
+assert.equal(run("evText({summary:'something Claude said'})"), 'something Claude said');
+run(`S.events = ${JSON.stringify([1, 2, 3].map(seq => ({seq, received_at: seq, kind: 'provider', summary: 'provider lifecycle event'})))}`);
+assert.match(run('eventsView().textContent'), /模型服务状态 · 共 3 条/);
+''')
 
     def test_the_three_backend_samples_render(self):
         self.run_node(r'''
 await show(RUNNING);
 assert.equal(byId('runTitle').textContent, '把导出改成异步，失败要提示原因');
-assert.match(byId('runFacts').textContent, /任务 T-3.*运行 run-POaJz2M5Ml3AAjij.*实现 \/ 独立副本 · 第 1 轮/);
-assert.match(byId('runFacts').textContent, /请求 sonnet · effort low · 实际 fixture-model/);
-assert.match(byId('runFacts').textContent, /用时 0\.8 秒 \/ 上限 1 分 0 秒/);
-assert.match(byId('boxRun').textContent, /运行中.*最近活动Claude started/);
-assert.match(byId('boxClaim').textContent, /运行中，尚未回报/);
-assert.match(byId('boxDecision').textContent, /尚未核验.*运行结束后由 Codex 核验/);
-assert.match(byId('changeBody').textContent, /运行结束后生成改动清单/);
-assert.match(byId('warnList').textContent, /运行结束后汇总提醒/);
+assert.match(byId('runFacts').textContent, /^动手改副本模式模型 fixture-model（指定 sonnet）思考强度 low用时 0\.8 秒（上限 1 分钟）开始于 /);
+assert.match(byId('hero').textContent, /Claude 正在做Claude 开始工作 · 已用 0\.8 秒/);
+assert.match(byId('boxRun').textContent, /进行中.*正在做Claude 开始工作/);
+assert.match(byId('boxClaim').textContent, /还在做，没交回/);
+assert.match(byId('boxDecision').textContent, /待验收.*做完后 Codex 会来验收/);
+assert.match(byId('changeBody').textContent, /结束后列出改动/);
+assert.match(byId('warnList').textContent, /结束后汇总/);
+assert.match(byId('idBody').textContent, /任务号T-3.*运行号run-POaJz2M5Ml3AAjij/);
 assert.equal(run('S.artName'), 'events');
 await respond('/api/events?run_id=run-POaJz2M5Ml3AAjij&after=0', 200, EVENTS);
-assert.match(byId('artMeta').textContent, /共 4 条公开活动/);
-assert.match(byId('artBody').textContent, /checking the local Claude CLI.*Claude started/);
+assert.match(byId('artMeta').textContent, /共 4 条/);
+assert.match(byId('artBody').textContent, /检查本机 Claude.*准备工作目录.*Claude 开始工作.*模型服务状态/);
 
 await show(FINISHED);
-assert.match(byId('runFacts').textContent, /实际 fixture-model/);
-assert.match(byId('boxRun').textContent, /正常结束.*进程已确认停止.*耗时0\.9 秒.*费用\$0\.0123（CLI 估算）/);
-assert.match(byId('boxClaim').textContent, /已完成.*导出已改为异步/);
+assert.match(byId('runFacts').textContent, /模型 fixture-model/);
+assert.match(byId('boxRun').textContent, /正常结束.*进程已确认停止.*用时0\.9 秒.*费用约 \$0\.0123（Claude 估算）/);
+assert.match(byId('boxClaim').textContent, /做完了.*导出已改为异步/);
 const changes = byId('changeBody');
 assert.match(changes.textContent, /2 个文件 · \+2 −1/);
-const rows = all(changes, n => n.tagName === 'TR').slice(1).map(r => r.textContent);
-assert.deepEqual(rows, ['migrations/1.sql新增+1 −0受保护', 'src/app.py修改+1 −1范围内']);
+const rows = all(changes, n => n.className === 'file').map(r => r.textContent);
+assert.deepEqual(rows, ['migrations/1.sql新增 · +1 −0受保护', 'src/app.py修改 · +1 −1预期内']);
 assert.equal(all(changes, n => n.className === 'badge t-bad')[0].textContent, '受保护');
-const copy = all(changes, n => n.tagName === 'BUTTON' && n.textContent === '复制命令')[0];
+const apply = all(changes, n => n.tagName === 'DETAILS')[0];
+assert.match(apply.textContent, /^手动合入想自己合入？复制这条命令，含之前没合入的改动，共 2 个文件/);
+const copy = all(apply, n => n.tagName === 'BUTTON' && n.textContent === '复制命令')[0];
 copy.click();
 await tick();
 assert.deepEqual(clip, [FINISHED.outcome.changes.apply_hint]);
 assert.match(changes.textContent, /已复制/);
-assert.ok(all(byId('artTabs'), n => n.textContent === '累计 Patch').length === 0);
+const tabNames = () => byId('artTabs').children.filter(t => t.tagName === 'BUTTON').map(t => t.textContent);
+assert.deepEqual(tabNames(), ['报告', '本轮改动', '过程记录', '更多']);
+byId('artTabs').children.find(t => t.textContent === '更多').click();
+assert.ok(tabNames().includes('累计改动'));
+byId('artTabs').children.find(t => t.textContent === '收起').click();
+assert.deepEqual(tabNames(), ['报告', '本轮改动', '过程记录', '更多']);
 
 await show(READONLY);
-assert.match(byId('runFacts').textContent, /分析 \/ 只读/);
-assert.match(byId('changeBody').textContent, /只读运行，没有改动/);
+assert.match(byId('runFacts').textContent, /^只分析只读模式/);
+assert.match(byId('changeBody').textContent, /只读模式，没有改动/);
 assert.match(byId('warnList').textContent, /没有提醒/);
-const tabNames = byId('artTabs').children.map(t => t.textContent);
-assert.deepEqual(tabNames, ['报告', 'Claude 收到的任务书', '结果头', 'Patch', '用户原话', '原件', '指令层', '最终回复', '活动']);
+assert.deepEqual(tabNames(), ['报告', '过程记录', '更多'], 'no patch tab for a run without changes');
+byId('artTabs').children.find(t => t.textContent === '更多').click();
+assert.deepEqual(tabNames(), ['报告', '过程记录', '收起', '任务书', '你的原话', '附件', 'Claude 配置', '结果数据', '最后回复']);
 ''')
 
     def test_stale_snapshot_events_and_artifacts_are_discarded_after_switching_runs(self):
@@ -298,7 +352,7 @@ await respond('/api/snapshot?run_id=run-BBBBBBBBBB', 200, B);
 await respond('/api/snapshot?run_id=run-AAAAAAAAAA', 200, A);
 assert.equal(byId('runTitle').textContent, 'B 的标题');
 assert.equal(run('S.snap.run_id'), 'run-BBBBBBBBBB');
-assert.doesNotMatch(byId('boxDecision').textContent, /修正后采纳/);
+assert.doesNotMatch(byId('boxDecision').textContent, /改后通过/);
 
 run("selectRun('run-AAAAAAAAAA')");
 await respond('run_id=run-BBBBBBBBBB&name=report', 200, {name: 'report', available: true, size_bytes: 6, sha256: 'b'.repeat(64),
@@ -328,7 +382,7 @@ await respond('run_id=run-JX_nxIwzbPyAibxQ&name=report&offset=0', 200, {name: 'r
 const more = byId('artMore');
 assert.equal(more.hidden, false);
 assert.match(more.textContent, /加载更多/);
-assert.match(byId('artMeta').textContent, new RegExp('大小 13 B · 已载入 6 B.*' + SHA + '.*与运行记录一致'));
+assert.equal(byId('artMeta').textContent, '已加载 6 B / 共 13 B校验一致校验码' + SHA);
 more.click();
 assert.match(pending.at(-1).url, /name=report&offset=6&limit=200000$/);
 assert.equal(more.disabled, true);
@@ -339,8 +393,9 @@ assert.equal(more.hidden, true);
 
 const text = JSON.stringify(PACKET);
 const cut = text.indexOf('第二行');
-const userTab = byId('artTabs').children.find(t => t.textContent === '用户原话');
-userTab.click();
+const tab = name => byId('artTabs').children.find(t => t.textContent === name);
+tab('更多').click();
+tab('你的原话').click();
 await respond('name=packet&offset=0', 200, {name: 'packet', available: true, size_bytes: 400, sha256: 'c'.repeat(64), offset: 0,
   next_offset: 200, end_of_artifact: false, content: text.slice(0, cut)});
 more.click();
@@ -348,20 +403,22 @@ await respond('name=packet&offset=200', 200, {name: 'packet', available: true, s
   next_offset: 400, end_of_artifact: true, content: text.slice(cut)});
 const words = all(byId('artBody'), n => n.className === 'verbatim').map(n => n.textContent);
 assert.deepEqual(words, PACKET.user_messages.map(m => m.text));
-assert.match(byId('artBody').textContent, /第 1 条 · 用户本人 · 2026-10-07 10:00.*第 2 条 · 他人转述/s);
+assert.match(byId('artBody').textContent, /第 1 条 · 你说的 · 2026-10-07 10:00.*第 2 条 · 别人转述/s);
 
-byId('artTabs').children.find(t => t.textContent === '用户原话').click();
+tab('你的原话').click();
 await respond('name=packet&offset=0', 200, {name: 'packet', available: true, size_bytes: 80, sha256: 'd'.repeat(64), offset: 0,
   next_offset: 80, end_of_artifact: true, content: {user_messages: [], no_user_words_reason: '用户只发了截图\n没有文字'}});
 assert.deepEqual(all(byId('artBody'), n => n.className === 'verbatim').map(n => n.textContent), ['用户只发了截图\n没有文字']);
 
-byId('artTabs').children.find(t => t.textContent === 'Claude 收到的任务书').click();
+tab('任务书').click();
 await respond('name=brief', 200, {name: 'brief', available: true, size_bytes: 9, sha256: 'e'.repeat(64), offset: 0,
   next_offset: 9, end_of_artifact: true, content: '# 任务书'});
-assert.match(byId('artMeta').textContent, /Claude 实际收到的任务书.*与运行记录的 sha256 不一致/);
-byId('artTabs').children.find(t => t.textContent === '最终回复').click();
+assert.match(byId('artMeta').textContent, /这是 Claude 实际收到的原文.*校验不一致，内容和记录对不上/);
+tab('最后回复').click();
 await respond('name=final_message', 200, {name: 'final_message', available: false, content: null});
-assert.match(byId('artBody').textContent, /本轮没有这份材料/);
+assert.match(byId('artBody').textContent, /这一轮没有这份资料/);
+tab('收起').click();
+assert.equal(run('S.artName'), 'report', 'folding the extra tabs returns to the report');
 ''', SHA=sha, PACKET=packet)
 
     def test_polling_uses_the_token_slows_down_when_hidden_and_reads_events_incrementally(self):
@@ -382,14 +439,15 @@ listTick();
 await respond('/api/runs', 200, RUNS);
 assert.equal(timers.at(-1).ms, 30000);
 runTick();
-const later = {...RUNNING, elapsed_seconds: 5.2, last_event: {seq: 6, received_at: 1791362970, kind: 'tool', summary: 'Read src/app.py'}};
-await respond('/api/snapshot', 200, later);
+const step = {seq: 6, received_at: 1791362970, kind: 'tool', summary: 'Read', tool: 'Read', file: 'src/app.py'};
+await respond('/api/snapshot', 200, {...RUNNING, elapsed_seconds: 5.2, last_event: step, last_meaningful_event: step});
+assert.match(byId('hero').textContent, /读取 src\/app\.py · 已用 5\.2 秒/);
 assert.match(pending.at(-1).url, /after=4&limit=200$/);
-await respond('/api/events', 200, {events: [{seq: 5, received_at: 1791362969, kind: 'tool', summary: 'Read brief.md', tool: 'Read'},
-  {seq: 6, received_at: 1791362970, kind: 'tool', summary: 'Read src/app.py', tool: 'Read'}], next_cursor: 6, has_more: false});
+await respond('/api/events', 200, {events: [{seq: 5, received_at: 1791362969, kind: 'tool', summary: 'Read', tool: 'Read', file: 'brief.md'},
+  step], next_cursor: 6, has_more: false});
 assert.equal(run('S.events.length'), 6);
 assert.equal(run('S.cursor'), 6);
-assert.match(byId('artBody').textContent, /Read brief\.md.*Read src\/app\.py/);
+assert.match(byId('artBody').textContent, /读取 brief\.md.*读取 src\/app\.py/);
 assert.equal(timers.at(-1).ms, 15000);
 ''')
 
@@ -397,8 +455,8 @@ assert.equal(timers.at(-1).ms, 15000);
         self.run_node(r'''
 await respond('/api/runs', 401, {error: 'Reopen the details link supplied by Claude tools.'});
 assert.equal(byId('banner').hidden, false);
-assert.equal(byId('banner').textContent, '链接失效，请从 Codex 重新获取');
-assert.equal(byId('conn').textContent, '链接失效');
+assert.equal(byId('banner').textContent, '链接已过期，请回 Codex 重新打开');
+assert.equal(byId('conn').textContent, '链接过期');
 assert.equal(timers.length, 0);
 run("selectRun('run-CCCCCCCCCC')");
 await tick();
@@ -406,13 +464,13 @@ assert.equal(pending.length, 0, 'no further requests after the token was rejecte
 ''')
         self.run_node(r'''
 assert.equal(calls.length, 0);
-assert.equal(byId('banner').textContent, '链接失效，请从 Codex 重新获取');
+assert.equal(byId('banner').textContent, '链接已过期，请回 Codex 重新打开');
 ''', hash_value="run=run-CCCCCCCCCC")
         self.run_node(r'''
 const p = pending.shift();
 p.reject(new TypeError('Failed to fetch'));
 await tick(); await tick();
-assert.match(byId('banner').textContent, /^连接中断，正在重试/);
+assert.match(byId('banner').textContent, /^暂时连不上，正在重试/);
 assert.equal(timers.at(-1).ms, 5000, 'a network failure keeps polling');
 timers.at(-1).f();
 await respond('/api/runs', 200, RUNS);
