@@ -98,20 +98,20 @@ This makes a real Claude request using your own allowance. In a Git project, Cla
 Look for three things:
 
 1. **The task starts.** Codex explains what it handed to Claude, the task type (implement or analyze) and how it runs, and reports the actual state.
-2. **You can follow progress.** The workbench link shows progress and recent activity.
+2. **You can follow progress.** The Workbench link shows progress and recent activity.
 3. **The result is checked.** Claude answers your question first, then gives the evidence; Codex checks it and tells you what holds up and what is still uncertain.
 
-**A returned report is not completion; the work is done only after Codex has verified it.** "Environment check complete" alone does not mean Claude performed the task. If execution fails or is interrupted, ask Codex to query the original run ID before starting another one.
+**A returned report is not completion; the work is done only after Codex has reviewed it.** "Environment check complete" alone does not mean Claude performed the task. If execution fails or is interrupted, ask Codex to query the original run ID before starting another one.
 
 ## Using it day to day
 
 No project setting is required. When you want Claude involved, say so in the request:
 
-- **Implement**: "Have Claude implement phase two of docs/plan.md; when it's done, check the patch and run the tests, and apply it only if everything holds up." Claude edits code and runs the tests itself in the copy, then returns a patch; Codex verifies it before applying it to your project. The plugin does not commit or push.
+- **Implement**: "Have Claude implement phase two of docs/plan.md; when it's done, check the changes and run the tests, and apply them only if everything holds up." Claude edits code and runs the tests itself in the copy, then returns its changes; Codex reviews them before applying them to your project. The plugin does not commit or push.
 - **Analyze**: "Have Claude assess … and give me the conclusion first", "Have Claude review the current uncommitted changes, looking only at error handling." Claude answers the question first, then gives the evidence.
 - **Correct or add to it**: say it in the same conversation, for example "That's not what I meant: keep the existing login flow and have Claude build on the previous round." The next round builds on the previous result, with your new words appended verbatim. If the direction changes completely, Codex starts a new task instead.
 - **Stop**: "Stop this Claude task." The report and changes already written are still collected.
-- **Wrap up**: when the task is done, you can say "This task is finished; delete Claude's copy." Patches, reports and verdicts are kept, but the task can no longer be continued.
+- **Wrap up**: when the task is done, you can say "This task is finished; delete Claude's copy." Changes, reports and Codex reviews are kept, but the task can no longer be continued.
 
 When Claude raises a question only you can decide, Codex passes it on verbatim instead of deciding for you.
 
@@ -122,12 +122,12 @@ When Claude raises a question only you can decide, Codex passes it on verbatim i
 | The plugin or its tools are missing | Confirm it is enabled, then start a new Codex task after installation. |
 | The first startup hangs or times out | Ask Codex to inspect the startup error and confirm dependencies are ready. Avoid repeatedly starting Claude tasks. |
 | The plugin is installed, but Claude is unavailable | Ask Codex to check whether your local Claude Code is found, whether it lacks a required option, and whether it is signed in. If Claude Code was installed through nvm or similar and the desktop app cannot find it, see [pointing the plugin at Claude](install-and-recovery.md#first-time-preparation-both-paths). |
-| The copy cannot be created (submodules, sparse checkout, unresolved conflicts and similar) | Analysis tasks can switch to read-only; implementation tasks need those repository states resolved first, and Codex explains why. |
-| A message says `sandbox-exec` is required | macOS write protection is not available on this machine. Analysis tasks can switch to read-only; implementation tasks cannot run for now. |
+| The copy cannot be created (submodules, sparse checkout, unresolved conflicts and similar) | Analysis tasks can switch to Read-only mode; implementation tasks need those repository states resolved first, and Codex explains why. |
+| A message says `sandbox-exec` is required | macOS write protection is not available on this machine. Analysis tasks can switch to Read-only mode; implementation tasks cannot run for now. |
 | Tests in the copy are missing dependencies | Files ignored by `.gitignore` (such as `node_modules` or `.venv`) are not copied. If Claude may install dependencies over the network, say so explicitly in the request. |
-| The workbench did not open | Ask "Open the workbench for this collaboration," or use the link Codex provides. Opening the page does not require rerunning the task. |
+| The Workbench did not open | Ask "Open the Workbench for this task," or use the link Codex provides. Opening the page does not require rerunning the task. |
 | No recent activity appears | Ask Codex to check execution status. No new activity does not mean the task has stopped. |
 | You want to update or roll back | Follow the [version-switching steps](git-marketplace.md#change-a-fixed-ref-or-migrate-from-zip). A fixed ref (for example `v0.7.1`) does not automatically advance to another release. |
 | You have a ZIP file | Built installation packages and Git installation use separate paths. GitHub's "Download ZIP" is a source archive, not a built installer package. See [the two install paths](install-and-recovery.md#two-install-paths). |
 
-For further help, open an [issue](https://github.com/BryanYue/codex-claude-orchestrator/issues) with your macOS version, plugin version, the step that failed and a sanitized error. Leave out credentials, workbench URLs containing access tokens and private project code.
+For further help, open an [issue](https://github.com/BryanYue/codex-claude-orchestrator/issues) with your macOS version, plugin version, the step that failed and a sanitized error. Leave out credentials, Workbench URLs containing access tokens and private project code.
