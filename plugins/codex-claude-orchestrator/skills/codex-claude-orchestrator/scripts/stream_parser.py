@@ -2,17 +2,24 @@
 
 Only a parent ``type=result`` event is the final result.  Everything else is
 observation for warnings: models, usage, permission denials, which files were
-read, and whether background Workflows that were launched also finished.
+read, and whether background Workflows that were launched also finished, plus
+the public tool steps shown as run activity.
 """
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 
 DENIAL_TEXT_LIMIT = 500
 WORKFLOW_DONE = frozenset({"completed", "failed", "error", "killed", "stopped", "cancelled", "timeout"})
 READ_TOOLS = frozenset({"Read", "NotebookRead"})
+STEP_TARGET_KEYS = ("file_path", "notebook_path", "path")
+# Commands, URLs, search text and file contents can carry secrets, so a step
+# only names the tool, its target path and a label the model wrote for people.
+STEP_LABEL_KEYS = {"Bash": "description", "Agent": "description", "Task": "description", "Skill": "skill",
+                   "Workflow": "name", "Glob": "pattern"}
 
 
 def _blocks(event: dict[str, Any]) -> list[dict[str, Any]]:
@@ -100,6 +107,37 @@ def parse_lines(lines: Iterable[str], expected_session: str | None = None) -> di
     facts["denials"] = _denials(facts["final"]) if facts["final"] else []
     facts["read_paths"] = sorted(reads)
     return facts
+
+
+def _under(path: str, roots: Sequence[str]) -> str:
+    for root in roots if os.path.isabs(path) else ():
+        relative = os.path.relpath(path, root)
+        if relative != ".." and not relative.startswith(".." + os.sep):
+            return relative
+    return path
+
+
+def tool_steps(event: dict[str, Any], roots: Sequence[str] = ()) -> list[dict[str, str]]:
+    """Public steps of the main session's tool calls in one assistant event."""
+    if event.get("type") != "assistant" or event.get("parent_tool_use_id") is not None:
+        return []
+    steps = []
+    for block in _blocks(event):
+        if block.get("type") != "tool_use" or not isinstance(block.get("name"), str):
+            continue
+        raw_input = block.get("input")
+        tool_input: dict[str, Any] = raw_input if isinstance(raw_input, dict) else {}
+        step = {"tool": block["name"]}
+        target = next((tool_input[key] for key in STEP_TARGET_KEYS if isinstance(tool_input.get(key), str)), None)
+        if target:
+            step["file"] = _under(target, roots)
+        label = tool_input.get(STEP_LABEL_KEYS.get(block["name"], ""))
+        if isinstance(label, str) and label.strip():
+            step["text"] = label
+        if isinstance(block.get("id"), str):
+            step["tool_use_id"] = block["id"]
+        steps.append(step)
+    return steps
 
 
 def parse_stream(path: Path, expected_session: str | None = None) -> dict[str, Any]:

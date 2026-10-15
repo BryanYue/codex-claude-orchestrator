@@ -272,7 +272,7 @@ def supervise(run_dir: Path, command: list[str], cwd: str, env: dict[str, str], 
         dump(run_dir / "child.json", {"pid": proc.pid, "process_group": proc.pid, "identity": process_control.identity(proc.pid),
                                       "family_marker": env[FAMILY_KEY], "started_at": time.time(), "stream": stream_name})
         activity(run_dir, "executing", "Claude started", status="executing")
-        transport = ProcessStream(proc, stream, memoryview(payload), run_dir, True)
+        transport = ProcessStream(proc, stream, memoryview(payload), run_dir, True, cwd)
         facts: dict[str, Any] = {"timed_out": False, "cancelled": False, "cleanup_error": None}
         next_observation = 0.0
         try:

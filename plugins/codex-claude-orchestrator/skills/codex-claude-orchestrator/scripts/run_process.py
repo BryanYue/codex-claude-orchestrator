@@ -7,14 +7,17 @@ import selectors
 from typing import Any
 
 from events import append as append_activity
+from stream_parser import tool_steps
 
 
 class ProcessStream:
     """Keep input delivery and output draining on the same bounded event loop."""
 
-    def __init__(self, proc, stream, payload: memoryview, run_dir, workflow: bool):
+    def __init__(self, proc, stream, payload: memoryview, run_dir, workflow: bool, root: str | None = None):
         self.proc, self.stream, self.payload = proc, stream, payload
         self.run_dir, self.workflow = run_dir, workflow
+        # Claude may report the resolved path (/private/var/...) of a cwd given as /var/...
+        self.roots = tuple(dict.fromkeys((root, os.path.realpath(root)))) if root else ()
         self.pending = b""
         self.eof = False
         self.delivery: dict[str, Any] = {"state": "sending", "bytes": len(payload), "written_bytes": 0}
@@ -63,7 +66,14 @@ class ProcessStream:
             item = json.loads(decoded)
         except json.JSONDecodeError:
             return
-        if not isinstance(item, dict) or item.get("type") not in {"system", "result"}:
+        if not isinstance(item, dict):
+            return
+        if item.get("type") == "assistant":
+            for step in tool_steps(item, self.roots):
+                append_activity(self.run_dir, "tool", step["tool"], tool=step["tool"], file=step.get("file"),
+                                text=step.get("text"), tool_use_id=step.get("tool_use_id"))
+            return
+        if item.get("type") not in {"system", "result"}:
             return
         subtype = item.get("subtype")
         if self.workflow and subtype in {"task_started", "task_progress", "task_notification"}:

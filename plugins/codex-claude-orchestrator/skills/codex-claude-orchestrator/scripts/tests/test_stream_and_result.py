@@ -40,6 +40,24 @@ class StreamParserTests(unittest.TestCase):
         self.assertEqual(facts["workflows"]["w1"]["status"], "completed")
         self.assertEqual(facts["workflows"]["w2"]["status"], "launched")
 
+    def test_tool_steps_keep_targets_and_labels_but_not_commands(self):
+        event = {"type": "assistant", "parent_tool_use_id": None, "message": {"content": [
+            {"type": "text", "text": "先看代码"},
+            {"type": "tool_use", "id": "a", "name": "Read", "input": {"file_path": "/work/src/app.py"}},
+            {"type": "tool_use", "id": "b", "name": "Bash", "input": {"command": "TOKEN=s3cret pytest", "description": "Run tests"}},
+            {"type": "tool_use", "id": "c", "name": "WebFetch", "input": {"url": "https://x.test/?key=s3cret"}},
+            {"type": "tool_use", "id": "d", "name": "Edit", "input": {"file_path": "/work-other/notes.md"}},
+            {"type": "tool_use", "id": "e", "name": "Grep", "input": {"pattern": "s3cret", "path": "/real/work/src"}}]}}
+        self.assertEqual(stream_parser.tool_steps(event, ("/work", "/real/work")), [
+            {"tool": "Read", "file": "src/app.py", "tool_use_id": "a"},
+            {"tool": "Bash", "text": "Run tests", "tool_use_id": "b"},
+            {"tool": "WebFetch", "tool_use_id": "c"},
+            {"tool": "Edit", "file": "/work-other/notes.md", "tool_use_id": "d"},
+            {"tool": "Grep", "file": "src", "tool_use_id": "e"}])
+        self.assertNotIn("s3cret", json.dumps(stream_parser.tool_steps(event, ("/work",))))
+        self.assertEqual(stream_parser.tool_steps({**event, "parent_tool_use_id": "agent"}, ("/work",)), [])
+        self.assertEqual(stream_parser.tool_steps({"type": "user", "message": event["message"]}), [])
+
     def test_garbage_and_subagent_results_are_ignored(self):
         facts = stream_parser.parse_lines(["not json", "[]",
                                            json.dumps({"type": "result", "parent_tool_use_id": "agent", "subtype": "success"})])

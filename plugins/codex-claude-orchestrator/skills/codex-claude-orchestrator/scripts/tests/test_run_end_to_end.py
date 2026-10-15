@@ -94,6 +94,17 @@ class CopyProfileTests(unittest.TestCase):
         self.assertIn(str(fx.spec.parent / "spec.md").split("/")[-1], " ".join(warnings["source_not_read"]["paths"]))
         self.assertFalse((Path(snapshot["lineage_root"]) / "copy" / ".env").exists())
 
+    def test_tool_calls_become_public_activity_steps(self):
+        fx = self.fx
+        snapshot = fx.run(
+            {"tool": "Read", "input": {"file_path": "{cwd}/src/app.py"}},
+            {"tool": "Bash", "input": {"command": "API_TOKEN=s3cret pytest -q", "description": "Run the tests"}},
+            {"deliver": True, "report": "r", "result": RESULT})
+        events = fx.runtime.events(snapshot["run_id"], 0, 100)["events"]
+        steps = [(e["summary"], e.get("file"), e.get("text")) for e in events if e["kind"] == "tool"]
+        self.assertEqual(steps, [("Read", "src/app.py", None), ("Bash", None, "Run the tests")])
+        self.assertNotIn("s3cret", json.dumps(events))
+
     def test_original_edits_during_the_run_are_reported_not_fatal(self):
         fx = self.fx
         ready, go = fx.root / "ready", fx.root / "go"
