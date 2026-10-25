@@ -114,12 +114,36 @@ for a failed nested resume can imply that the first launch failed; that case was
 checked only with mocked supervisor facts, and the external outcome and note were
 correct. A missing lineage field falls back to the run itself as the chain root.
 
-### Distribution checkpoint
+### Published artifacts and download verification (2026-10-26)
 
-The reviewed release source is ready for the fixed-commit build. Reproducible
-builds, publication and downloaded-asset verification are performed next; their
-actual results are added to this record on the main branch. They are not counted
-as completed checks in this source checkpoint.
+- Release source commit: `bfda3e885a18151edddaa1c57e86360add08caed`. The annotated
+  `v1.1.0` tag points to this commit. The reviewed source was fast-forwarded to
+  remote `main`, and the new tag and four assets were published. GitHub reports
+  publication at `2026-10-25T19:39:24Z` (2026-10-26 in Asia/Shanghai).
+- Two builds from an independent clean clone of the exact source commit produced
+  identical **1,623,549-byte ZIPs** and identical manifests. The archive has
+  **81 entries**; all **80 entries in the file-hash manifest** were checked.
+  ZIP integrity, the embedded and standalone manifests, the exact file set, and
+  executable modes for `Install.command` and `scripts/launch.sh` passed.
+- ZIP SHA-256:
+  `1da3eb97d7b73f7d035bd44c804dfd974637847d395a7ad576831472856bafef`.
+- Plugin file digest:
+  `e64e98818dd6a38fff10f6adac2cd3a50dc8838cd7ce59080d36e03a24ca22c9`.
+- The four published assets were downloaded into a new empty directory. Every
+  downloaded byte matched the locally verified builds; the independent verifier
+  checked all file hashes again. GitHub's own SHA-256 digests for all four assets
+  also matched. The release is published, not a draft or prerelease, and its
+  annotated tag was independently resolved to the source commit above.
+
+Assets: [macOS ZIP](https://github.com/BryanYue/codex-claude-orchestrator/releases/download/v1.1.0/codex-claude-orchestrator-macos-1.1.0.zip),
+[ZIP checksum](https://github.com/BryanYue/codex-claude-orchestrator/releases/download/v1.1.0/codex-claude-orchestrator-macos-1.1.0.zip.sha256),
+[file hashes](https://github.com/BryanYue/codex-claude-orchestrator/releases/download/v1.1.0/FILE-SHA256.json),
+[source manifest](https://github.com/BryanYue/codex-claude-orchestrator/releases/download/v1.1.0/RELEASE-MANIFEST.json).
+
+The fixed tag and archive retain the pre-publication verification checkpoint.
+This documentation-only main-branch update records the subsequent build and
+remote-download evidence. It does not move the tag or replace its assets.
+Installation into the two existing live Codex profiles remains a separate stage.
 
 ## 1.0.1
 
