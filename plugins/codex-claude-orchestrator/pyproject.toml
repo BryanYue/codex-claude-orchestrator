@@ -1,6 +1,6 @@
 [project]
 name = "codex-claude-orchestrator"
-version = "1.0.1"
+version = "1.1.0"
 description = "Supervised Claude Code execution with MCP and local progress views"
 requires-python = ">=3.11"
 dependencies = ["mcp==2.2.0"]
@@ -37,6 +37,8 @@ files = [
     "skills/codex-claude-orchestrator/scripts/bridge_errors.py",
     "skills/codex-claude-orchestrator/scripts/brief.py",
     "skills/codex-claude-orchestrator/scripts/cli_env.py",
+    "skills/codex-claude-orchestrator/scripts/control_store.py",
+    "skills/codex-claude-orchestrator/scripts/duplex.py",
     "skills/codex-claude-orchestrator/scripts/instruction_layer.py",
     "skills/codex-claude-orchestrator/scripts/packet.py",
     "skills/codex-claude-orchestrator/scripts/process_control.py",

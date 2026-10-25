@@ -48,10 +48,11 @@ def parse_lines(lines: Iterable[str], expected_session: str | None = None) -> di
     facts: dict[str, Any] = {
         "init": None, "session_id": None, "final": None, "result_events": 0, "models": [],
         "provider_response_observed": False, "denials": [], "tool_counts": {}, "read_paths": [],
-        "workflows": {}, "session_mismatch": False,
+        "workflows": {}, "session_mismatch": False, "inits": 0, "turns": [],
     }
     reads: set[str] = set()
     workflow_tools: set[str] = set()
+    workflow_tasks: dict[str, str] = {}
     for line in lines:
         try:
             event = json.loads(line)
@@ -61,10 +62,13 @@ def parse_lines(lines: Iterable[str], expected_session: str | None = None) -> di
             continue
         kind = event.get("type")
         session = event.get("session_id")
-        if kind == "system" and event.get("subtype") == "init" and facts["init"] is None:
-            facts["init"] = {key: event.get(key) for key in ("model", "cwd", "tools", "plugins", "memory_paths",
-                                                             "claude_code_version", "permissionMode", "skills")}
-            facts["session_id"] = session
+        if kind == "system" and event.get("subtype") == "init":
+            # A duplex session emits one init per turn; the first describes the session.
+            facts["inits"] += 1
+            if facts["init"] is None:
+                facts["init"] = {key: event.get(key) for key in ("model", "cwd", "tools", "plugins", "memory_paths",
+                                                                 "claude_code_version", "permissionMode", "skills")}
+                facts["session_id"] = session
         if expected_session and isinstance(session, str) and session != expected_session:
             facts["session_mismatch"] = True
         if kind == "assistant":
@@ -86,10 +90,18 @@ def parse_lines(lines: Iterable[str], expected_session: str | None = None) -> di
                 workflow_tools.add(block["id"])
                 facts["workflows"].setdefault(block["id"], {"name": tool_input.get("name") or tool_input.get("scriptPath"),
                                                             "task_id": None, "status": "launched"})
+        if kind == "system" and event.get("subtype") == "task_updated" and isinstance(event.get("task_id"), str):
+            # A terminal patch may be a Workflow's only completion signal; it names the task, not the tool call.
+            status = (event.get("patch") or {}).get("status") if isinstance(event.get("patch"), dict) else None
+            tool_use_id = workflow_tasks.get(event["task_id"])
+            if tool_use_id is not None and status in WORKFLOW_DONE:
+                facts["workflows"][tool_use_id]["status"] = status
         if kind == "system" and event.get("tool_use_id") in workflow_tools:
             record = facts["workflows"][event["tool_use_id"]]
             if event.get("subtype") == "task_started" and record["task_id"] is None:
                 record["task_id"] = event.get("task_id")
+                if isinstance(record["task_id"], str):
+                    workflow_tasks[record["task_id"]] = event["tool_use_id"]
             elif (event.get("subtype") == "task_notification"
                   and (record["task_id"] is None or event.get("task_id") == record["task_id"])
                   and event.get("status") in WORKFLOW_DONE):
@@ -99,6 +111,7 @@ def parse_lines(lines: Iterable[str], expected_session: str | None = None) -> di
             facts["result_events"] += 1
             if event.get("parent_tool_use_id") is None:
                 facts["final"] = event
+                facts["turns"].append({key: event.get(key) for key in ("subtype", "is_error", "stop_reason", "terminal_reason")})
             usage = event.get("modelUsage")
             for model in usage if isinstance(usage, dict) else {}:
                 if isinstance(model, str) and model and model not in facts["models"]:

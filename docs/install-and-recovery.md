@@ -1,12 +1,12 @@
 # Install, first use and recovery
 
 This covers the two install paths for `codex-claude-orchestrator`, the
-first-use preparation both share, upgrading from 0.7.x and recovering from a
-failed source switch. See [git-marketplace.md](git-marketplace.md) for the
-Git-specific commands and identity, and
+first-use preparation both share, upgrading from 1.0.x and 0.7.x and
+recovering from a failed source switch. See [git-marketplace.md](git-marketplace.md)
+for the Git-specific commands and identity, and
 [RELEASE-VERIFICATION.md](../RELEASE-VERIFICATION.md) for which of the steps
-below have actually been exercised. This documentation targets `v1.0.1`, build
-`1.0.1+codex.20261015112934`. Any install, upgrade or rollback takes effect
+below have actually been exercised. This documentation targets `v1.1.0`, build
+`1.1.0+codex.20261025234436`. Any install, upgrade or rollback takes effect
 only in a new MCP connection, i.e. a new Codex task.
 
 Use the same `CODEX_HOME` as the desktop profile you intend to upgrade. Separate
@@ -90,14 +90,17 @@ are four independent things to get ready, in this order:
    - The `claude_environment` tool (ask Codex to "check the local Claude
      setup") reports the CLI path and version, whether `--help` advertises
      every option dispatch needs, the result of `claude auth status --json`,
-     and whether `/usr/bin/sandbox-exec` is available for the copy profile. It
-     sends no model request. The version is recorded for diagnosis only; there
-     is no version allowlist. With `verify=true` (ask for "an online
-     verification") it sends one small paid request to confirm the login
-     actually works.
+     and whether `/usr/bin/sandbox-exec` exists (`sandbox.available`) and
+     actually applies a trivial profile (`sandbox.works`). Both the copy and
+     the read-only profile need a working `sandbox-exec`. It sends no model
+     request. The version is recorded for diagnosis only; there is no version
+     allowlist. With `verify=true` (ask for "an online verification") it sends
+     one small paid request to confirm the login actually works.
    - Every run repeats the local check before launching Claude and ends as
      `not_started` if it fails. A run that sets `max_budget_usd` also needs the
-     CLI to advertise `--max-budget-usd`.
+     CLI to advertise `--max-budget-usd`. When Claude starts, the plugin also
+     checks the CLI's initialization: native tools present, `AskUserQuestion`
+     available for interactive runs, and `permissionMode` `auto`.
    - On the ZIP path, `bash Install.command --diagnose-json` reports the same
      Claude readiness plus Codex host and uv discovery, without a model call.
    - Authentication is always your own action: run `claude auth login` with
@@ -117,10 +120,55 @@ are four independent things to get ready, in this order:
 | Status `cli_incompatible` | `--help` does not list an option dispatch needs (named in `missing_flags`) | Update your own Claude CLI; the plugin will not substitute another version |
 | Status `not_logged_in` or `auth_check_failed` | Not signed in, or the login state could not be read | Sign in yourself; for a read failure, check keychain/host permissions without clearing credentials |
 | Online verification reports `network_error`, `quota_or_rate_limited` or `access_denied` | The request failed for that reason | This alone does not mean the login expired; fix the reported cause |
-| `sandbox.available` is false, or a run says the copy profile needs `sandbox-exec` | No macOS write protection on this host | Analysis tasks can use the read-only profile; implementation tasks cannot run here |
+| `sandbox.available` or `sandbox.works` is false, or starting a task says the profile needs a working `sandbox-exec` write boundary | No working macOS write protection on this host (not macOS, or `sandbox-exec` is refused, for example inside another sandbox) | No Claude task can run here. Neither profile falls back to instruction-only protection; use a macOS host where the check reports `sandbox.works` as true |
+| A run ends `not_started` saying the CLI did not start in native auto mode with a question channel | The CLI's initialization reported no native tools, no `AskUserQuestion` or a permission mode other than `auto` | Update your own Claude Code; the plugin does not fall back to `dontAsk` or a reduced tool set |
 | A run ends `not_started` with "copy preparation failed" | The repository has submodules, sparse/skip-worktree entries, an unresolved merge, Git alternates, links outside the repository, or the boundary scan timed out | Analysis tasks can use the read-only profile; for implementation, resolve that repository state first |
 | The old chat errors after a plugin switch, while a new task works | The old MCP process still refers to the removed installation | Use a new Codex task; do not infer the loaded version from the install inventory |
 | A run ended as `lost` | Its supervising bridge exited without recording an outcome; the plugin stopped leftover Claude processes and collected what was written | Read the report and patch; once the process is confirmed stopped, decide or continue the run as usual |
+
+## Upgrading from 1.0.x
+
+1.1 reads the run records 1.0.x wrote, in the same place. To switch:
+
+1. **Let tasks still running under 1.0.x finish first.** This guide does not
+   cover switching while a 1.0.x run is active.
+2. **Switch the source** to `v1.1.0` with the fixed-ref steps in
+   [git-marketplace.md](git-marketplace.md#change-a-fixed-ref-or-migrate-from-zip),
+   or run the new package's `Install.command` for a ZIP install.
+3. **Prepare dependencies** for the new version (step 2 of the first-time
+   preparation above).
+4. **Open a new Codex task.** Tasks that were already open keep the old MCP
+   process.
+
+What changes for existing work and setups:
+
+- **Earlier runs.** Runs started with 1.0.x stay readable and can be
+  continued with `continue_from` as before. They have no mid-run channel:
+  Claude cannot ask Codex during those rounds, and `claude_reply` refuses them.
+  Rounds started with 1.1 have the channel.
+- **Titles.** 1.0.x records keep their old titles; nothing on disk is
+  rewritten. A 1.1 continuation without a new `title` shows the `task_id`
+  until Codex supplies one.
+- **Workbench.** The first 1.1 response in each Codex conversation may open
+  the Workbench once. After that it only gives a link unless you ask to open
+  it again.
+- **New control store.** 1.1 creates
+  `~/.codex/claude-orchestrator/v2/control.sqlite3` under the same state root
+  (`CLAUDE_ORCHESTRATOR_STATE_DIR` still overrides it). 1.0.x runs are not
+  migrated into it.
+- **Write protection now required for read-only analysis too.** Hosts where
+  `sandbox-exec` does not work can no longer run read-only analysis; 1.0.x
+  allowed that with a reduced tool set.
+- **Claude configuration.** Claude now gets its full native tool set in `auto`
+  permission mode. The plugin no longer passes an empty MCP configuration or
+  disables slash commands: user and organization settings, MCP servers,
+  skills and hooks load normally. `web=false` is now an instruction in the
+  brief, not a removed tool.
+
+To roll back, use the same fixed-ref steps with `v1.0.1`, prepare its
+dependencies and open a new task. 1.0.x does not read the `v2` control store;
+decide runs started with 1.1 before rolling back, because 1.0.x reading or
+continuing them is not covered here.
 
 ## Upgrading from 0.7.x
 

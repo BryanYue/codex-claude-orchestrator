@@ -4,6 +4,59 @@
 
 以下为版本变更记录，保留实现与验证细节。首次使用见[快速开始](docs/getting-started.zh-CN.md)，实际验证范围见[发布验证](RELEASE-VERIFICATION.md)。
 
+## 1.1.0：运行中双向沟通、每个对话一个工作台与原生工具
+
+版本标签 [`v1.1.0`](https://github.com/BryanYue/codex-claude-orchestrator/releases/tag/v1.1.0)，完整构建 `1.1.0+codex.20261025234436`。发布日期 **2026-10-26**。1.0.x 开始的任务可以在 1.1.0 里续接。验证范围见[发布验证](RELEASE-VERIFICATION.md)。
+
+起因是实际使用中的几条反馈：任务下发后要等 Claude 做完两边才有信息交互；多轮任务里一次活动会打开多个工作台页面；按任务类型限制工具反而限制了模型的能力；任务标题都从用户原文开头截取，不便阅读；是否先做计划应按复杂度判断，而不是一律要或一律不要。
+
+**运行中沟通**
+
+- Claude 用原生的 AskUserQuestion 提严重问题，插件把它记为待回答的 `question`；需要越权的操作成为 `permission` 请求。两者都会阻塞：这次执行的其余进程（包括后台命令）被挂起（`family_hold`）；后台 Workflow 和后台代理用 CLI 原生的 `stop_task` 停止，回答仍直接交给等待中的工具。CLI 没有确认停止时，插件停止整个执行，等所有待回答的问题都有回答后在原会话里一次送达（`stop_for_answer`）。停止前已写入但没有回显的补充和打断改向、只写入一部分的回答，以及等待期间新发的补充，按发送顺序一并放进恢复后的第一条消息，已回显的不重发。停止执行时，挂起的后台进程在挂起状态下直接结束，不会先恢复运行再等 CLI 退出。Codex 打断时，CLI 撤回等待中的问题（`cancelled`）；执行已为等回答停止时，插件代为撤回打断之前的待答问题，再带着打断和改向内容恢复会话。打断不算回答，也不取消整个运行；同时到达的取消或截止时间优先。
+- Codex 在已有授权内直接回答；只有核心需求、验收冲突或超出授权的决定才转给用户。用户的回答逐字转交并标为 `origin=human`，Claude 看到的回答会标明来自“Codex 协调者”还是“用户原话”。
+- 不阻塞的说明和异议（`note`/`dispute`）由 Claude 按任务书的说明追加到 `notes.jsonl`，插件立即登记，Claude 不等回复。
+- 新增 `claude_reply`：`kind=answer` 回答待处理的问题或授权请求；`kind=update` 运行中补充信息，不打断；`kind=interrupt` 打断当前这一步，可带改向指令。结束整个运行仍用 `claude_cancel`。
+- 每条回复有持久回执：命令、对应问题的状态和修订号在同一事务里落盘。`delivery.state` 依次为 `queued` → `written` → `echoed`；`failed` 表示这次送达没有完成（run 在送达前结束，或 CLI 输入在这一条只写入一部分时关闭）。只写入一部分的命令在恢复会话时会再送一次，原失败备注保留。`echoed` 只说明 CLI 已收到，不说明 Claude 已理解或照做。同一 `command_id` 同样内容重发返回原回执，内容不同被拒绝；`expected_revision` 防止两个回答同时生效。
+- `claude_wait` 返回 `reason`（interaction / activity / terminal / timeout）和 `pending`；模型和工具计数事件只推进游标，不会提前唤醒。
+- 等待回答期间 Claude 一直暂停；到截止时间仍未回答，按超时结束，未回答的问题列为 `questions_unanswered`。插件按 CLI 报告的会话状态收口：`idle`、没有排队或未送达的消息、没有待答问题时关闭输入；CLI 在后台代理和 Workflow 及其后续回复结束后才报告 `idle`。CLI 异常退出，或后续回复开始后进程退出、没有它的结果时，这一轮记为 `crashed`，不沿用此前的成功结果；补充在某个结果之前写入、但 CLI 还没回显就收到这个结果时，这个结果不算补充已处理，之后进程退出同样记为 `crashed`。补充回显后在同一轮被吸收、随后正常出结果的，照常算完成。Claude 收尾时留下的后台命令先用 `stop_task` 停掉并给出 `background_commands_stopped` 警告，不再把 run 拖到截止时间。
+- packet 新增 `interactive`（默认 `true`）。设为 `false` 时 Claude 的提问会被立即拒绝，并提示它写进 `questions`。
+- 任务书新增“与 Codex 的沟通”一节，并写明按任务复杂度决定是否先列计划，不需要开工确认。
+
+**工作台：每个对话一个页面**
+
+- Codex 为每个对话取一个稳定的 `context.chat`，所有调用都带上。只有这个对话第一次请求时，响应里 `workbench.open.action` 为 `open_in_codex`；重连、压缩、新一轮或链接变了都不再自动打开。用户要求时用新增的 `claude_workbench(context, reopen=true)` 再开。宿主报告的结果可以记下，但任何结果都不触发自动重试。
+- 没有 `context.chat` 时只给链接。插件保证的是“自动请求最多一次”，宿主实际是否只开了一个标签页，插件无法确认。
+- 同一台电脑上的两个 Codex 对话即使用了相同的 `task_id` 也互不干扰：查询、等待、读取产物、取消、裁决、回复和清理都会核对 `context`，不匹配或省略都会被拒绝；只读工作台仍可查看。插件启动环境设置了 `CODEX_CLAUDE_NAMESPACE` 时，它优先作为命名空间。
+- 页面按对话分组任务，分开显示项目、任务、轮次（含本轮说明）和状态。一张任务卡是一条续接链（按 `lineage_root`）：1.0.x 或不带 `context` 开始、后来在本对话续接的早先轮次也放在同一张卡里，只用于显示，不写入或推测它们的对话归属，也不改授权；同名任务在不同对话或不同续接链里分开显示。Claude 在等回答时显示「Claude 在等回答」并在任务卡片上标「等回答」，已处理的问答可以折叠查看。过程记录显示 Codex 的补充和打断正文（最多 480 字）及来源（Codex 协调者或用户原话）。页面仍只读，回答在 Codex 对话里进行。
+- 1.1 新增的提醒 `questions_unanswered`、`turn_interrupted`、`interactions_unavailable`、`background_commands_stopped` 都有中文标题和说明，原始 code 和英文详情仍在“技术细节”里；测试从插件源码收集全部 code 核对。
+- 工作台端口随机、令牌每个 MCP 进程新生成。Codex 或插件重启后旧页面连不上，会继续重试并提示在 Codex 里取新的工作台链接；插件不会因此自动再开页面，旧页面也不能自己换成新链接。
+- [工作台规格](docs/ui-spec.md) 更新为 1.1 的行为。
+
+**可读的任务标题**
+
+- packet 新增 `title`（≤60 字，单行）和 `round_title`（≤80 字）。续接 1.1 的任务时不传 `title` 就沿用上一轮的标题；都没有时显示 `task_id`。1.0.x 的标题取自原话开头，不被继承：从 1.0.x 续接且不传 `title` 时新一轮显示 `task_id`，所以 Codex 应在第一次续接时提供简短的 `title`，之后的轮次沿用它。超长会被截断，换行合并为空格。标题只用于显示，不参与路由和权限，也不从用户原话里截取。
+- 用户原话仍逐字保存在任务书里。1.0.x 记录保留原来的标题，磁盘上的原话和标题不改写。
+
+**原生工具与写保护**
+
+- 两档都给 Claude 原生的全部工具，权限模式 `auto`（`--tools default --permission-mode auto`）。不再维护工具白名单或黑名单，不再强制空的 MCP 配置，不再禁用斜杠命令；用户和组织的设置、MCP 服务器、技能和 hooks 照常加载。
+- readonly 档不再只给 Read/Glob/Grep，改由 macOS `sandbox-exec` 拒写原目录、它的 `.git` 和插件状态；Claude 可以读、搜索和运行只读命令，报告仍用结构化输出交回。
+- 两档都要求 `sandbox-exec` 真正可用。不可用（非 macOS，或在另一层沙箱里被拒绝）时插件拒绝开工并说明原因，不会只靠提示词保护原目录。`claude_environment` 新增 `sandbox.works` 报告实际探测结果。不再有“没有 `sandbox-exec` 时分析任务改用 readonly”的退路。
+- `web` 改为写在任务书里的授权：关闭时任务书要求 Claude 不联网，但不再移除联网工具。
+- CLI 准入改为检查 `--input-format`、`--replay-user-messages` 等双向流所需参数，不再要求 `--allowedTools`、`--disallowedTools`、`--strict-mcp-config`、`--mcp-config`、`--disable-slash-commands`。`--permission-prompt-tool` 不在 `--help` 里列出，改为在 CLI 初始化事件里核对：原生工具非空、有 AskUserQuestion、权限模式为 `auto`。不满足时这一轮以 `not_started` 结束，不降级到 `dontAsk` 或缩减的工具集；这一轮的副本改动照常记录，修好 CLI 后从这一轮续接，未合入的改动和更早一轮的会话都会接上。
+- `--resume` 只在 CLI 运行后拒绝会话时改开新会话；CLI 根本启动不了时不盲目重试，这一轮以 `not_started` 结束并给出原始错误。
+- readonly 的分析目录包含插件状态目录（例如直接分析 `~`）时，写边界无法同时保护两者：插件在启动 Claude 之前以 `not_started` 结束，说明改为分析更小的目录或用 `CLAUDE_ORCHESTRATOR_STATE_DIR` 另选状态目录，不放宽写边界，也不自动搬动状态。
+
+**运行状态**
+
+- 新增小型控制库 `~/.codex/claude-orchestrator/v2/control.sqlite3`，记录对话归属、命令与回执、问答和工作台打开请求。使用 SQLite 回滚日志（`journal_mode=DELETE`），不启用 WAL。运行记录和产物仍在 `v1/runs` 下。
+- 1.0.x 的运行照常可读、可续接，只是没有实时沟通通道；插件不把它们迁入控制库。
+- MCP 工具从 10 个增加到 12 个：新增 `claude_reply`、`claude_workbench`；`claude_status`、`claude_wait`、`claude_result`、`claude_cancel`、`claude_decide`、`claude_runs`、`claude_cleanup` 都接受 `context`。
+
+**不在本版范围**
+
+Go 重写、迁移到 Agent SDK、新的认证或计费安排、通用的分布式调度都不在本版范围内。
+
 ## 1.0.1：工作台交互、文案与过程记录
 
 版本标签 [`v1.0.1`](https://github.com/BryanYue/codex-claude-orchestrator/releases/tag/v1.0.1)，完整构建 `1.0.1+codex.20261015112934`，发布日期 **2026-10-15**。运行记录格式不变，1.0.0 开始的任务可以在 1.0.1 里续接。验证范围见[发布验证](RELEASE-VERIFICATION.md)。

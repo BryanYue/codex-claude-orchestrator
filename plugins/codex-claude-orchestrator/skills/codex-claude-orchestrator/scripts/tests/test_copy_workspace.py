@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -9,7 +10,7 @@ from unittest import mock
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPTS))
-from copy_workspace import (CopyWorkspaceError, ProtectionUnavailable, prepare_copy, load_copy, protected_command,
+from copy_workspace import (CopyWorkspaceError, ProtectionUnavailable, prepare_copy, load_copy, protected_command, readonly_command,
                             discard_copy, install_workflow_template, _git)
 
 
@@ -340,8 +341,43 @@ class CopyWorkspaceTests(unittest.TestCase):
     def test_unsupported_host_never_returns_unprotected_command(self):
         metadata = self.prepare()
         with mock.patch('copy_workspace.sys.platform', 'linux'):
-            with self.assertRaisesRegex(ProtectionUnavailable, 'readonly profile'):
+            with self.assertRaisesRegex(ProtectionUnavailable, 'copy profile requires macOS sandbox-exec'):
                 protected_command(['/bin/true'], metadata)
+            with self.assertRaisesRegex(ProtectionUnavailable, 'readonly profile requires macOS sandbox-exec'):
+                readonly_command(['/bin/true'], source_paths=[self.source])
+
+    def test_readonly_profile_denies_source_git_and_state_writes_except_its_channel(self):
+        state = self.root / 'state'; channel = state / 'runs' / 'r' / 'channel'; channel.mkdir(parents=True)
+        command = readonly_command(['/bin/true'], source_paths=[self.source, self.source / '.git'], extra_protected=[state],
+                                   writable_exceptions=[channel])
+        self.assertEqual(command[0], '/usr/bin/sandbox-exec')
+        profile = command[2]
+        quoted = lambda path: json.dumps(str(path.resolve()), ensure_ascii=False)  # noqa: E731
+        self.assertIn(f'(subpath {quoted(self.source)})', profile)
+        self.assertIn(f'(subpath {quoted(self.source / ".git")})', profile)
+        self.assertIn(f'(require-all (subpath {quoted(state)}) (require-not (subpath {quoted(channel)})))', profile)
+        self.assertEqual(command[3:], ['/bin/true'])
+        with self.assertRaisesRegex(CopyWorkspaceError, 'overlaps original source'):
+            readonly_command(['/bin/true'], source_paths=[self.root], extra_protected=[state], writable_exceptions=[channel])
+        with self.assertRaisesRegex(CopyWorkspaceError, 'at least one protected source'):
+            readonly_command(['/bin/true'], source_paths=[])
+
+    @unittest.skipUnless(sys.platform == 'darwin' and subprocess.run(
+        ['/usr/bin/sandbox-exec', '-p', '(version 1)(allow default)', '/usr/bin/true'], capture_output=True).returncode == 0
+        if Path('/usr/bin/sandbox-exec').is_file() else False, 'a working (non-nested) macOS sandbox-exec boundary')
+    def test_actual_readonly_boundary_refuses_source_writes_and_allows_the_channel(self):
+        state = self.root / 'state'; channel = state / 'runs' / 'r' / 'channel'; channel.mkdir(parents=True)
+        # Real shell quoting: fixture paths contain spaces, quotes and non-ASCII characters.
+        script = (f'echo x > {shlex.quote(str(self.source / "new.txt"))}; echo "src=$?"; '
+                  f'echo x >> {shlex.quote(str(self.source / ".git" / "config"))}; echo "git=$?"; '
+                  f'echo x > {shlex.quote(str(state / "registry.json"))}; echo "state=$?"; '
+                  f'echo x > {shlex.quote(str(channel / "notes.jsonl"))}; echo "channel=$?"')
+        command = readonly_command(['/bin/sh', '-c', script], source_paths=[self.source, self.source / '.git'],
+                                   extra_protected=[state], writable_exceptions=[channel])
+        completed = subprocess.run(command, capture_output=True, text=True)
+        codes = dict(line.split('=') for line in completed.stdout.split())
+        self.assertEqual(codes, {'src': '1', 'git': '1', 'state': '1', 'channel': '0'}, completed.stderr)
+        self.assertFalse((self.source / 'new.txt').exists())
 
     @unittest.skipUnless(sys.platform == 'darwin', 'actual macOS process boundary')
     def test_actual_descendants_cannot_mutate_source_gitdir_requirements_or_identity(self):

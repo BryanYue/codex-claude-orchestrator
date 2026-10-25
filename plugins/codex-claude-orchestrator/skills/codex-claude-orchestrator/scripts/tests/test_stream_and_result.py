@@ -40,6 +40,20 @@ class StreamParserTests(unittest.TestCase):
         self.assertEqual(facts["workflows"]["w1"]["status"], "completed")
         self.assertEqual(facts["workflows"]["w2"]["status"], "launched")
 
+    def test_a_terminal_task_update_completes_only_its_own_workflow(self):
+        start = ({"type": "assistant", "message": {"content": [
+                    {"type": "tool_use", "id": "wf-tool", "name": "Workflow", "input": {"name": "codex-analyze"}}]}},
+                 {"type": "system", "subtype": "task_started", "tool_use_id": "wf-tool", "task_id": "wf-task"})
+        patch_only = stream_parser.parse_lines(lines(*start, {"type": "system", "subtype": "task_updated", "task_id": "wf-task",
+                                                              "patch": {"status": "completed"}}))
+        self.assertEqual(patch_only["workflows"]["wf-tool"]["status"], "completed")
+        other = stream_parser.parse_lines(lines(*start, {"type": "system", "subtype": "task_updated", "task_id": "another",
+                                                         "patch": {"status": "completed"}}))
+        self.assertEqual(other["workflows"]["wf-tool"]["status"], "launched")
+        running = stream_parser.parse_lines(lines(*start, {"type": "system", "subtype": "task_updated", "task_id": "wf-task",
+                                                           "patch": {"status": "running"}}))
+        self.assertEqual(running["workflows"]["wf-tool"]["status"], "launched")
+
     def test_tool_steps_keep_targets_and_labels_but_not_commands(self):
         event = {"type": "assistant", "parent_tool_use_id": None, "message": {"content": [
             {"type": "text", "text": "先看代码"},

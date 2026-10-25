@@ -1,4 +1,5 @@
 """Run the workbench script in Node against a minimal fake DOM and the 1.0 viewer payloads."""
+import ast
 import json
 from pathlib import Path
 import re
@@ -8,6 +9,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 PAGE = ROOT / "assets/dashboard.html"
+PRODUCERS = (ROOT / "skills/codex-claude-orchestrator/scripts", ROOT / "scripts")
 
 HARNESS = r'''
 const vm = require('node:vm'), assert = require('node:assert/strict');
@@ -133,11 +135,47 @@ SNAPSHOT_ONLY = {"active", "elapsed_seconds", "events_count", "last_event", "las
                  "decision_history_count"}
 RUNS = {"runs": [{k: v for k, v in snap.items() if k not in SNAPSHOT_ONLY} for snap in (RUNNING, READONLY, FINISHED)],
         "next_offset": 3, "has_more": False}
-WARNING_CODES = ["original_changed_during_run", "protected_touched", "outside_hint", "tool_denied", "source_not_read",
-                 "workflow_incomplete", "report_missing", "result_missing", "result_malformed", "residual_processes_stopped",
-                 "process_stop_unconfirmed", "sensitive_inputs_skipped", "resume_fallback", "questions_for_user",
-                 "disputes_present", "not_verified_present", "provider_error", "patch_unavailable",
-                 "carried_already_in_original", "finalize_error", "undelivered_files_now_ignored"]
+KNOWN_WARNING_CODES = {"original_changed_during_run", "protected_touched", "outside_hint", "tool_denied", "source_not_read",
+                       "workflow_incomplete", "report_missing", "result_missing", "result_malformed", "residual_processes_stopped",
+                       "process_stop_unconfirmed", "sensitive_inputs_skipped", "resume_fallback", "questions_for_user",
+                       "disputes_present", "not_verified_present", "provider_error", "patch_unavailable",
+                       "carried_already_in_original", "finalize_error", "undelivered_files_now_ignored",
+                       "background_commands_stopped", "turn_interrupted", "questions_unanswered", "interactions_unavailable"}
+EVENT_KINDS = {"question": "Claude 提问", "permission": "请求授权", "note": "Claude 说明", "dispute": "Claude 异议",
+               "answer": "Codex 回答", "update": "Codex 补充", "interrupt": "请求打断", "hold": "暂停执行等回答",
+               "released": "恢复执行", "resumed": "重新接上会话", "turn": "一轮回复结束"}
+
+
+def produced_warning_codes():
+    """Every code the plugin writes: {"code": "<literal>"} dicts and `for ..., code, ... in ((...), ...)` tables."""
+    codes = set()
+    for path in sorted(path for folder in PRODUCERS for path in folder.glob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Dict):
+                codes.update(value.value for key, value in zip(node.keys, node.values)
+                             if isinstance(key, ast.Constant) and key.value == "code"
+                             and isinstance(value, ast.Constant) and isinstance(value.value, str))
+            elif isinstance(node, ast.For) and isinstance(node.target, ast.Tuple) and isinstance(node.iter, (ast.Tuple, ast.List)):
+                names = [getattr(target, "id", None) for target in node.target.elts]
+                if "code" in names:
+                    index = names.index("code")
+                    codes.update(row.elts[index].value for row in node.iter.elts
+                                 if isinstance(row, ast.Tuple) and isinstance(row.elts[index], ast.Constant))
+    return codes
+
+
+def interaction(interaction_id, kind, status, request, blocking=True, answer=None, answered_by=None):
+    return {"interaction_id": interaction_id, "kind": kind, "blocking": blocking, "status": status, "request": request,
+            "answer": answer, "answered_by": answered_by, "created_at": 1791363001.0,
+            "closed_at": None if status == "pending" else 1791363002.0, "hold": None}
+
+
+def list_row(snap):
+    return {k: v for k, v in snap.items() if k not in SNAPSHOT_ONLY | {"interactions", "control_state"}}
+
+
+def at(row, run_id, round_no, started, **extra):
+    return dict(row, run_id=run_id, round=round_no, started_at=started, updated_at=started, ended_at=None, **extra)
 
 
 class DashboardTests(unittest.TestCase):
@@ -253,6 +291,8 @@ assert.equal(byId('boxRun').className.trim(), 'box', 'a clean run outcome is not
 ''')
 
     def test_warning_labels_cover_every_code_and_fall_back_to_the_raw_code(self):
+        codes = produced_warning_codes()
+        self.assertLessEqual(KNOWN_WARNING_CODES, codes, "the source scan lost codes it used to find")
         unknown = dict(READONLY, run_id="run-unknownWarn1", outcome=dict(READONLY["outcome"], warnings=[
             {"code": "brand_new_code", "detail": "something new", "items": ["<b>保留</b>\n  原样"]},
             {"code": "sensitive_inputs_skipped", "paths": ["/x/.env (sensitive name)"],
@@ -261,6 +301,7 @@ assert.equal(byId('boxRun').className.trim(), 'box', 'a clean run outcome is not
 for (const code of CODES) {
   const [title, desc] = out(`warnInfo(${JSON.stringify(code)})`);
   assert.notEqual(title, code, code + ' needs a Chinese title');
+  assert.notEqual(title, '其他提醒', code + ' is produced by the plugin, so it is not an unknown code');
   assert.match(title, /[一-鿿]/);
   assert.match(desc, /[一-鿿]/, code + ' needs a Chinese description');
 }
@@ -279,7 +320,7 @@ assert.match(byId('warnList').textContent, /动了受保护的文件需要 Codex
 const tech = all(byId('warnList'), n => n.tagName === 'DETAILS');
 assert.equal(tech.length, 1);
 assert.match(tech[0].textContent, /^技术细节protected_touched.*claude_decide must confirm each/);
-''', CODES=WARNING_CODES, UNKNOWN=unknown)
+''', CODES=sorted(codes), UNKNOWN=unknown)
 
     def test_activity_texts_are_translated_and_tool_steps_named(self):
         self.run_node(r'''
@@ -477,6 +518,251 @@ await respond('/api/runs', 200, RUNS);
 assert.equal(byId('banner').hidden, true);
 ''')
 
+    def test_same_task_id_in_two_chats_is_two_tasks_with_their_own_rounds(self):
+        base = dict(RUNS["runs"][1], task_id="T-9")
+        c1 = {"namespace": "n1", "chat": "c1"}
+        rows = [at(base, "run-chat1round1", 1, 1791363100.0, context=c1),
+                at(base, "run-chat1round2", 2, 1791363300.0, context=c1),
+                at(base, "run-chat2round1", 1, 1791363200.0, context={"namespace": "n1", "chat": "c2"})]
+        self.run_node(r'''
+const groups = out(`groupTasks(${JSON.stringify(ROWS)})`);
+assert.deepEqual(groups.map(g => [g.key, g.task_id, g.runs.map(r => r.run_id)]),
+  [['n1/c1/T-9', 'T-9', ['run-chat1round1', 'run-chat1round2']], ['n1/c2/T-9', 'T-9', ['run-chat2round1']]]);
+const legacy = out(`groupTasks(${JSON.stringify([{...ROWS[0], context: null}, {...ROWS[2], context: undefined}])})`);
+assert.deepEqual(legacy.map(g => g.key), ['T-9'], 'rows without a chat still group by task_id');
+
+await respond('/api/runs?limit=100&offset=0', 200, {runs: ROWS, next_offset: 3, has_more: false});
+const cards = byId('taskList').children;
+assert.equal(cards.length, 2);
+assert.deepEqual(cards.map(c => c.children[0].textContent), ['这个设计可行吗？', '这个设计可行吗？']);
+assert.equal(run('S.sel'), 'run-chat1round2');
+await respond('run_id=run-chat1round2', 200, {...READONLY, ...ROWS[1]});
+assert.deepEqual(byId('roundTabs').children.map(t => t.textContent), ['第 1 轮 · 待验收', '第 2 轮 · 待验收']);
+assert.deepEqual(cards.map(c => c.getAttribute('aria-current')), ['true', 'false']);
+byId('taskList').children[1].click();
+await respond('run_id=run-chat2round1', 200, {...READONLY, ...ROWS[2]});
+const tabs = byId('roundTabs').children;
+assert.deepEqual(tabs.map(t => t.textContent), ['第 1 轮 · 待验收'], 'the other chat\'s rounds are not mixed in');
+assert.equal(tabs[0].getAttribute('aria-selected'), 'true');
+assert.deepEqual(byId('taskList').children.map(c => c.getAttribute('aria-current')), ['false', 'true']);
+''', ROWS=rows)
+
+    def test_title_and_round_title_show_in_card_header_and_tabs_and_old_rows_keep_their_title(self):
+        long_round = "补上 CSV 导出和失败原因提示，并且把这一轮的说明写得足够长，长到需要靠样式截断显示"
+        current = at(dict(RUNS["runs"][0], task_id="T-7", title="导出改异步", round_title=long_round, title_source="explicit",
+                          cwd="/Users/me/work/shop-app/", context={"namespace": None, "chat": "c1"}, interactive=True,
+                          pending_interactions=0, revision=3), "run-titledRound2", 2, 1791363100.0)
+        first = at(current, "run-titledRound1", 1, 1791363050.0, round_title=None, status="ok", decision=DECISION)
+        snap = dict(current, active=True, outcome=None, last_event=None, last_meaningful_event=None, elapsed_seconds=1.0,
+                    interactions=[], control_state="running")
+        self.run_node(r'''
+await respond('/api/runs?limit=100&offset=0', 200, {runs: [FIRST, CURRENT, RUNS.runs[2]], next_offset: 3, has_more: false});
+const cards = byId('taskList').children;
+assert.equal(cards.length, 2);
+assert.equal(cards[0].children[0].textContent, '导出改异步');
+assert.match(cards[0].children[1].textContent, /^动手改 · 第 2 轮 · 补上 CSV 导出和失败原因提示.*截断显示 · \d+\/\d+ \d\d:\d\d$/);
+assert.deepEqual(all(cards[0], n => /card-proj/.test(n.className)).map(n => n.textContent), ['shop-app']);
+assert.equal(cards[1].children[0].textContent, '把导出改成异步，失败要提示原因', 'a 1.0 row keeps showing its stored title');
+assert.match(cards[1].children[1].textContent, /^动手改 · 第 1 轮 · \d+\/\d+ \d\d:\d\d$/);
+assert.equal(all(cards[1], n => /card-proj/.test(n.className)).length, 0);
+
+await respond('run_id=run-titledRound2', 200, SNAP);
+assert.equal(byId('runTitle').textContent, '导出改异步');
+assert.equal(byId('runRound').hidden, false);
+assert.equal(byId('runRound').textContent, '第 2 轮：' + LONG);
+assert.match(byId('runFacts').textContent, /^项目 shop-app动手改副本模式/);
+const tabs = byId('roundTabs').children;
+assert.deepEqual(tabs.map(t => t.textContent), ['第 1 轮 · 改后通过', '第 2 轮 · ' + LONG + ' · 进行中']);
+assert.deepEqual(all(tabs[1], n => n.className === 'tab-sub').map(n => n.textContent), [' · ' + LONG], 'the full text stays; CSS truncates it');
+assert.equal(tabs[1].title, LONG);
+assert.match(byId('idBody').textContent, /项目目录\/Users\/me\/work\/shop-app\/.*对话c1/);
+assert.equal(byId('askBox').children.length, 0);
+
+await show(FINISHED);
+assert.equal(byId('runTitle').textContent, '把导出改成异步，失败要提示原因');
+assert.equal(byId('runRound').hidden, true);
+assert.equal(byId('runRound').textContent, '');
+assert.deepEqual(byId('roundTabs').children.map(t => t.textContent), ['第 1 轮 · 改后通过']);
+assert.match(byId('runFacts').textContent, /^动手改副本模式/);
+assert.doesNotMatch(byId('idBody').textContent, /项目目录|对话/);
+''', CURRENT=current, FIRST=first, SNAP=snap, LONG=long_round)
+
+    def test_pending_questions_are_shown_as_text_with_the_reply_hint(self):
+        question = interaction("i-1", "question", "pending", {"questions": [{
+            "question": "<img src=x onerror=alert(1)>用哪个数据库？", "header": "存储", "multiSelect": False,
+            "options": [{"label": "PostgreSQL", "description": "已有运维"}, {"label": "<b>SQLite</b>", "description": ""}]}]})
+        permission = interaction("i-2", "permission", "pending", {"tool_name": "Bash", "summary": "rm -rf build/"})
+        note = interaction("i-3", "note", "acknowledged", {"text": "先跳过了 lint，原因见报告", "scope": "src/"}, blocking=False)
+        answered = interaction("i-4", "question", "answered", {"questions": [{"question": "要保留旧接口吗？", "header": "",
+                                                                              "options": [], "multiSelect": False}]},
+                               answer={"text": "保留，标记弃用"}, answered_by="coordinator")
+        held = dict(RUNNING, run_id="run-heldQuestion1", interactive=True, pending_interactions=2, control_state="held", revision=4,
+                    interactions=[question, permission, note, answered])
+        self.run_node(r'''
+await respond('/api/runs?limit=100&offset=0', 200, {runs: [ROW], next_offset: 1, has_more: false});
+const badges = all(byId('taskList').children[0], n => /badge/.test(n.className));
+assert.deepEqual(badges.map(b => [b.textContent, b.className]), [['等回答', 'badge t-warn']]);
+await respond('run_id=run-heldQuestion1', 200, HELD);
+const ask = byId('askBox');
+assert.deepEqual(ask.children.map(n => [n.tagName, n.className]), [['SECTION', 'ask attn'], ['SECTION', 'ask attn'], ['SECTION', 'ask'], ['DETAILS', 'done']]);
+const [q, perm, notes, done] = ask.children.map(n => n.textContent);
+assert.ok(q.startsWith('Claude 在等回答存储<img src=x onerror=alert(1)>用哪个数据库？'), q);
+assert.match(q, /PostgreSQL · 已有运维<b>SQLite<\/b>执行已暂停 · 请在 Codex 里回复，工作台只读$/);
+assert.equal(all(ask, n => n.tagName === 'IMG' || n.tagName === 'B' && n.textContent.includes('SQLite')).length, 0);
+assert.deepEqual(all(ask.children[0], n => n.tagName === 'LI').map(n => n.textContent), ['PostgreSQL · 已有运维', '<b>SQLite</b>']);
+assert.equal(perm, '请求授权Bash rm -rf build/执行已暂停 · 请在 Codex 里回复，工作台只读');
+assert.equal(notes, 'Claude 的说明说明先跳过了 lint，原因见报告范围：src/');
+assert.equal(done, '已处理的问答（1）提问 · 已回答要保留旧接口吗？Codex 回答：保留，标记弃用');
+assert.match(byId('hero').textContent, /^Claude 在等回答，执行已暂停/);
+assert.deepEqual(byId('roundTabs').children.map(t => t.textContent), ['第 1 轮 · 等回答']);
+
+await show({...HELD, run_id: 'run-softQuestion1', control_state: 'running', interactions: [{...HELD.interactions[0], blocking: false}]});
+assert.equal(ask.children.length, 1);
+assert.match(ask.textContent, /请在 Codex 里回复/);
+assert.doesNotMatch(ask.textContent + byId('hero').textContent, /执行已暂停/);
+await show(FINISHED);
+assert.deepEqual(ask.children.map(n => n.className), ['ask'], 'the 1.0 questions_for_user box is unchanged');
+assert.match(ask.textContent, /^Claude 有问题问你.*要不要保留旧接口？/);
+await show(READONLY);
+assert.equal(ask.children.length, 0);
+''', ROW=list_row(held), HELD=held)
+
+    def test_chat_link_lists_only_that_chat_and_keeps_it_in_the_address(self):
+        self.run_node(r'''
+assert.equal(calls[0].url, '/api/runs?limit=100&offset=0&chat=c%201&namespace=n1');
+assert.equal(calls[0].opts.headers.Authorization, 'Bearer t');
+assert.equal(byId('listHead').textContent, '本对话的任务');
+await respond('/api/runs', 200, RUNS);
+assert.equal(loc.hash, '#token=t&run=run-POaJz2M5Ml3AAjij&chat=c%201&ns=n1');
+timers.find(t => t.ms === 5000).f();
+assert.match(pending.at(-1).url, /^\/api\/runs\?limit=100&offset=0&chat=c%201&namespace=n1$/);
+''', hash_value="token=t&chat=c%201&ns=n1")
+        self.run_node(r'''
+assert.equal(calls[0].url, '/api/runs?limit=100&offset=0&chat=c1');
+''', hash_value="token=t&chat=c1")
+        self.run_node(r'''
+assert.equal(calls[0].url, '/api/runs?limit=100&offset=0');
+assert.equal(byId('listHead').textContent, '全部任务');
+await respond('/api/runs', 200, RUNS);
+assert.equal(loc.hash, '#token=fixture&run=run-POaJz2M5Ml3AAjij');
+''')
+
+    def test_collaboration_event_kinds_are_translated(self):
+        self.run_node(r'''
+for (const [kind, text] of Object.entries(KINDS)) {
+  assert.equal(run(`evText(${JSON.stringify({kind, summary: 'english summary of ' + kind, status: 'held'})})`), text);
+  assert.match(out(`label(L.ev, ${JSON.stringify(kind)}, '')`), /^[一-鿿]+$/, kind + ' needs a short Chinese kind label');
+}
+run(`S.events = ${JSON.stringify([{seq: 1, received_at: 1, kind: 'hold', summary: 'execution held for an answer', status: 'held'},
+  {seq: 2, received_at: 2, kind: 'answer', summary: 'coordinator answered', status: 'delivered', text: '用 SQLite'}])}`);
+const view = run('eventsView()');
+assert.match(view.textContent, /暂停执行等回答.*Codex 回答.*用 SQLite/);
+assert.doesNotMatch(view.textContent, /execution held|coordinator answered|held|delivered/);
+assert.deepEqual(all(view, n => n.className === 'k muted').map(n => n.textContent), ['暂停', '回答']);
+''', KINDS=EVENT_KINDS)
+
+
+    def test_structured_answers_remain_visible_without_free_text(self):
+        mapped = interaction("i-map", "question", "answered", {"questions": []},
+                             answer={"answers": {"Output format?": "JSON", "Keep timestamps?": "yes"}},
+                             answered_by="coordinator")
+        both = dict(mapped, answer={**mapped["answer"], "text": "Keep existing formatting"})
+        self.run_node(r'''
+const selected = run('ixAnswer(' + JSON.stringify(MAPPED) + ')');
+assert.match(selected, /Codex 回答/);
+assert(selected.includes('Output format?：JSON' + String.fromCharCode(10) + 'Keep timestamps?：yes'));
+const explained = run('ixAnswer(' + JSON.stringify(BOTH) + ')');
+assert(explained.includes('Output format?：JSON'));
+assert(explained.includes('Keep existing formatting'));
+''', MAPPED=mapped, BOTH=both)
+
+
+    def test_collaboration_warnings_show_chinese_titles_and_keep_the_raw_detail(self):
+        ended = dict(READONLY, run_id="run-collabWarn001", outcome=dict(READONLY["outcome"], warnings=[
+            {"code": "questions_unanswered", "items": ["ix-1"],
+             "detail": "Claude's blocking question(s) were still waiting for Codex when the run ended"},
+            {"code": "turn_interrupted",
+             "detail": "1 earlier turn(s) ended with an error or interrupt; the last turn's result is the final one"},
+            {"code": "interactions_unavailable", "detail": "OperationalError: database is locked"}]))
+        self.run_node(r'''
+await show(RUN);
+const cards = byId('warnList').children;
+assert.deepEqual(cards.map(c => c.children[0].textContent), ['提问没等到回答', '中途有回合中断', '问答记录没读到']);
+RUN.outcome.warnings.forEach((w, i) => {
+  assert.match(cards[i].children[1].textContent, /[一-鿿]/, w.code + ' needs a Chinese description');
+  assert.ok(!cards[i].children[1].textContent.includes(w.code), 'the raw code stays in the technical details');
+  assert.equal(all(cards[i], n => n.tagName === 'DETAILS')[0].textContent, '技术细节' + w.code + w.detail);
+});
+assert.deepEqual(all(cards[0], n => n.className === 'verbatim').map(n => n.textContent), ['ix-1']);
+''', RUN=ended)
+
+    def test_one_lineage_is_one_card_across_the_upgrade_and_same_name_lineages_stay_apart(self):
+        root = "/state/v1/runs/run-upgradeRound1"
+        old = dict(list_row(FINISHED), task_id="T-OLD", run_id="run-upgradeRound1", run_dir=root, lineage_root=root, context=None)
+        new = at(dict(old, title="T-OLD", title_source="task_id", context={"namespace": "default", "chat": "c1"}, decision=None,
+                      continue_from=old["run_id"], run_dir="/state/v1/runs/run-upgradeRound2"),
+                 "run-upgradeRound2", 2, old["started_at"] + 100)
+        fresh = at(dict(new, continue_from=None, run_dir="/state/v1/runs/run-freshLineage1", lineage_root="/state/v1/runs/run-freshLineage1"),
+                   "run-freshLineage1", 1, old["started_at"] + 50)
+        other = at(dict(fresh, context={"namespace": "default", "chat": "c2"}, run_dir="/state/v1/runs/run-otherChat00001",
+                        lineage_root="/state/v1/runs/run-otherChat00001"), "run-otherChat00001", 1, old["started_at"] + 60)
+        rows = {"OLD": old, "NEW": new, "FRESH": fresh, "OTHER": other}
+        self.run_node(r'''
+const groups = out(`groupTasks(${JSON.stringify([OLD, NEW, FRESH, OTHER])})`);
+assert.deepEqual(groups.map(g => g.runs.map(r => r.run_id)),
+  [['run-upgradeRound1', 'run-upgradeRound2'], ['run-otherChat00001'], ['run-freshLineage1']]);
+await respond('/api/runs', 200, {runs: [NEW, FRESH, OLD], next_offset: 3, has_more: false});
+const cards = () => byId('taskList').children, tabs = () => byId('roundTabs').children;
+assert.equal(cards().length, 2, 'the chat-less first round joins its lineage; a fresh lineage of the same name stays apart');
+assert.equal(run('S.sel'), 'run-upgradeRound2');
+await respond('run_id=run-upgradeRound2', 200, {...FINISHED, ...NEW});
+assert.deepEqual(tabs().map(t => t.textContent), ['第 1 轮 · 改后通过', '第 2 轮 · 待验收']);
+tabs()[0].click();
+await respond('run_id=run-upgradeRound1', 200, {...FINISHED, ...OLD});
+assert.equal(cards().length, 2);
+assert.deepEqual(tabs().map(t => t.getAttribute('aria-selected')), ['true', 'false']);
+assert.equal(byId('runTitle').textContent, '把导出改成异步，失败要提示原因', 'the 1.0 round keeps its stored title');
+''', hash_value="token=t&chat=c1&ns=default", **rows)
+        self.run_node(r'''
+await respond('/api/runs', 200, {runs: [NEW], next_offset: 1, has_more: false});
+await respond('run_id=run-upgradeRound2', 200, {...FINISHED, ...NEW});
+all(byId('runFacts'), n => n.tagName === 'BUTTON')[0].click();
+await respond('run_id=run-upgradeRound1', 200, {...FINISHED, ...OLD});
+assert.equal(byId('taskList').children.length, 1, 'an earlier round opened through its continue_from joins the same card');
+assert.deepEqual(byId('roundTabs').children.map(t => t.textContent), ['第 1 轮 · 改后通过', '第 2 轮 · 待验收']);
+''', hash_value="token=t&chat=c1&ns=default", **rows)
+
+    def test_update_and_interrupt_rows_show_their_text_and_origin(self):
+        said = "Codex sent an update"
+        stop = "Codex asked Claude to stop the current step"
+        events = [{"seq": 1, "received_at": 1, "kind": "update", "summary": said, "status": "coordinator", "text": "另外 CSV 也要导出"},
+                  {"seq": 2, "received_at": 2, "kind": "update", "summary": said, "status": "human", "text": "先别动公开接口"},
+                  {"seq": 3, "received_at": 3, "kind": "interrupt", "summary": stop, "status": "coordinator", "text": "停下，改用队列实现"},
+                  {"seq": 4, "received_at": 4, "kind": "interrupt", "summary": stop, "status": "human"},
+                  {"seq": 5, "received_at": 5, "kind": "answer", "summary": "Codex answered Claude", "status": "coordinator"},
+                  {"seq": 6, "received_at": 6, "kind": "update", "summary": said}]
+        self.run_node(r'''
+run(`S.events = ${JSON.stringify(EVENTS_IN)}`);
+const rows = run('eventsView()').children.map(r => r.children[2]);
+assert.deepEqual(rows.map(r => r.textContent), ['Codex 补充 · Codex 协调者另外 CSV 也要导出', 'Codex 补充 · 用户原话先别动公开接口',
+  '请求打断 · Codex 协调者停下，改用队列实现', '请求打断 · 用户原话', 'Codex 回答 · Codex 协调者', 'Codex 补充']);
+assert.deepEqual(rows.map(r => all(r, n => n.className === 'muted verbatim').map(n => n.textContent)),
+  [['另外 CSV 也要导出'], ['先别动公开接口'], ['停下，改用队列实现'], [], [], []]);
+''', EVENTS_IN=events)
+
+    def test_a_dead_link_keeps_retrying_and_says_to_get_a_new_link_in_codex(self):
+        self.assertNotIn("window.open", PAGE.read_text(encoding="utf-8"))
+        self.run_node(r'''
+pending.shift().reject(new TypeError('Failed to fetch'));
+await tick(); await tick();
+const banner = byId('banner');
+assert.match(banner.textContent, /^暂时连不上，正在重试：连不上本机工作台。.*Codex 重启过.*这个链接已失效.*在 Codex 里.*取新链接$/);
+assert.equal(byId('conn').textContent, '已断开');
+assert.equal(timers.at(-1).ms, 5000, 'a short outage is still retried');
+timers.at(-1).f();
+await respond('/api/runs', 200, RUNS);
+assert.equal(banner.hidden, true);
+''')
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -15,6 +15,33 @@ import process_family as family  # noqa: E402
 
 
 class ProcessFamilyTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform in {"darwin", "linux"} or sys.platform.startswith("linux"), "process table access")
+    def test_markerless_detached_descendants_of_a_live_root_are_adopted_and_stopped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ready = Path(tmp) / "pid"
+            # The root starts a grandchild with an empty environment in its own session, as the CLI does for Bash.
+            code = ("import os, subprocess, sys, time\n"
+                    "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], env={},"
+                    " start_new_session=True)\n"
+                    f"open({str(ready)!r}, 'w').write(str(child.pid))\n"
+                    "time.sleep(60)\n")
+            supervised = family.Family()
+            root = subprocess.Popen([sys.executable, "-c", code], env={"PATH": os.environ.get("PATH", "")})
+            self.addCleanup(root.kill)
+            supervised.adopt_descendants_of(root.pid)
+            deadline = time.monotonic() + 10
+            while not ready.exists() and time.monotonic() < deadline:
+                time.sleep(.05)
+            grandchild = int(ready.read_text())
+            unrelated = family.Family()
+            self.assertNotIn(grandchild, unrelated.observe()["remaining_pids"])
+            self.assertIn(grandchild, supervised.observe()["remaining_pids"])
+            root.kill()
+            root.wait()
+            self.assertIn(grandchild, supervised.observe()["remaining_pids"], "an adopted process stays tracked after its root ends")
+            self.assertEqual(supervised.finish()["state"], "stopped")
+            self.assertIsNone(family._identity(grandchild))
+
     def new_family(self):
         with patch.object(family, "_pids", return_value=[]):
             return family.Family("fixture-unique-marker")

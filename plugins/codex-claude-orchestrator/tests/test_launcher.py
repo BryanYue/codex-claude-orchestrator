@@ -36,7 +36,7 @@ class LauncherTests(unittest.TestCase):
 shift
 case "$1" in
   --version) echo 9.9.999 ;;
-  --help) echo '-p --model --effort --output-format --verbose --json-schema --session-id --resume --permission-mode --tools --allowedTools --disallowedTools --settings --strict-mcp-config --mcp-config --disable-slash-commands --no-session-persistence' ;;
+  --help) echo '-p --model --effort --input-format --output-format --verbose --replay-user-messages --json-schema --session-id --resume --permission-mode --tools --allowedTools --disallowedTools --settings --strict-mcp-config --mcp-config --disable-slash-commands --no-session-persistence' ;;
   auth) echo '{"loggedIn":true}' ;;
   *) echo "nvm-node-ok $1" ;;
 esac

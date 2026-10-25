@@ -1,4 +1,4 @@
-"""Validate and normalize the 1.0 task packet Codex sends to claude_start.
+"""Validate and normalize the 1.1 task packet Codex sends to claude_start.
 
 The packet carries the user's words verbatim, the frozen inputs, and the
 coordinator's additions labelled by origin.  Validation checks types, paths and
@@ -23,7 +23,11 @@ MAX_MESSAGES = 50
 MAX_TEXT = 200_000
 FIELDS = frozenset({"task_id", "kind", "cwd", "user_messages", "no_user_words_reason", "inputs", "brief",
                     "constraints", "done_when", "focus", "write_hint", "protected", "verify", "profile", "web",
-                    "model", "effort", "timeout_seconds", "max_budget_usd", "continue_from"})
+                    "model", "effort", "timeout_seconds", "max_budget_usd", "continue_from",
+                    "title", "round_title", "context", "interactive"})
+TITLE_LIMIT = 60
+ROUND_TITLE_LIMIT = 80
+CONTEXT_KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 RENAMED = {"role": "kind", "objective": "brief", "user_request": "user_messages", "requirement_sources": "inputs",
            "acceptance": "done_when", "owned_files": "write_hint", "protected_files": "protected",
            "review_mode": "profile", "review_scope": "focus", "budget": "max_budget_usd", "revision": None,
@@ -93,6 +97,32 @@ def _messages(value: Any) -> list[dict[str, str]]:
             message["at"] = _text(item["at"], f"user_messages[{index}].at", limit=100)
         messages.append(message)
     return messages
+
+
+def display_line(value: Any, label: str, limit: int) -> str | None:
+    """Titles are display metadata: one line, bounded, never a routing key."""
+    if value is None:
+        return None
+    text = " ".join(_text(value, label, limit=2000).split())
+    if not text:
+        return None
+    return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
+
+
+def _context(value: Any) -> dict[str, str] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) - {"chat", "namespace"} or "chat" not in value:
+        raise PacketError("context must be {chat, namespace?}: a stable key Codex keeps for this conversation")
+    context = {}
+    for key in ("namespace", "chat"):
+        if value.get(key) is None:
+            continue
+        item = value[key]
+        if not isinstance(item, str) or not CONTEXT_KEY.fullmatch(item):
+            raise PacketError(f"context.{key} must be 1-128 characters of letters, digits and . _ : -")
+        context[key] = item
+    return context
 
 
 def _globs(value: Any, label: str) -> list[str]:
@@ -189,6 +219,9 @@ def normalize(raw: Any) -> dict[str, Any]:
     if continue_from is not None and (not isinstance(continue_from, str) or not RUN_ID.fullmatch(continue_from)):
         raise PacketError("continue_from must be a run_id")
     brief = raw.get("brief")
+    interactive = raw.get("interactive", True)
+    if not isinstance(interactive, bool):
+        raise PacketError("interactive must be a boolean")
     return {
         "task_id": task_id, "kind": kind, "cwd": str(cwd),
         "user_messages": messages, "no_user_words_reason": reason if not messages else None,
@@ -200,6 +233,9 @@ def normalize(raw: Any) -> dict[str, Any]:
         "protected": _globs(raw.get("protected"), "protected"), "verify": _strings(raw.get("verify"), "verify"),
         "profile": profile, "web": web, "model": model, "effort": effort, "timeout_seconds": float(timeout),
         "max_budget_usd": float(budget) if budget is not None else None, "continue_from": continue_from,
+        "title": display_line(raw.get("title"), "title", TITLE_LIMIT),
+        "round_title": display_line(raw.get("round_title"), "round_title", ROUND_TITLE_LIMIT),
+        "context": _context(raw.get("context")), "interactive": interactive,
     }
 
 

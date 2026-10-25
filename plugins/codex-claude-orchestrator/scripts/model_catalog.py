@@ -12,10 +12,15 @@ from pathlib import Path
 import signal
 import selectors
 import subprocess
+import sys
 import time
 import uuid
 
 from executable_locator import cli_environment, locate_claude
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "skills/codex-claude-orchestrator/scripts"))
+from process_control import group_absent  # noqa: E402
 
 
 def _exchange(proc: subprocess.Popen, request: dict, timeout: float) -> bytes:
@@ -65,6 +70,15 @@ def _stop(proc: subprocess.Popen) -> str:
                     return "confirmed"
                 time.sleep(.02)
     except OSError:
+        # The group can disappear between probe and signal; on Darwin an exited
+        # unreaped leader can also make killpg report EPERM. Reap and check the
+        # complete group rather than treating either race as a live process.
+        try:
+            proc.wait(timeout=.2)
+        except subprocess.TimeoutExpired:
+            return "unconfirmed"
+        if type(proc.poll()) is int and group_absent(proc.pid):
+            return "confirmed"
         return "unconfirmed"
     return "unconfirmed"
 

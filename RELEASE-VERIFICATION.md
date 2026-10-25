@@ -1,5 +1,126 @@
 # Release verification
 
+## 1.1.0
+
+Full plugin version: `1.1.0+codex.20261025234436`. Release date: **2026-10-26**.
+Fixed release ref: `v1.1.0`.
+[Release and artifacts](https://github.com/BryanYue/codex-claude-orchestrator/releases/tag/v1.1.0).
+The archive manifest identifies its exact source commit. This source checkpoint
+records completed code acceptance; the main-branch record adds subsequent build
+and download verification without moving the tag.
+
+1.1.0 adds mid-run two-way communication: blocking questions, an execution-side
+hold, nonblocking notes, answers, updates and interrupts with durable receipts.
+It reserves one automatic workbench-opening request per Codex conversation,
+provides separate task and round titles, and keeps native tools with `auto`
+permissions. The MCP surface has 12 tools. Python and the local Claude CLI remain
+the runtime; this release introduces no Agent SDK or billing migration.
+
+### Independent host checks (2026-10-26)
+
+- **80 plugin tests**, **193 Bridge tests** and **28 distribution tests** passed
+  without skips on the macOS host. The Bridge log includes deliberate exception
+  fixtures; these test error recovery and passed. Ruff and strict Mypy for
+  **14 modules** passed.
+- These suites include pending-question coordination, concurrent replies and
+  decisions, partial writes, reconnects, carry between rounds, launch failures,
+  cancellation, deadlines, family holds and continuation. Checks run inside a
+  delegated copy whose sandbox refused another `sandbox-exec` are retained as
+  environment-limited results, not counted as host passes.
+- Three independent Codex reviews covered coordination state, CLI lifecycle and
+  the workbench/protocol. Their final targeted checks included four host state
+  cases, 18 lifecycle counterexamples and normal controls, eight runtime UI cases,
+  14 real-HTML Chrome checks and nine opening-policy checks across three separate
+  MCP processes. Review inputs were frozen and hashes checked before and after.
+- Codex additionally corrected two gaps in the final delegated patch: a successful
+  result followed by a nonzero CLI exit now ends `crashed`; recovered message text
+  retains indentation and leading/trailing newlines. Both regressions failed on
+  the preceding code and passed after correction.
+- The focused Workflow then found two remaining details: messages carried after a
+  hold lacked activity text, and whitespace-only interrupts differed between live
+  and resumed delivery. Codex fixed both and preserved nonempty redirect text in
+  the live path too. **53 duplex tests** passed on the final three-file correction;
+  a separate Codex reviewer ran the same seven targeted cases against both versions:
+  the old version failed exactly three, and the corrected version passed all seven.
+  The latest-round `applied=true` rule for a `not_started` round retaining earlier
+  changes is now explicitly documented; the state rule itself is unchanged.
+
+### Actual MCP and Claude CLI checks
+
+The candidate was exercised through the real stdio MCP endpoint with Claude CLI
+**2.1.310**, requested model **claude-haiku-5-5**, native default tools and `auto`
+permissions. Fresh MCP clients disconnected and reconnected to an isolated state
+root; copy runs used the real macOS write boundary.
+
+| Scenario | Independently checked result |
+| --- | --- |
+| Question plus update | Codex's answer and extra instruction were echoed; the actual files contained `BRAVO` and `update-seen`; source stayed unchanged |
+| Question with a background command | Three child processes were held; the existing heartbeat did not advance while waiting; answering resumed the run and produced the requested file |
+| Interrupt with a redirect | The actual redirected file was produced and the run ended normally |
+| Cancel while held | The pending question became abandoned and all owned processes were confirmed stopped |
+| Readonly analysis | The real MCP/CLI run returned the requested result with native tools/auto, wrote no source changes and confirmed process termination |
+
+All four copy scenarios matched their expected outcomes and confirmed process
+termination. Artifact pages were read to EOF and checked against their SHA-256
+metadata. Receipt state is reported separately from actual file contents.
+
+A further bounded real-CLI continuation check forced `stop_for_answer` exactly
+once after an actual `AskUserQuestion`. The first process stopped; the actual CLI
+resumed the same session, received the complete answer and whitespace-preserving
+update, wrote both expected files and exited normally with no pending question.
+Both receipts reached `echoed`. This check used the real CLI, supervisor and store
+without an OS wrapper or MCP frontend; the trigger was a test injection, not an
+observed natural CLI failure. It was attempted once and passed.
+
+Earlier in-process real-CLI probes also observed native `stop_task`, background
+agent/Workflow task events and `session_state_changed`. A session with a background
+agent stayed active until that agent and its subsequent turns ended. These probes
+exercise provider protocol behavior; they are separate from the host copy checks.
+
+### Native Workflow review
+
+Claude's shipped `codex-analyze` Workflow completed its full review with seven
+agents: three reviews, three independent verifications and one final synthesis.
+The actual tool invocation, task ID, shipped workflow file hash and terminal output
+were verified; all seven completed with no dropped or failed agents. Codex read the
+formal artifacts and adjudicated every item. Fourteen concrete coordination and
+workbench findings were fixed. A focused native Workflow verification of those
+repairs then completed with five agents: two reviews, two independent
+verifications and one synthesis, with no dropped or failed agents. Its R4b snapshot
+found the final whitespace and activity details described above. After Codex
+corrected those three files, the Claude parent session independently reproduced
+the old failures, checked the exact final patch and ran all 53 duplex tests.
+The full Workflow was not restarted for that bounded correction.
+
+### Scope of acceptance
+
+The three-process MCP checks verify durable per-chat opening reservations,
+context isolation, reconnect behavior and distinct task lineages. Real HTML was
+checked in headless Chrome. These are not a claim that the desktop host displayed
+exactly one physical tab in two simultaneously running Codex windows. The plugin
+requests one automatic opening; if the host queues it, that request remains
+consumed. Explicit reopening is available.
+
+The two existing Codex installations and already-open chats were not restarted or
+replaced during candidate acceptance. Publishing the release does not reload an
+existing MCP connection. Installation and visible in-app behavior after upgrading
+remain a separate acceptance stage.
+
+The final review retained several nonblocking observations. Redelivery after an
+unacknowledged write can leave two activity rows with the same caption, one for
+each actual transmission. Live redirect text is labelled as a supplement while
+its native control frame performs the interruption. An internal diagnostic label
+for a failed nested resume can imply that the first launch failed; that case was
+checked only with mocked supervisor facts, and the external outcome and note were
+correct. A missing lineage field falls back to the run itself as the chain root.
+
+### Distribution checkpoint
+
+The reviewed release source is ready for the fixed-commit build. Reproducible
+builds, publication and downloaded-asset verification are performed next; their
+actual results are added to this record on the main branch. They are not counted
+as completed checks in this source checkpoint.
+
 ## 1.0.1
 
 Full plugin version: `1.0.1+codex.20261015112934`. Fixed release ref: `v1.0.1`.

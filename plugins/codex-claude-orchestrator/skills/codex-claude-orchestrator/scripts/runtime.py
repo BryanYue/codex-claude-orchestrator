@@ -23,7 +23,9 @@ from typing import Any, Callable
 
 import bridge
 import cli_env
+import control_store as control
 import copy_workspace
+import duplex
 from events import append, latest, latest_meaningful, read, statistics
 import packet as packet_schema
 import process_control
@@ -34,6 +36,9 @@ import stream_parser
 import trusted_git
 
 VERDICTS = ("accepted", "accepted_with_corrections", "rejected")
+# Hidden from compact waits: they change often and carry no decision for Codex.
+QUIET_KINDS = frozenset({"provider", "tool", "workflow_agent"})
+NAMESPACE_ENV = "CODEX_CLAUDE_NAMESPACE"
 NEXT_STEPS = ("done", "next_round", "codex_finishes")
 STOPPED_STATES = {"confirmed", "not_launched", "stopped"}
 
@@ -45,10 +50,31 @@ def _read_json(path: Path) -> Any:
         return None
 
 
-def _title(packet: dict[str, Any]) -> str:
-    text = packet["user_messages"][0]["text"] if packet["user_messages"] else (packet["brief"] or packet["task_id"])
-    line = next((part.strip() for part in str(text).splitlines() if part.strip()), str(packet["task_id"]))
-    return line[:120]
+def resolve_context(raw: dict[str, str] | None) -> dict[str, str] | None:
+    """The owning Codex chat: launcher namespace first, then the packet's; no chat means no binding."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict) or set(raw) - {"chat", "namespace"}:
+        raise ValueError("context must be {chat, namespace?}")
+    if not raw.get("chat"):
+        return None
+    if not isinstance(raw["chat"], str) or not control.CHAT.fullmatch(raw["chat"]):
+        raise ValueError("context.chat must be 1-128 characters of letters, digits and . _ : -")
+    namespace = os.environ.get(NAMESPACE_ENV) or raw.get("namespace") or "default"
+    if not isinstance(namespace, str) or not control.NAMESPACE.fullmatch(namespace):
+        raise ValueError("the namespace must be 1-128 characters of letters, digits and . _ : -")
+    if raw.get("namespace") and raw["namespace"] != namespace:
+        raise ValueError("context.namespace differs from this plugin connection's namespace")
+    return {"namespace": namespace, "chat": raw["chat"]}
+
+
+def _title(packet: dict[str, Any], prior: dict[str, Any] | None) -> tuple[str, str]:
+    """Explicit title, then the lineage's title, then task_id; a 1.0 first-line title is not inherited."""
+    if packet.get("title"):
+        return packet["title"], "explicit"
+    if prior and prior.get("title_source") in {"explicit", "lineage"} and prior.get("title"):
+        return str(prior["title"]), "lineage"
+    return packet_schema.display_line(packet["task_id"], "task_id", packet_schema.TITLE_LIMIT) or packet["task_id"], "task_id"
 
 
 class Runtime:
@@ -63,6 +89,7 @@ class Runtime:
         self.lock_path = self.root / "registry.lock"
         self._guard = threading.RLock()
         self._workers: dict[str, subprocess.Popen[bytes]] = {}
+        self.store = bridge.control_store(self.state_root)
         for run_id, record in self._registry()["runs"].items():
             if record.get("status") == "running":
                 try:
@@ -99,17 +126,17 @@ class Runtime:
         cwd = Path(packet["cwd"])
         probe = trusted_git.run(cwd, "rev-parse", "--is-inside-work-tree", text=True)
         is_git = probe.returncode == 0 and probe.stdout.strip() == "true"
-        sandbox = cli_env.sandbox_available()
         if packet["kind"] == "implement" and not is_git:
             raise ValueError("implement tasks need a Git repository: they run in an independent copy and return a patch")
-        if packet["kind"] == "implement" and not sandbox:
-            raise ValueError("implement tasks need macOS sandbox-exec on this host: they only run in a protected copy")
-        profile = packet["profile"] or ("copy" if is_git and sandbox else "readonly")
+        profile = packet["profile"] or ("copy" if is_git else "readonly")
         if profile == "copy" and not is_git:
             raise ValueError("the copy profile needs a Git worktree; use profile=readonly for a plain directory")
-        if profile == "copy" and not sandbox:
-            raise ValueError("the copy profile needs macOS sandbox-exec on this host"
-                             + ("" if packet["kind"] == "implement" else "; use profile=readonly"))
+        boundary = cli_env.sandbox_works()
+        if not boundary["works"]:
+            # Native tools stay available in every profile, so without a working OS write boundary nothing would
+            # protect the original; refuse instead of relying on instructions.
+            raise ValueError(f"the {profile} profile needs a working macOS sandbox-exec write boundary on this host "
+                             f"({boundary['reason']}); this host cannot run protected Claude tasks")
         return profile
 
     def start(self, raw: Any) -> dict[str, Any]:
@@ -118,27 +145,29 @@ class Runtime:
         except packet_schema.PacketError as exc:
             raise ValueError(str(exc)) from exc
         profile = self._profile(packet)
+        context = resolve_context(packet.get("context"))
+        owner = self._owner_key(context)
         run_id = "run-" + secrets.token_urlsafe(12).replace("-", "_")
         run_dir = self.run_dir(run_id)
         with self._guard:
-            plan = self._admit(packet, profile, run_id, run_dir)
+            if packet["continue_from"]:
+                self.store.check_context(packet["continue_from"], context or {"namespace": None, "chat": None})
+            # Early validation only; the plan that is used is recomputed under the registry lock below.
+            self._admit(packet, profile, run_id, run_dir)
             run_dir.mkdir(mode=0o700)
             dump(run_dir / "packet.json", packet)
-            dump(run_dir / "plan.json", plan)
-            record = {"run_id": run_id, "task_id": packet["task_id"], "kind": packet["kind"], "profile": profile,
-                      "round": plan["round"], "cwd": packet["cwd"], "title": _title(packet), "model": packet["model"],
-                      "effort": packet["effort"], "timeout_seconds": packet["timeout_seconds"],
-                      "continue_from": packet["continue_from"], "lineage_root": plan["lineage_root"],
-                      "run_dir": str(run_dir), "status": "running", "started_at": time.time(),
-                      "updated_at": time.time(), "ended_at": None, "decision": None, "copy_removed": False}
 
             def register(data: dict[str, Any]) -> None:
-                # Decided under the registry lock, so cleanup() and another server see a consistent lineage.
+                # One registry-lock transaction decides the lineage, the carried delivery and the earlier decisions
+                # and publishes the run, so a concurrent decide(applied=...) or cleanup is either fully before or
+                # fully after this admission.  Task ids are local to a Codex chat.
                 active = [r["run_id"] for r in data["runs"].values()
-                          if r.get("task_id") == packet["task_id"] and r.get("status") == "running"]
+                          if r.get("task_id") == packet["task_id"] and r.get("status") == "running"
+                          and self._owner_key_of(r["run_id"]) == owner]
                 if active:
                     raise RuntimeError(f"task {packet['task_id']!r} already has an active run {active[0]}; "
                                        "wait for it or cancel it first")
+                plan = self._admit(packet, profile, run_id, run_dir, data["runs"])
                 if packet["continue_from"]:
                     lineage = [r for r in data["runs"].values() if r.get("lineage_root") == plan["lineage_root"]]
                     latest = max(lineage, key=lambda r: r.get("started_at") or 0)
@@ -147,10 +176,24 @@ class Runtime:
                                          f"{packet['continue_from']} was already continued")
                     if any(r.get("copy_removed") for r in lineage):
                         raise ValueError("the copy of that task lineage was removed; start a new run without continue_from")
-                data["runs"][run_id] = record
+                prior = data["runs"].get(packet["continue_from"]) if packet["continue_from"] else None
+                title, title_source = _title(packet, prior)
+                dump(run_dir / "plan.json", plan)
+                data["runs"][run_id] = {
+                    "run_id": run_id, "task_id": packet["task_id"], "kind": packet["kind"], "profile": profile,
+                    "round": plan["round"], "cwd": packet["cwd"], "title": title, "title_source": title_source,
+                    "round_title": packet.get("round_title"), "interactive": packet.get("interactive", True),
+                    "model": packet["model"], "effort": packet["effort"], "timeout_seconds": packet["timeout_seconds"],
+                    "continue_from": packet["continue_from"], "lineage_root": plan["lineage_root"],
+                    "run_dir": str(run_dir), "status": "running", "started_at": time.time(),
+                    "updated_at": time.time(), "ended_at": None, "decision": None, "copy_removed": False}
+            if context:
+                self.store.bind(context["namespace"], context["chat"], "packet")
+            self.store.register_run(run_id, packet["task_id"], context, "bridge-worker", packet.get("interactive", True))
             try:
                 self._update(register)
             except BaseException:
+                self.store.set_state(run_id, "ended")
                 shutil.rmtree(run_dir, ignore_errors=True)
                 raise
             log = (run_dir / "bridge.log").open("ab")
@@ -171,11 +214,21 @@ class Runtime:
             threading.Thread(target=self._watch, args=(run_id, proc), daemon=True).start()
         return self.snapshot(run_id)
 
-    def _admit(self, packet: dict[str, Any], profile: str, run_id: str, run_dir: Path) -> dict[str, Any]:
+    @staticmethod
+    def _owner_key(context: dict[str, str] | None) -> tuple[str | None, str | None]:
+        return (context or {}).get("namespace"), (context or {}).get("chat")
+
+    def _owner_key_of(self, run_id: str) -> tuple[str | None, str | None]:
+        row = self.store.run(run_id)
+        return (row["namespace"], row["chat"]) if row else (None, None)
+
+    def _admit(self, packet: dict[str, Any], profile: str, run_id: str, run_dir: Path,
+               runs: dict[str, Any] | None = None) -> dict[str, Any]:
+        """The run's plan from *runs* (the locked registry snapshot when admitting), or a fresh read to validate early."""
         plan: dict[str, Any] = {"run_id": run_id, "profile": profile, "round": 1, "lineage_root": str(run_dir),
                                 "state_root": str(self.state_root), "plugin_version": bridge.plugin_version(),
                                 "continued": None, "resume_session": None}
-        runs = self._registry()["runs"]
+        runs = self._registry()["runs"] if runs is None else runs
         if not packet["continue_from"]:
             return plan
         prior = runs.get(packet["continue_from"])
@@ -208,7 +261,9 @@ class Runtime:
                     continued={"run_id": prior["run_id"], "message_count": len(prior_packet.get("user_messages") or []),
                                "report": str(prior_dir / "report.md") if (prior_dir / "report.md").is_file() else None,
                                "decisions": decisions},
-                    resume_session=outcome.get("session_id") if outcome.get("run_outcome") != "not_started" else None)
+                    resume_session=outcome.get("session_id") if outcome.get("run_outcome") != "not_started"
+                    # A round that never started (a CLI capability failure, for one) passes on the session it was given.
+                    else (_read_json(prior_dir / "plan.json") or {}).get("resume_session"))
         return plan
 
     def _watch(self, run_id: str, proc: subprocess.Popen[bytes]) -> None:
@@ -265,14 +320,31 @@ class Runtime:
         self._update(settle)
 
     @staticmethod
+    def _recorded_family(run_dir: Path, child: dict[str, Any]) -> Family | None:
+        """The family the lost or ended supervisor recorded: its marker plus every identity it adopted."""
+        marker = child.get("family_marker")
+        if not isinstance(marker, str) or not marker:
+            return None
+        family = Family(marker=marker)
+        recorded = _read_json(run_dir / bridge.FAMILY_NAME)
+        if isinstance(recorded, dict) and recorded.get("marker") == marker:
+            family.restore(recorded.get("identities"))
+        return family
+
+    @staticmethod
     def _finalize_lost(run_dir: Path) -> dict[str, Any]:
         execution = _read_json(run_dir / "execution.json") or {}
         child = _read_json(run_dir / "child.json")
         stop = "not_launched"
         if isinstance(child, dict):
-            stop = process_control.terminate_recorded_group(child.get("identity"))
-            marker = child.get("family_marker")
-            if marker and Family(marker=marker).finish().get("state") != "stopped":
+            family = Runtime._recorded_family(run_dir, child)
+            root = child.get("identity")
+            if family is not None and isinstance(root, dict) and process_control.presence(root) == "running":
+                # Bash shells drop the marker and leave the CLI's group: adopt them while the root still links them.
+                family.adopt_descendants_of(root["pid"], root.get("birth"))
+                family.observe()
+            stop = process_control.terminate_recorded_group(root)
+            if family is not None and family.finish().get("state") != "stopped":
                 stop = "unknown"
         execution.update(lost_stop=stop, ended_at=time.time())
         dump(run_dir / "execution.json", execution)
@@ -286,10 +358,22 @@ class Runtime:
             return True
         if process_control.presence(child.get("identity")) == "running":
             return False
-        observed = Family(marker=child["family_marker"]).observe() if child.get("family_marker") else {"live_count": 0}
+        family = self._recorded_family(Path(record["run_dir"]), child)
+        observed = family.observe() if family is not None else {"live_count": 0}
         return observed.get("state") != "unknown" and not observed.get("live_count")
 
-    def snapshot(self, run_id: str) -> dict[str, Any]:
+    def authorize(self, run_id: str, context: dict[str, Any] | None) -> None:
+        """Codex-facing calls on a chat-owned run must name that chat; omitting it never reaches another chat's run."""
+        self._record(run_id)
+        owner = resolve_context(context)
+        row = self.store.run(run_id)
+        if row is not None and row["chat"] is not None and owner is None:
+            raise RuntimeError("this run belongs to a Codex chat; pass the same context={chat} that started it")
+        self.store.check_context(run_id, owner)
+
+    def snapshot(self, run_id: str, context: dict[str, str] | None = None) -> dict[str, Any]:
+        self._record(run_id)
+        self.store.check_context(run_id, resolve_context(context))
         if run_id not in self._workers:
             self._observe_unowned(run_id)
         record = dict(self._record(run_id))
@@ -309,43 +393,204 @@ class Runtime:
             record["live"] = stream_parser.live_identity(lines)
         history = _read_json(run_dir / "decision-history.json")
         record["decision_history_count"] = len(history) if isinstance(history, list) else 0
+        control_view = self.store.summary(run_id)
+        record.update(interactive=control_view["interactive"], revision=control_view["revision"],
+                      control_state=control_view["control_state"], context=control_view.get("context"),
+                      interactions=control_view["interactions"], pending_interactions=len(control_view["pending"]))
         return record
 
-    def list_runs(self, limit: int = 50, offset: int = 0, task_id: str | None = None) -> list[dict[str, Any]]:
-        runs = [dict(record) for record in self._registry()["runs"].values()
-                if task_id is None or record.get("task_id") == task_id]
+    def list_runs(self, limit: int = 50, offset: int = 0, task_id: str | None = None,
+                  context: dict[str, str] | None = None) -> list[dict[str, Any]]:
+        owners = self.store.overview()
+        owner = resolve_context(context)
+        records = [record for record in self._registry()["runs"].values()
+                   if task_id is None or record.get("task_id") == task_id]
+        if owner is not None:
+            records = self._chat_rounds(records, owners, self._owner_key(owner))
+        runs = [dict(record) for record in records]
         for record in runs:
             if record.get("status") == "running" and record["run_id"] not in self._workers:
                 self._observe_unowned(record["run_id"])
         current = self._registry()["runs"]
         ordered = sorted((dict(current.get(r["run_id"], r)) for r in runs), key=lambda r: r.get("started_at") or 0, reverse=True)
-        return ordered[offset:offset + limit]
+        page = ordered[offset:offset + limit]
+        for row in page:
+            found = owners.get(row["run_id"]) or {}
+            row["context"] = {"namespace": found["namespace"], "chat": found["chat"]} if found.get("chat") else None
+            row["pending_interactions"] = int(found.get("pending") or 0)
+            row["control_state"] = found.get("state")
+        return page
+
+    @staticmethod
+    def _owner_key_of_row(row: dict[str, Any] | None) -> tuple[str | None, str | None]:
+        return (row["namespace"], row["chat"]) if row else (None, None)
+
+    @staticmethod
+    def _lineage_of(record: dict[str, Any]) -> str:
+        return str(record.get("lineage_root") or record.get("run_dir") or "")
+
+    def _chat_rounds(self, records: list[dict[str, Any]], owners: dict[str, dict[str, Any]],
+                     key: tuple[str | None, str | None]) -> list[dict[str, Any]]:
+        """This chat's runs plus the chat-less earlier rounds of the lineages this chat continued.
+
+        Display only: a 1.0 round or a 1.1 round started without context gets no owner recorded or guessed, and a
+        chat-less lineage this chat never continued, even under the same task_id, stays out.
+        """
+        mine = [r for r in records if self._owner_key_of_row(owners.get(r["run_id"])) == key]
+        ids, lineages = {r["run_id"] for r in mine}, {self._lineage_of(r) for r in mine} - {""}
+        return mine + [r for r in records if r["run_id"] not in ids and self._lineage_of(r) in lineages
+                       and not (owners.get(r["run_id"]) or {}).get("chat")]
 
     def events(self, run_id: str, after: int = 0, limit: int = 100) -> dict[str, Any]:
         page, cursor, more = read(self.run_dir(run_id), after, limit)
         return {"events": page, "next_cursor": cursor, "has_more": more}
 
-    def wait(self, run_id: str, after: int = 0, timeout: float = 25) -> dict[str, Any]:
+    def wait(self, run_id: str, after: int = 0, timeout: float = 25, context: dict[str, str] | None = None) -> dict[str, Any]:
+        """Return on Claude's questions or notes, other visible activity, the run's end, or the timeout.
+
+        Provider and tool counters advance the cursor but never end the wait, so
+        hidden activity cannot cause empty immediate wakeups.
+        """
         if not 0 <= timeout <= 60:
             raise ValueError("timeout must be 0..60 seconds")
-        self._record(run_id)
+        self.authorize(run_id, context)
+        run_dir = self.run_dir(run_id)
         deadline = time.monotonic() + timeout
-        pause = .1
+        pause, cursor, more, reason = .1, after, False, "timeout"
+        collected: list[dict[str, Any]] = []
         while True:
-            if latest(self.run_dir(run_id)) > after:
+            if latest(run_dir) > cursor:
+                page, cursor, more = read(run_dir, cursor, 200)
+                collected = (collected + page)[-400:]
+                visible = [event for event in page if event.get("kind") not in QUIET_KINDS]
+                if any(event.get("kind") in {"question", "permission", "note", "dispute"} for event in visible):
+                    reason = "interaction"
+                    break
+                if visible:
+                    reason = "activity"
+                    break
+                if more:
+                    continue
+            if self.snapshot(run_id)["status"] != "running":
+                reason = "terminal"
+                if latest(run_dir) > cursor:
+                    continue
                 break
-            if self.snapshot(run_id)["status"] != "running" or time.monotonic() >= deadline:
+            if time.monotonic() >= deadline:
                 break
             time.sleep(min(pause, max(0.0, deadline - time.monotonic())))
             pause = min(.75, pause * 2)
-        answer = self.events(run_id, after, 100)
-        answer["snapshot"] = self.snapshot(run_id)
-        return answer
+        snapshot = self.snapshot(run_id)
+        return {"events": collected, "next_cursor": cursor, "has_more": more, "reason": reason,
+                "pending": [self._actionable(item) for item in snapshot["interactions"] if item["status"] == "pending"],
+                "snapshot": snapshot}
 
-    def cancel(self, run_id: str, reason: str) -> dict[str, Any]:
+    @staticmethod
+    def _actionable(item: dict[str, Any]) -> dict[str, Any]:
+        request = item.get("request") or {}
+        if item["kind"] == "permission":
+            request = {"tool_name": request.get("tool_name"), "summary": request.get("summary"), "input": request.get("input")}
+        return {"interaction_id": item["interaction_id"], "kind": item["kind"], "blocking": item["blocking"],
+                "request": request, "hold": item.get("hold"), "created_at": item["created_at"]}
+
+    def reply(self, run_id: str, command_id: str, kind: str, text: str | None = None, *, interaction_id: str | None = None,
+              decision: str | None = None, answers: dict[str, str] | None = None, origin: str = "coordinator",
+              expected_revision: int | None = None, context: dict[str, str] | None = None) -> dict[str, Any]:
+        """Queue an answer, update or interrupt with a durable receipt; the worker delivers it to the live session.
+
+        An identical earlier command returns its first receipt, also after the run ended, so a caller that lost
+        the acknowledgment can recover it; a new command needs a running run.
+        """
+        record = self._record(run_id)
+        self.authorize(run_id, context)
+        owner = resolve_context(context)
+        payload = self._reply_payload(kind, text, interaction_id, decision, answers)
+        if self.store.run(run_id) is None:
+            raise RuntimeError(f"the run already ended ({record.get('status')}); continue it with continue_from instead"
+                               if record.get("status") != "running" else
+                               "this run has no interactive channel (it was started before 1.1)")
+        try:
+            receipt = self.store.replay(run_id, command_id, kind, payload, origin, interaction_id, owner)
+            if receipt is None:
+                if record.get("status") != "running":
+                    raise RuntimeError(f"the run already ended ({record.get('status')}); continue it with continue_from instead")
+                receipt = self.store.submit(run_id, command_id, kind, payload, origin, interaction_id=interaction_id,
+                                            expected_revision=expected_revision, context=owner)
+        except control.StoreError as exc:
+            raise RuntimeError(str(exc)) from exc
+        snapshot = self.snapshot(run_id)
+        return {"receipt": receipt, "pending": [self._actionable(item) for item in snapshot["interactions"]
+                                                if item["status"] == "pending"],
+                "revision": snapshot["revision"], "control_state": snapshot["control_state"]}
+
+    def _reply_payload(self, kind: str, text: str | None, interaction_id: str | None, decision: str | None,
+                       answers: dict[str, str] | None) -> dict[str, Any]:
+        """Validate one reply into the canonical payload its receipt digest covers."""
+        values = [text] + (list(answers.values()) + list(answers) if isinstance(answers, dict) else [])
+        for value in values:
+            if value is None:
+                continue
+            if not isinstance(value, str) or len(value) > 50_000 or "\x00" in value:
+                raise ValueError("text and answers must be strings of at most 50000 characters")
+            try:
+                value.encode("utf-8")
+            except UnicodeEncodeError as exc:
+                raise ValueError("text contains an unpaired surrogate; send it as UTF-8") from exc
+        payload: dict[str, Any] = {"text": text or ""}
+        if kind != "answer":
+            if decision is not None or answers is not None:
+                raise ValueError("decision and answers belong to an answer")
+            if kind == "update" and not (text or "").strip():
+                raise ValueError("an update needs text")
+            return payload
+        target = self.store.interaction(interaction_id) if interaction_id else None
+        if target is None:
+            raise ValueError("an answer needs the interaction_id of a question or permission request of this run")
+        if target["kind"] == "permission":
+            if decision not in {"allow", "deny"}:
+                raise ValueError("a permission answer needs decision=allow or decision=deny")
+            if answers is not None:
+                raise ValueError("answers belong to a question, not a permission request")
+            payload["decision"] = decision
+            return payload
+        if decision is not None:
+            raise ValueError("decision belongs to a permission request")
+        asked = duplex.questions_of(target.get("request") or {})
+        if answers is not None:
+            if not isinstance(answers, dict):
+                raise ValueError("answers must map each question text to an answer string")
+            unknown = sorted(set(answers) - set(asked))
+            if unknown:
+                raise ValueError("answers names questions Claude did not ask: " + "; ".join(unknown[:5]))
+            payload["answers"] = answers
+        unanswered = [question for question in asked if not str((answers or {}).get(question) or "").strip()]
+        if unanswered and not (text or "").strip():
+            raise ValueError("every question needs an answer (in answers, or text for all of them): " + "; ".join(unanswered[:5]))
+        if not asked and not (text or "").strip():
+            raise ValueError("an answer needs text")
+        return payload
+
+    def workbench(self, context: dict[str, str] | None, *, reserve: bool, reopen: bool = False,
+                  outcome: str | None = None) -> dict[str, Any]:
+        """The chat's single automatic open request; without a stable chat the answer is always link-only."""
+        owner = resolve_context(context)
+        if owner is None:
+            return {"action": "link_only", "reason": "no stable Codex chat binding was supplied (context.chat)"}
+        if outcome is not None:
+            try:
+                recorded = self.store.record_opening(owner["namespace"], owner["chat"], outcome)
+            except control.StoreError as exc:
+                raise ValueError(str(exc)) from exc
+            return {"action": "link_only", "state": recorded["state"], "reason": f"recorded host outcome {outcome}"}
+        if not reserve and not reopen:
+            return {"action": "link_only", "reason": "only claude_start and claude_workbench request the page"}
+        return self.store.reserve_opening(owner["namespace"], owner["chat"], reopen=reopen)
+
+    def cancel(self, run_id: str, reason: str, context: dict[str, str] | None = None) -> dict[str, Any]:
         if not isinstance(reason, str) or not reason.strip():
             raise ValueError("a cancellation reason is required")
         record = self._record(run_id)
+        self.authorize(run_id, context)
         if record["status"] != "running":
             raise RuntimeError(f"run already ended ({record['status']})")
         run_dir = self.run_dir(run_id)
@@ -356,7 +601,9 @@ class Runtime:
 
     def decide(self, run_id: str, verdict: str, next_step: str, note: str, evidence: list[str],
                item_decisions: list[dict[str, Any]] | None = None,
-               protected_confirmed: list[str] | None = None, applied: bool | None = None) -> dict[str, Any]:
+               protected_confirmed: list[str] | None = None, applied: bool | None = None,
+               context: dict[str, str] | None = None) -> dict[str, Any]:
+        self.authorize(run_id, context)
         if verdict not in VERDICTS:
             raise ValueError("verdict must be accepted, accepted_with_corrections or rejected")
         if next_step not in NEXT_STEPS:
@@ -384,22 +631,32 @@ class Runtime:
         missing = sorted(set(touched) - set(confirmed))
         if missing:
             raise ValueError("protected paths changed by the patch must be confirmed in protected_confirmed: " + ", ".join(missing))
-        if applied is None:
-            # Omitted: a revised note or new evidence must not undo a merge recorded earlier.
-            applied = bool((record.get("decision") or {}).get("applied"))
-        elif not isinstance(applied, bool):
+        if applied is not None and not isinstance(applied, bool):
             raise ValueError("applied must be true or false")
-        elif applied:
-            self._check_delivery(record, changes)
-        value = {"verdict": verdict, "next": next_step, "note": note.strip(), "evidence": evidence,
-                 "item_decisions": decisions, "protected_confirmed": confirmed, "applied": applied,
-                 "recorded_at": time.time()}
-        history = _read_json(run_dir / "decision-history.json")
-        history = history if isinstance(history, list) else []
-        history.append(value)
-        dump(run_dir / "decision.json", value)
-        dump(run_dir / "decision-history.json", history)
-        self._update(lambda data: data["runs"][run_id].update(decision=value, updated_at=time.time()))
+        history_path = run_dir / "decision-history.json"
+
+        def commit(data: dict[str, Any]) -> dict[str, Any]:
+            # One registry-lock transaction: the latest decision, the history append and the published decision
+            # cannot interleave with another decide, cleanup or continuation choosing what to carry.
+            current = data["runs"][run_id]
+            if current.get("status") == "running":
+                raise RuntimeError("the run is still active; wait for it or cancel it before deciding")
+            recorded = bool((current.get("decision") or {}).get("applied"))
+            if applied:
+                self._check_delivery(current, changes, data["runs"])
+            value = {"verdict": verdict, "next": next_step, "note": note.strip(), "evidence": evidence,
+                     "item_decisions": decisions, "protected_confirmed": confirmed,
+                     # Omitted: a revised note or new evidence must not undo a merge recorded earlier.
+                     "applied": recorded if applied is None else applied, "recorded_at": time.time()}
+            history = _read_json(history_path)
+            history = history if isinstance(history, list) else []
+            history.append(value)
+            dump(history_path, history)
+            dump(run_dir / "decision.json", value)
+            current.update(decision=value, updated_at=time.time())
+            return value
+
+        self._update(commit)
         append(run_dir, "decision", f"Codex verdict: {verdict}; next: {next_step}", status=verdict)
         return self.snapshot(run_id)
 
@@ -432,11 +689,12 @@ class Runtime:
             carry = {"from_run": latest["run_id"], "patch": str(Path(latest["run_dir"]) / "delivery.patch")}
         return {"carry": carry, "task_paths": sorted(task_paths)}
 
-    def _check_delivery(self, record: dict[str, Any], changes: dict[str, Any]) -> None:
+    def _check_delivery(self, record: dict[str, Any], changes: dict[str, Any], runs: dict[str, Any] | None = None) -> None:
         """applied=true is recorded on the decision; only the newest delivery can have been applied."""
         if record.get("profile") != "copy" or not changes.get("end_tree"):
             raise ValueError("applied=true needs a copy-profile run that produced a delivery patch")
-        later = [r for r in self._registry()["runs"].values() if r.get("lineage_root") == record.get("lineage_root")
+        later = [r for r in (runs if runs is not None else self._registry()["runs"]).values()
+                 if r.get("lineage_root") == record.get("lineage_root")
                  and (r.get("started_at") or 0) > (record.get("started_at") or 0)]
         if any(r.get("status") == "running" or ((_read_json(Path(r["run_dir"]) / "outcome.json") or {}).get("changes"))
                for r in later):

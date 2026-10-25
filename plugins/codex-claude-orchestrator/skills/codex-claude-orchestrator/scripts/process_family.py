@@ -3,7 +3,10 @@
 This is supplementary process supervision, not OS containment. A descendant
 that deliberately removes its inherited marker before observation can evade it.
 Darwin signals have no atomic PID/birth binding; identity is rechecked immediately
-before each signal. Unrelated processes are never selected by ancestry alone.
+before each signal.  Ancestry is used only below a root whose recorded identity is
+still alive: the Claude CLI starts its Bash tool shells with a minimal environment
+(no marker) and outside its process group, so while the CLI lives its descendants
+are adopted by parent-PID tree; once adopted they stay tracked by identity.
 """
 from __future__ import annotations
 
@@ -82,6 +85,22 @@ def _identity(pid: int) -> Identity | None:
     raise InspectionError("platform_unsupported")
 
 
+def _parent(pid: int) -> int | None:
+    if sys.platform == "darwin":
+        info = _BsdInfo()
+        proc, _ = _darwin_libraries()
+        if proc.proc_pidinfo(pid, 3, 0, ctypes.byref(info), ctypes.sizeof(info)) != ctypes.sizeof(info):
+            return None
+        return int(info.ppid)
+    if sys.platform.startswith("linux"):
+        try:
+            raw = (Path("/proc") / str(pid) / "stat").read_text()
+            return int(raw[raw.rfind(")") + 2:].split()[1])
+        except (OSError, ValueError, IndexError):
+            return None
+    return None
+
+
 def _pids() -> list[int]:
     if sys.platform == "darwin":
         proc, _ = _darwin_libraries()
@@ -141,9 +160,22 @@ def _environment(pid: int) -> list[bytes]:
     raise InspectionError("platform_unsupported")
 
 
+def signal_identity(expected: Identity, sig: int) -> bool:
+    """Signal one recorded process only while its birth identity still matches."""
+    try:
+        current = _identity(expected.pid)
+        if current is None or current.birth != expected.birth or current.uid != expected.uid or current.zombie:
+            return False
+        os.kill(expected.pid, sig)
+        return True
+    except (InspectionError, ProcessLookupError, PermissionError):
+        return False
+
+
 class Family:
     """One run's inherited marker and identity-checked stopping evidence."""
     def __init__(self, marker: str | None = None):
+        self._root: Identity | None = None
         self._marker = secrets.token_hex(24) if marker is None else marker
         if not isinstance(self._marker, str) or not self._marker or "\0" in self._marker:
             raise ValueError("invalid process family marker")
@@ -168,6 +200,61 @@ class Family:
         except InspectionError as exc:
             self._initial_blockers.append(str(exc))
 
+    def adopt_descendants_of(self, pid: int, birth: Any = None) -> bool:
+        """Also track every live descendant of this (still running) root process from now on.
+
+        With *birth*, only a root whose current identity still has that recorded birth is adopted.
+        """
+        try:
+            root = _identity(pid)
+        except InspectionError:
+            root = None
+        if root is not None and birth is not None and list(root.birth) != list(birth):
+            root = None
+        self._root = root
+        return self._root is not None
+
+    def identities(self) -> list[dict[str, Any]]:
+        """Every identity adopted so far, so a later supervisor can still stop them after this one is gone."""
+        return [{"pid": item.pid, "birth": list(item.birth), "uid": item.uid}
+                for item in sorted(self._tracked.values(), key=lambda value: value.pid)]
+
+    def restore(self, recorded: Any) -> int:
+        """Track identities persisted by an earlier supervisor of this family; returns how many were valid."""
+        count = 0
+        for item in recorded if isinstance(recorded, list) else []:
+            if (isinstance(item, dict) and isinstance(item.get("pid"), int) and item["pid"] > 0
+                    and isinstance(item.get("uid"), int) and isinstance(item.get("birth"), list) and len(item["birth"]) == 2
+                    and all(isinstance(part, int) for part in item["birth"])):
+                identity = Identity(item["pid"], (item["birth"][0], item["birth"][1]), item["uid"])
+                self._tracked[identity.pid] = identity
+                count += 1
+        return count
+
+    def _descendants(self, pids: list[int]) -> set[int]:
+        root = self._root
+        if root is None:
+            return set()
+        try:
+            current = _identity(root.pid)
+        except InspectionError:
+            return set()
+        if current is None or current.birth != root.birth or current.zombie:
+            return set()
+        children: dict[int, list[int]] = {}
+        for pid in pids:
+            parent = _parent(pid)
+            if parent is not None and parent != pid:
+                children.setdefault(parent, []).append(pid)
+        found: set[int] = set()
+        stack = [root.pid]
+        while stack:
+            for child in children.get(stack.pop(), []):
+                if child not in found:
+                    found.add(child)
+                    stack.append(child)
+        return found
+
     def observe(self) -> dict[str, Any]:
         blockers = list(self._initial_blockers)
         inaccessible = 0
@@ -177,6 +264,7 @@ class Family:
         except InspectionError as exc:
             self._live = dict(self._tracked)
             return self._result("unknown", blockers + [str(exc)], inaccessible)
+        descendants = self._descendants(pids)
         for pid in pids:
             try:
                 identity = _identity(pid)
@@ -187,6 +275,11 @@ class Family:
                     live[pid] = identity
                     continue
                 if identity in self._baseline:
+                    continue
+                if pid in descendants:
+                    # Parent links were read while the identity-checked root was alive.
+                    self._tracked[pid] = identity
+                    live[pid] = identity
                     continue
                 if self._entry in _environment(pid):
                     # Reading environment and identity is not atomic: recheck
@@ -217,6 +310,10 @@ class Family:
             except (InspectionError, ProcessLookupError, PermissionError):
                 # observe() supplies the final evidence; failure never means stopped.
                 continue
+
+    def members(self) -> dict[int, Identity]:
+        """Live marker-visible members found by the latest observe()."""
+        return dict(self._live)
 
     def finish(self, grace_seconds: float = .5) -> dict[str, Any]:
         if isinstance(grace_seconds, bool) or not isinstance(grace_seconds, (float, int)) or not 0 <= grace_seconds <= 3:

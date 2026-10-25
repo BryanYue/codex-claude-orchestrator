@@ -11,15 +11,19 @@ open-source license has been selected.
 - Publisher: BryanYue.
 - Marketplace: `codex-claude-team`.
 - Plugin: `codex-claude-orchestrator` (display name: Codex–Claude 协作).
-- Release ref for this version: `v1.0.1`, build `1.0.1+codex.20261015112934`.
-  The [release page](https://github.com/BryanYue/codex-claude-orchestrator/releases/tag/v1.0.1)
+- Release ref for this version: `v1.1.0`, build `1.1.0+codex.20261025234436`.
+  The [release page](https://github.com/BryanYue/codex-claude-orchestrator/releases/tag/v1.1.0)
   provides the built ZIP, its checksum and both manifests. Source, installation
   and real Claude checks are recorded in
   [RELEASE-VERIFICATION.md](../RELEASE-VERIFICATION.md).
+- 1.1 can continue tasks started with 1.0.x; those earlier rounds have no
+  mid-run channel. After upgrading, the first 1.1 response in each Codex
+  conversation may open the Workbench once. See
+  [Upgrading from 1.0.x](install-and-recovery.md#upgrading-from-10x).
 - 1.0 is a rebuild and cannot continue tasks started by 0.7.x or earlier; read
   [Upgrading from 0.7.x](install-and-recovery.md#upgrading-from-07x) before
-  switching. Older tags, including `v0.7.1`, stay immutable, and refreshing an
-  older fixed ref never installs 1.0.
+  switching. Older tags, including `v1.0.1` and `v0.7.1`, stay immutable, and
+  refreshing an older fixed ref never installs a newer release.
 - The marketplace entry resolves `./plugins/codex-claude-orchestrator` relative
   to the fetched repository root. The Git market and the ZIP catalog share the
   same plugin identity; do not install renamed duplicates to switch sources.
@@ -34,7 +38,7 @@ usage allowance are still required for actual delegation.
 First confirm that Git can reach the repository and that the ref exists:
 
 ```bash
-git ls-remote https://github.com/BryanYue/codex-claude-orchestrator.git refs/tags/v1.0.1
+git ls-remote https://github.com/BryanYue/codex-claude-orchestrator.git refs/tags/v1.1.0
 ```
 
 An empty result means the tag is not available; do not substitute a moving
@@ -46,14 +50,14 @@ marketplace. An SSH URL still requires working SSH authentication;
 For a machine without an existing `codex-claude-team` marketplace:
 
 ```bash
-codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v1.0.1
+codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v1.1.0
 codex plugin add codex-claude-orchestrator@codex-claude-team
 codex plugin marketplace list --json
 codex plugin list --json
 ```
 
 Check `marketplaceSource.sourceType=git` and the Git URL, plus the installed
-and enabled plugin's full manifest version (`1.0.1+codex.20261015112934`). The
+and enabled plugin's full manifest version (`1.1.0+codex.20261025234436`). The
 CLI omits the pinned ref from these list outputs: compare
 `git -C /market/root rev-parse HEAD` with the commit the tag points to. A
 plugin entry may still say `source=local` because it points into the fetched
@@ -80,7 +84,9 @@ again.
 Record both inventories before changing this one marketplace. Keep the old Git
 URL and ref, or local catalog path, and the old enabled state for recovery.
 Confirm the target ref exists with `git ls-remote` first. When moving from
-0.7.x to 1.0, let running 0.7.x tasks finish first; 1.0 cannot see them.
+0.7.x to 1.0 or later, let running 0.7.x tasks finish first; 1.0 and later
+cannot see them. When moving from 1.0.x to 1.1, let tasks still running under
+1.0.x finish first; this guide does not cover switching while one is active.
 
 ```bash
 codex plugin marketplace remove codex-claude-team --json
@@ -102,9 +108,12 @@ version has its own environment) and open a new Codex task; an existing MCP
 process keeps the code it loaded.
 
 For rollback, use the same sequence with the previously verified ref, for
-example `v0.7.1`. For recovery to a prior ZIP catalog, add its recorded local
+example `v1.0.1`. For recovery to a prior ZIP catalog, add its recorded local
 path instead of a Git URL. Do not claim that an untested historical SHA is a
-verified rollback.
+verified rollback. Rolling back to 1.0.x does not copy the 1.1 control records
+(`v2/control.sqlite3`) into the old run registry, and 1.0.x does not read
+them; whether 1.0.x can read or continue runs started with 1.1 is not
+covered here, so decide those runs before rolling back.
 
 `codex plugin marketplace upgrade codex-claude-team --json` refreshes the
 configured snapshot. It does not advance a fixed ref to a different release.
@@ -117,7 +126,9 @@ Each run directory records the full plugin version that executed it
 (`plan.json`) and the local Claude CLI path and version it used
 (`context.json`).
 Run records live on this machine under `~/.codex/claude-orchestrator/v1/` and
-are not part of the distribution. A Git marketplace cache may contain plugin
+are not part of the distribution. Since 1.1, mid-run control records
+(conversation ownership, commands and receipts, questions and Workbench open
+requests) live beside them in `~/.codex/claude-orchestrator/v2/control.sqlite3`. A Git marketplace cache may contain plugin
 files without Git metadata, so compare the recorded version with the release
 verification record rather than looking for a commit in the cache.
 

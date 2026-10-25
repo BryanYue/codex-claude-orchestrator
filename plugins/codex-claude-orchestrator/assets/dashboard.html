@@ -12,90 +12,70 @@
 --active-fg:#8AB4FF;--active-bg:#1B2840;--active-bd:#34507F;--ok-fg:#7FD3A8;--ok-bg:#16302A;--ok-bd:#2F6B50;
 --warn-fg:#FFC870;--warn-bg:#3A2A10;--warn-bd:#8A6424;--bad-fg:#FFB0A6;--bad-bg:#3D1D1A;--bad-bd:#8C4A42;
 --plain-fg:#D5D7DB;--plain-bg:#2A2A2D;--plain-bd:#4A4A4F;--shadow:0 1px 2px rgba(0,0,0,.3);--scrim:rgba(0,0,0,.5)}}
-*{box-sizing:border-box}
-[hidden]{display:none!important}
+*{box-sizing:border-box}[hidden]{display:none!important}
 body{margin:0;background:var(--bg);color:var(--text);font:14px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
 button{font:inherit;color:inherit;cursor:pointer;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:3px 12px}
-button:hover{border-color:var(--plain-bd)}
-button:disabled{cursor:default;opacity:.55}
-:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
-h1,h2,h3,p{margin:0}
-code,pre,.mono{font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere}
-.muted{color:var(--muted);font-size:12px}
+button:hover{border-color:var(--plain-bd)}button:disabled{cursor:default;opacity:.55}:focus-visible{outline:2px solid var(--focus);outline-offset:2px}h1,h2,h3,p{margin:0}
+code,pre,.mono{font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere}.muted{color:var(--muted);font-size:12px}
 .topbar{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:12px;height:48px;padding:0 20px;border-bottom:1px solid var(--line);background:var(--bg2)}
 .brand{font-weight:600;font-size:15px;white-space:nowrap}.sub{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}.spacer{flex:1}
 .switch{display:none;align-items:center;gap:6px;font-weight:600;padding:3px 10px}.switch .count{font-size:12px;font-weight:500;color:var(--muted)}
-.pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);white-space:nowrap}
-.pill::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--plain-bd)}
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);white-space:nowrap}.pill::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--plain-bd)}
 .pill.ok::before{background:var(--ok-fg)}.pill.down::before{background:var(--warn-fg)}.pill.auth::before{background:var(--bad-fg)}
 .banner{padding:9px 20px;font-size:13px;background:var(--warn-bg);color:var(--warn-fg);border-bottom:1px solid var(--warn-bd)}
-.banner.auth{background:var(--bad-bg);color:var(--bad-fg);border-color:var(--bad-bd)}
-.layout{display:grid;grid-template-columns:300px minmax(0,1fr);min-height:calc(100vh - 48px)}
+.banner.auth{background:var(--bad-bg);color:var(--bad-fg);border-color:var(--bad-bd)}.layout{display:grid;grid-template-columns:300px minmax(0,1fr);min-height:calc(100vh - 48px)}
 .list{border-right:1px solid var(--line);padding:12px 10px;overflow:auto;height:calc(100vh - 48px);position:sticky;top:48px;background:var(--bg)}
 .list-head{display:flex;justify-content:space-between;align-items:baseline;margin:2px 6px 10px;font-weight:600;font-size:13px}
 .card{display:block;width:100%;text-align:left;padding:10px 12px;border-radius:10px;margin-bottom:4px;border-color:transparent;background:transparent}
-.card:hover{background:var(--panel);border-color:var(--line)}
-.card[aria-current=true]{background:var(--panel);border-color:var(--line);box-shadow:var(--shadow)}
-.card-title{font-weight:600;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
-.card-meta{margin:1px 0 6px}#moreRuns{width:100%;margin-top:4px}
+.card:hover{background:var(--panel);border-color:var(--line)}.card[aria-current=true]{background:var(--panel);border-color:var(--line);box-shadow:var(--shadow)}
+.card-title,.card-meta{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}.card-title{font-weight:600}
+.card-meta{margin:1px 0 6px}.card-proj{margin-left:8px}#moreRuns{width:100%;margin-top:4px}
 .badge{display:inline-block;font-size:12px;line-height:1.6;border-radius:6px;padding:0 8px;border:1px solid var(--plain-bd);background:var(--plain-bg);color:var(--plain-fg);white-space:nowrap}
-.t-active{color:var(--active-fg);background:var(--active-bg);border-color:var(--active-bd)}
-.t-ok{color:var(--ok-fg);background:var(--ok-bg);border-color:var(--ok-bd)}
+.t-active{color:var(--active-fg);background:var(--active-bg);border-color:var(--active-bd)}.t-ok{color:var(--ok-fg);background:var(--ok-bg);border-color:var(--ok-bd)}
 .t-warn{color:var(--warn-fg);background:var(--warn-bg);border-color:var(--warn-bd)}
 .t-bad{color:var(--bad-fg);background:var(--bad-bg);border-color:var(--bad-bd)}.t-wait{border-style:dashed}.scrim{display:none}
 .detail{padding:20px clamp(14px,4vw,40px) 64px;min-width:0}.inner{max-width:920px;margin:0 auto}
 .empty{max-width:420px;margin:72px auto;text-align:center;color:var(--muted)}.empty h1{font-size:18px;color:var(--text);margin-bottom:6px}
 .empty button{margin-top:14px;display:none}.rounds{display:flex;gap:6px;overflow-x:auto;margin:0 0 12px;padding:2px}
-.tab{white-space:nowrap;border-radius:999px;padding:2px 12px;font-size:13px}
+.tab{white-space:nowrap;border-radius:999px;padding:2px 12px;font-size:13px}.tab-sub{display:inline-block;max-width:14em;overflow:hidden;text-overflow:ellipsis;vertical-align:bottom}
 .tab[aria-selected=true]{background:var(--text);color:var(--bg);border-color:var(--text)}.tab-break{flex-basis:100%;height:0}
-.title{font-size:22px;line-height:1.35;font-weight:650;overflow-wrap:anywhere;margin:0 0 6px}
+.title{font-size:22px;line-height:1.35;font-weight:650;overflow-wrap:anywhere;margin:0 0 6px}.subtitle{font-size:15px;margin:-2px 0 6px;overflow-wrap:anywhere}
 .facts{display:flex;flex-wrap:wrap;font-size:12px;color:var(--muted)}.facts>span:not(:last-child)::after{content:"·";margin:0 7px;opacity:.6}
 .link{border:0;background:none;padding:0;color:var(--focus);font-size:inherit}
 .hero{display:flex;gap:12px;align-items:flex-start;margin:16px 0 12px;padding:14px 16px;border-radius:12px;background:var(--panel);border:1px solid var(--line);box-shadow:var(--shadow)}
 .hero .dot{flex:none;width:10px;height:10px;border-radius:50%;margin-top:8px;background:var(--plain-bd)}
-.hero.t-active .dot{background:var(--active-fg)}.hero.t-ok .dot{background:var(--ok-fg)}
-.hero.t-warn .dot{background:var(--warn-fg)}.hero.t-bad .dot{background:var(--bad-fg)}
+.hero.t-active .dot{background:var(--active-fg)}.hero.t-ok .dot{background:var(--ok-fg)}.hero.t-warn .dot{background:var(--warn-fg)}.hero.t-bad .dot{background:var(--bad-fg)}
 .hero.t-wait:not(.t-bad):not(.t-warn) .dot{background:none;border:2px dashed var(--muted)}.hero h2{font-size:17px;font-weight:600;line-height:1.45}
 .hero p{color:var(--muted);margin-top:2px}.hero.t-ok,.hero.t-warn,.hero.t-bad,.hero.t-active{color:var(--text);background:var(--panel)}
 .hero.t-ok{border-color:var(--ok-bd)}.hero.t-warn{border-color:var(--warn-bd)}.hero.t-bad{border-color:var(--bad-bd)}.hero.t-active{border-color:var(--active-bd)}
 .ask{margin:0 0 12px;padding:12px 16px;border-radius:12px;background:var(--active-bg);border:1px solid var(--active-bd)}
-.ask h2{font-size:15px;color:var(--active-fg)}.ask ul{margin:6px 0 4px;padding-left:20px}
+.ask h2{font-size:15px;color:var(--active-fg)}.ask ul{margin:6px 0 4px;padding-left:20px}.ask .q{margin-top:6px}.done{margin:0 0 12px}
+.ask.attn{--active-bg:var(--warn-bg);--active-bd:var(--warn-bd);--active-fg:var(--warn-fg)}
 .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:12px 0}#boxDecision{grid-column:1/-1}#boxDecision.lead{order:-1}
-.box{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px;min-width:0}
-.box h2{font-size:12px;font-weight:500;color:var(--muted);margin-bottom:2px}
-.box.t-ok,.box.t-warn,.box.t-bad,.box.t-active{color:var(--text);background:var(--panel)}
-.box.t-ok{border-top:3px solid var(--ok-fg)}.box.t-warn{border-top:3px solid var(--warn-fg)}
+.box{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px;min-width:0}.box h2{font-size:12px;font-weight:500;color:var(--muted);margin-bottom:2px}
+.box.t-ok,.box.t-warn,.box.t-bad,.box.t-active{color:var(--text);background:var(--panel)}.box.t-ok{border-top:3px solid var(--ok-fg)}.box.t-warn{border-top:3px solid var(--warn-fg)}
 .box.t-bad{border-top:3px solid var(--bad-fg)}.box.t-active{border-top:3px solid var(--active-fg)}.box.t-wait{border-style:dashed}
 .big{font-size:16px;font-weight:600;margin-bottom:2px}.kv{margin:4px 0 0}.kv dt{color:var(--muted);font-size:12px;margin-top:6px}
 .kv dd{margin:0;overflow-wrap:anywhere}.kv ul{margin:0;padding-left:18px}.block{margin:26px 0}.block>h2{font-size:15px;margin-bottom:8px}
 .warn{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--warn-fg);border-radius:10px;padding:9px 14px;margin-bottom:8px}
 .warn ul{margin:4px 0 0;padding-left:18px}details>summary{cursor:pointer;color:var(--muted);font-size:12px;width:max-content}.tech{margin-top:4px}
-.tech code{display:block;margin-top:2px}.verbatim{white-space:pre-wrap;overflow-wrap:anywhere}
-.files{background:var(--panel);border:1px solid var(--line);border-radius:10px;margin-top:6px}
+.tech code{display:block;margin-top:2px}.verbatim{white-space:pre-wrap;overflow-wrap:anywhere}.files{background:var(--panel);border:1px solid var(--line);border-radius:10px;margin-top:6px}
 .file{display:flex;flex-wrap:wrap;align-items:center;gap:2px 10px;padding:7px 12px;border-top:1px solid var(--line);font-size:13px}
-.file:first-child{border-top:0}.file code{flex:1 1 200px;min-width:0}.apply-box{margin-top:12px}
-.apply{display:flex;gap:8px;align-items:flex-start;margin-top:6px;flex-wrap:wrap}
-.apply code{flex:1 1 260px;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px 8px;user-select:all}
-.tabs{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 10px}
+.file:first-child{border-top:0}.file code{flex:1 1 200px;min-width:0}.apply-box{margin-top:12px}.apply{display:flex;gap:8px;align-items:flex-start;margin-top:6px;flex-wrap:wrap}
+.apply code{flex:1 1 260px;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px 8px;user-select:all}.tabs{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 10px}
 .art-meta{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 14px;font-size:12px;color:var(--muted)}.bad-text{color:var(--bad-fg)}
 .view{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;margin:8px 0;max-height:70vh;overflow:auto}
 .add{color:var(--ok-fg)}.del{color:var(--bad-fg)}.hunk{color:var(--muted)}.scroll{overflow-x:auto}
 table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);font-size:13px;margin:6px 0}
-th,td{text-align:left;padding:5px 10px;border-bottom:1px solid var(--line);overflow-wrap:anywhere;vertical-align:top}
-th{font-size:12px;color:var(--muted);font-weight:500}h3{font-size:13px;margin:12px 0 4px}
-.msg{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:9px 12px;margin:8px 0}
-.msg .verbatim{margin-top:4px;font-size:14px}
+th,td{text-align:left;padding:5px 10px;border-bottom:1px solid var(--line);overflow-wrap:anywhere;vertical-align:top}th{font-size:12px;color:var(--muted);font-weight:500}h3{font-size:13px;margin:12px 0 4px}
+.msg{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:9px 12px;margin:8px 0}.msg .verbatim{margin-top:4px;font-size:14px}
 .ev{display:grid;grid-template-columns:70px 56px minmax(0,1fr);gap:8px;padding:5px 0;border-bottom:1px solid var(--line);font-size:13px}
 .ids{margin-top:30px}.idrow{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;margin-top:6px;font-size:12px}
-@media(max-width:899px){
-.switch{display:inline-flex}.sub,#updated{display:none}.topbar{padding:0 14px}.layout{display:block}
+@media(max-width:899px){.switch{display:inline-flex}.sub,#updated{display:none}.topbar{padding:0 14px}.layout{display:block}
 .list{display:none;position:fixed;top:48px;left:0;right:0;height:auto;max-height:min(72vh,560px);z-index:25;border-right:0;border-bottom:1px solid var(--line);box-shadow:0 14px 32px rgba(0,0,0,.18)}
 .layout.open .list{display:block}.layout.open .scrim{display:block;position:fixed;inset:48px 0 0 0;z-index:20;background:var(--scrim)}
-.empty button{display:inline-block}.detail{padding-top:14px}.title{font-size:19px}
-.ev{grid-template-columns:62px minmax(0,1fr)}.ev .k{display:none}}
-@media(max-width:519px){.grid{grid-template-columns:minmax(0,1fr)}}
-@media(prefers-reduced-motion:no-preference){.pulse{animation:pulse 1.6s ease-in-out infinite}}
-@keyframes pulse{50%{opacity:.55}}
+.empty button{display:inline-block}.detail{padding-top:14px}.title{font-size:19px}.ev{grid-template-columns:62px minmax(0,1fr)}.ev .k{display:none}}
+@media(max-width:519px){.grid{grid-template-columns:minmax(0,1fr)}}@media(prefers-reduced-motion:no-preference){.pulse{animation:pulse 1.6s ease-in-out infinite}}@keyframes pulse{50%{opacity:.55}}
 </style></head><body>
 <header class="topbar">
   <button id="listToggle" class="switch" type="button" aria-controls="taskNav" aria-expanded="false">任务 <span id="listCount" class="count"></span></button>
@@ -105,7 +85,7 @@ th{font-size:12px;color:var(--muted);font-weight:500}h3{font-size:13px;margin:12
 <div id="banner" class="banner" role="status" hidden></div>
 <div id="layout" class="layout">
   <nav id="taskNav" class="list" aria-label="任务列表">
-    <div class="list-head"><span>全部任务</span><span id="listMeta" class="muted"></span></div>
+    <div class="list-head"><span id="listHead">全部任务</span><span id="listMeta" class="muted"></span></div>
     <div id="taskList"></div>
     <button id="moreRuns" type="button" hidden>加载更多</button>
   </nav>
@@ -115,7 +95,7 @@ th{font-size:12px;color:var(--muted);font-weight:500}h3{font-size:13px;margin:12
       <button id="emptyOpen" type="button">打开任务列表</button></div>
     <article id="runView" hidden>
       <div id="roundTabs" class="rounds" role="tablist" aria-label="轮次"></div>
-      <h1 id="runTitle" class="title"></h1>
+      <h1 id="runTitle" class="title"></h1><p id="runRound" class="subtitle" hidden></p>
       <div id="runFacts" class="facts"></div>
       <p id="runError" class="banner auth" hidden></p>
       <div id="runBody" hidden>
@@ -155,7 +135,11 @@ const L = {
   item: {accepted: '采纳', downgraded: '降级', rejected: '不采纳'},
   source: {human: '你说的', relayed: '别人转述'},
   ev: {preflight: '准备', executing: '开始', provider: '模型', workflow: '子流程', workflow_agent: '子代理', tool: '工具',
-    text: '回复', finished: '结束', decision: '验收', cancelling: '取消'},
+    text: '回复', finished: '结束', decision: '验收', cancelling: '取消', question: '提问', permission: '授权', note: '说明', dispute: '异议',
+    answer: '回答', update: '补充', interrupt: '打断', hold: '暂停', released: '恢复', resumed: '接续', turn: '回合'},
+  ix: {question: '提问', permission: '请求授权', note: '说明', dispute: '异议'}, perm: {allow: '允许', deny: '拒绝'}, by: {coordinator: 'Codex 回答', human: '你的回答'},
+  origin: {coordinator: 'Codex 协调者', human: '用户原话'},
+  ixs: {pending: '待处理', answered: '已回答', acknowledged: '已知悉', expired: '已过期', abandoned: '已放弃', cancelled: '已撤回'},
   warn: {
     original_changed_during_run: ['期间你的项目有改动', '合入前确认改动还能用上'], protected_touched: ['动了受保护的文件', '需要 Codex 逐个放行'],
     outside_hint: ['改了预期外的文件', '确认这些改动是否需要'], tool_denied: ['有操作被拦下', 'Claude 的部分操作没获准'],
@@ -167,9 +151,13 @@ const L = {
     disputes_present: ['Claude 有不同意见', '看看它反对的是哪条'], not_verified_present: ['有内容没验证', 'Claude 自己说这些没核实'],
     provider_error: ['模型服务出错', 'Claude 那边返回了错误'], patch_unavailable: ['没能整理出改动', '改动清单暂不可用'],
     carried_already_in_original: ['之前的改动已合入', '上一轮的改动已在项目里'], finalize_error: ['结果没汇总全', '请看下方详细资料'],
-    undelivered_files_now_ignored: ['有改动被忽略规则挡住', '这些文件现在被 Git 忽略']},
+    undelivered_files_now_ignored: ['有改动被忽略规则挡住', '这些文件现在被 Git 忽略'], background_commands_stopped: ['停掉了后台命令', 'Claude 结束时还有后台命令在跑'],
+    questions_unanswered: ['提问没等到回答', '结束时 Claude 还在等 Codex 回答'], turn_interrupted: ['中途有回合中断', '前面回合出错或被打断，以最后一回合为准'],
+    interactions_unavailable: ['问答记录没读到', '这一轮的提问和回答没能汇总']},
 };
-const ASK = 'questions_for_user', QUIET_EV = new Set(['preflight', 'executing', 'finished', 'decision', 'cancelling', 'tool']);
+const EV_KIND = {question: 'Claude 提问', permission: '请求授权', note: 'Claude 说明', dispute: 'Claude 异议', answer: 'Codex 回答',
+  update: 'Codex 补充', interrupt: '请求打断', hold: '暂停执行等回答', released: '恢复执行', resumed: '重新接上会话', turn: '一轮回复结束'};
+const ASK = 'questions_for_user', QUIET_EV = new Set(['preflight', 'executing', 'finished', 'decision', 'cancelling', 'tool', ...Object.keys(EV_KIND)]);
 const TOOL_TEXT = {Read: '读取', NotebookRead: '读取', Write: '写入', Edit: '修改', MultiEdit: '修改', NotebookEdit: '修改',
   Bash: '运行命令', Grep: '搜索', Glob: '查找文件', LS: '查看目录', Agent: '派子代理', Task: '派子代理', Skill: '使用技能',
   WebFetch: '打开网页', WebSearch: '联网搜索', TodoWrite: '更新待办', Workflow: '启动子流程'};
@@ -181,7 +169,7 @@ const MORE_ARTS = [['brief', '任务书'], ['packet', '你的原话'], ['inputs'
   ['result', '结果数据'], ['final_message', '最后回复'], ['delivery_patch', '累计改动']];
 const JSON_ARTS = new Set(['result', 'packet', 'inputs', 'instruction_layer']);
 
-const hashParams = new URLSearchParams(location.hash.slice(1));
+const hashParams = new URLSearchParams(location.hash.slice(1)), CHAT = hashParams.get('chat') || '', NS = hashParams.get('ns') || '';
 const S = {
   token: hashParams.get('token') || '', sel: hashParams.get('run') || '', runs: new Map(), pageEnd: 0, hasMore: false,
   listLoaded: false, listSeq: 0, listApplied: 0, listSig: '', snap: null, runSig: '', tabSig: '', heroSig: '', runError: '', gen: 0,
@@ -191,6 +179,9 @@ const S = {
 
 const $ = id => document.getElementById(id);
 const enc = encodeURIComponent;
+const scopeOf = (chatKey, nsKey) => (CHAT ? `&${chatKey}=${enc(CHAT)}` + (NS ? `&${nsKey}=${enc(NS)}` : '') : '');
+const taskKey = r => String(r.lineage_root || r.run_dir || '') || (r.context && r.context.chat ? `${r.context.namespace || ''}/${r.context.chat}/` : '') + String(r.task_id ?? r.run_id);
+const project = r => String((r && r.cwd) || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop();
 
 function el(tag, cls, ...kids) {
   const node = document.createElement(tag);
@@ -251,6 +242,7 @@ function evText(e) {
     const verb = Object.hasOwn(TOOL_TEXT, e.tool || '') ? TOOL_TEXT[e.tool] : '使用 ' + (e.tool || e.summary || '工具');
     return verb + (e.file ? ' ' + e.file : '') + (e.text ? '：' + e.text : '');
   }
+  if (e && Object.hasOwn(EV_KIND, e.kind || '')) return EV_KIND[e.kind];
   const s = String((e && e.summary) || '');
   if (Object.hasOwn(EV_TEXT, s)) return EV_TEXT[s];
   let m = /^run ended: (\S+)$/.exec(s);
@@ -276,7 +268,7 @@ function verdictTone(decision) {
   return {accepted: 't-ok', accepted_with_corrections: 't-warn', rejected: 't-bad'}[decision.verdict] || '';
 }
 function stateBadge(r) {
-  if (r.status === 'running') return badge('进行中', 't-active pulse');
+  if (r.status === 'running') return r.pending_interactions > 0 ? badge('等回答', 't-warn') : badge('进行中', 't-active pulse');
   if (r.decision && r.decision.verdict) return badge(verdictText(r.decision), verdictTone(r.decision));
   if (r.status === 'ok') return badge('待验收', 't-wait');
   return badge(statusText(r) + ' · 待验收', (statusTone(r.status) || 't-warn') + ' t-wait');
@@ -286,29 +278,27 @@ function groupTasks(runs) {
   const byTask = new Map();
   for (const r of runs) {
     if (!r || !r.run_id) continue;
-    const key = String(r.task_id ?? r.run_id);
+    const key = taskKey(r);
     if (!byTask.has(key)) byTask.set(key, []);
     byTask.get(key).push(r);
   }
-  const groups = [...byTask].map(([taskId, rows]) => {
+  const groups = [...byTask].map(([key, rows]) => {
     rows.sort((a, b) => (a.round || 0) - (b.round || 0) || (a.started_at || 0) - (b.started_at || 0));
     const latest = rows.reduce((best, r) => ((r.started_at || 0) >= (best.started_at || 0) ? r : best));
     const activity = Math.max(...rows.map(r => Math.max(r.started_at || 0, r.updated_at || 0, r.ended_at || 0,
       (r.decision && r.decision.recorded_at) || 0)));
-    return {task_id: taskId, runs: rows, latest, activity};
+    return {key, task_id: String(rows[0].task_id ?? rows[0].run_id), runs: rows, latest, activity};
   });
-  return groups.sort((a, b) => b.activity - a.activity || (a.task_id < b.task_id ? -1 : 1));
+  return groups.sort((a, b) => b.activity - a.activity || (a.key < b.key ? -1 : 1));
 }
 
-class ApiError extends Error {
-  constructor(status, message) { super(message); this.status = status; }
-}
+class ApiError extends Error { constructor(status, message) { super(message); this.status = status; } }
 async function api(path) {
   let res;
   try {
     res = await fetch(path, {headers: {Authorization: 'Bearer ' + S.token}, cache: 'no-store'});
   } catch (error) {
-    setConn('down', '连不上本机工作台');
+    setConn('down', '连不上本机工作台。一直连不上的话，可能 Codex 重启过、这个链接已失效，请在 Codex 里说“打开工作台”取新链接');
     throw new ApiError(0, '连不上本机工作台');
   }
   let body = null;
@@ -343,10 +333,7 @@ function setConn(state, detail) {
   if (state === 'ok') $('updated').textContent = fmtTime(Date.now() / 1000, true) + ' 更新';
 }
 
-function later(key, fn, ms) {
-  clearTimeout(S.timers[key]);
-  if (!S.dead) S.timers[key] = setTimeout(fn, ms);
-}
+function later(key, fn, ms) { clearTimeout(S.timers[key]); if (!S.dead) S.timers[key] = setTimeout(fn, ms); }
 async function listLoop() {
   await refreshList(false);
   later('list', listLoop, document.hidden ? 30000 : 5000);
@@ -368,7 +355,7 @@ async function refreshList(more) {
   const offset = more ? S.pageEnd : 0;
   const limit = more ? RUN_PAGE : Math.min(200, Math.max(RUN_PAGE, S.pageEnd));
   try {
-    const data = await api(`/api/runs?limit=${limit}&offset=${offset}`);
+    const data = await api(`/api/runs?limit=${limit}&offset=${offset}` + scopeOf('chat', 'namespace'));
     if (!more && seq < S.listApplied) return;
     if (!more) S.listApplied = seq;
     for (const row of data.runs || []) mergeRun(row);
@@ -398,7 +385,7 @@ function selectRun(id) {
   S.gen++;
   S.artSeq++;
   Object.assign(S, {snap: null, runSig: '', heroSig: '', runError: '', events: [], cursor: 0, evTrimmed: false, art: null});
-  history.replaceState(null, '', '#token=' + enc(S.token) + '&run=' + enc(id));
+  history.replaceState(null, '', '#token=' + enc(S.token) + '&run=' + enc(id) + scopeOf('chat', 'ns'));
   clearTimeout(S.timers.run);
   renderList();
   renderRun();
@@ -488,8 +475,8 @@ function openArtifact(name) {
 
 function renderList() {
   const groups = groupTasks([...S.runs.values()]);
-  const sig = JSON.stringify([S.sel, S.hasMore, S.listLoaded, groups.map(g => [g.task_id, g.runs.length, g.latest.run_id,
-    g.latest.status, g.latest.title, g.latest.decision && [g.latest.decision.verdict, g.latest.decision.next]])]);
+  const sig = JSON.stringify([S.sel, S.hasMore, S.listLoaded, groups.map(g => [g.key, g.runs.length, g.latest.run_id, g.latest.status, g.latest.title,
+    g.latest.round_title, g.latest.pending_interactions, g.latest.cwd, g.latest.decision && [g.latest.decision.verdict, g.latest.decision.next]])]);
   if (sig === S.listSig) return;
   S.listSig = sig;
   const box = $('taskList');
@@ -501,11 +488,11 @@ function renderList() {
   $('listCount').textContent = groups.length ? String(groups.length) : '';
 }
 function taskCard(group) {
-  const r = group.latest;
+  const r = group.latest, proj = project(r);
   const card = button(null, 'card', () => pickRun(r.run_id));
-  card.append(el('div', 'card-title', r.title || group.task_id),
-    el('div', 'muted card-meta', `${label(L.kind, r.kind)} · 第 ${r.round ?? '?'} 轮 · ${fmtShort(r.started_at)}`),
-    stateBadge(r));
+  fill(card, el('div', 'card-title', r.title || group.task_id),
+    el('div', 'muted card-meta', [label(L.kind, r.kind), `第 ${r.round ?? '?'} 轮`, r.round_title, fmtShort(r.started_at)].filter(Boolean).join(' · ')),
+    stateBadge(r), proj ? el('span', 'muted card-proj', proj) : null);
   card.setAttribute('aria-current', String(group.runs.some(x => x.run_id === S.sel)));
   return card;
 }
@@ -523,13 +510,14 @@ function renderRun() {
     $('roundTabs').replaceChildren();
     S.tabSig = '';
     $('runTitle').textContent = S.runError ? S.sel : '正在加载…';
+    $('runRound').hidden = true;
     $('runFacts').replaceChildren();
     return;
   }
   const o = s.outcome || null;
   renderHeader(s, o);
   renderHero(s, o);
-  const sig = JSON.stringify([s.run_id, s.status, s.decision, o, s.live, s.decision_history_count,
+  const sig = JSON.stringify([s.run_id, s.status, s.decision, o, s.live, s.decision_history_count, s.interactions, s.control_state, s.cwd, s.context,
     s.active && s.last_meaningful_event && s.last_meaningful_event.seq]);
   if (sig === S.runSig) return;
   S.runSig = sig;
@@ -541,17 +529,18 @@ function renderRun() {
   if (!S.art && S.artName === 'events') renderArtifact();
 }
 function renderHeader(s, o) {
-  const group = groupTasks([...S.runs.values()].filter(r => r.task_id === s.task_id))[0];
+  const key = taskKey(S.runs.get(s.run_id) || s), group = groupTasks([...S.runs.values()].filter(r => taskKey(r) === key))[0];
   const runs = group ? group.runs : [s];
-  const tabSig = JSON.stringify([s.run_id, runs.map(r => [r.run_id, r.round, r.status, r.decision && r.decision.verdict])]);
+  const tabSig = JSON.stringify([s.run_id, runs.map(r => [r.run_id, r.round, r.round_title, r.status, r.pending_interactions, r.decision && r.decision.verdict])]);
   if (tabSig !== S.tabSig) {
     S.tabSig = tabSig;
     $('roundTabs').replaceChildren(...runs.map(roundTab));
   }
   $('runTitle').textContent = s.title || s.task_id || s.run_id;
+  Object.assign($('runRound'), {hidden: !s.round_title, textContent: s.round_title ? `第 ${s.round ?? '?'} 轮：${s.round_title}` : ''});
   const actual = o ? (o.models || []).join(', ') : s.live ? ((s.live.models || []).join(', ') || s.live.initialized_model) : '';
   const asked = s.model && actual && !actual.includes(s.model) ? `（指定 ${s.model}）` : '';
-  const facts = [label(L.kind, s.kind), label(L.profile, s.profile), '模型 ' + (actual || s.model || '—') + asked,
+  const facts = [project(s) ? '项目 ' + project(s) : null, label(L.kind, s.kind), label(L.profile, s.profile), '模型 ' + (actual || s.model || '—') + asked,
     s.effort ? '思考强度 ' + s.effort : null,
     '用时 ' + fmtDur(s.elapsed_seconds) + (s.active && s.timeout_seconds ? `（上限 ${fmtDur(s.timeout_seconds)}）` : ''),
     '开始于 ' + fmtShort(s.started_at)].filter(Boolean).map(text => el('span', null, text));
@@ -560,8 +549,10 @@ function renderHeader(s, o) {
 }
 function roundTab(r, index, runs) {
   const twin = runs.filter(x => x.round === r.round).length > 1;
-  const tag = r.status === 'running' ? '进行中' : r.decision ? label(L.verdict, r.decision.verdict) : '待验收';
-  const tab = button(`第 ${r.round ?? '?'} 轮` + (twin ? ' · ' + r.run_id.slice(-4) : '') + ' · ' + tag, 'tab', () => selectRun(r.run_id));
+  const tag = r.status === 'running' ? (r.pending_interactions > 0 ? '等回答' : '进行中') : r.decision ? label(L.verdict, r.decision.verdict) : '待验收';
+  const tab = Object.assign(button(null, 'tab', () => selectRun(r.run_id)), {title: r.round_title ? String(r.round_title) : ''});
+  fill(tab, el('span', null, `第 ${r.round ?? '?'} 轮`), r.round_title ? el('span', 'tab-sub', ' · ' + r.round_title) : null,
+    el('span', null, (twin ? ' · ' + r.run_id.slice(-4) : '') + ' · ' + tag));
   tab.setAttribute('role', 'tab');
   tab.setAttribute('aria-selected', String(r.run_id === S.sel));
   return tab;
@@ -570,9 +561,9 @@ function renderHero(s, o) {
   const d = s.decision;
   let tone, head, sub;
   if (s.status === 'running') {
-    const last = s.last_meaningful_event;
-    tone = 't-active';
-    head = 'Claude 正在做';
+    const last = s.last_meaningful_event, held = s.control_state === 'held';
+    tone = held ? 't-warn' : 't-active';
+    head = held ? 'Claude 在等回答，执行已暂停' : 'Claude 正在做';
     sub = (last ? evText(last) + ' · ' : '') + '已用 ' + fmtDur(s.elapsed_seconds);
   } else if (d && d.verdict) {
     tone = verdictTone(d);
@@ -636,11 +627,34 @@ function techView(w) {
   return el('details', 'tech', el('summary', null, '技术细节'), el('code', 'muted', w.code || '—'),
     w.detail ? el('p', 'muted verbatim', w.detail) : null);
 }
+function ixBody(x) {
+  const q = x.request && typeof x.request === 'object' ? x.request : {};
+  if (x.kind === 'question') return (Array.isArray(q.questions) ? q.questions : []).filter(i => i && typeof i === 'object').map(i => el('div', 'q',
+    i.header ? el('p', 'muted', String(i.header)) : null, el('p', 'verbatim', String(i.question ?? '')),
+    Array.isArray(i.options) && i.options.length ? list(i.options.map(p => el('span', null, String((p && p.label) ?? ''),
+      p && p.description ? el('span', 'muted', ' · ' + p.description) : null))) : null, i.multiSelect ? el('p', 'muted', '可以多选') : null));
+  if (x.kind === 'permission') return [el('p', null, el('code', null, String(q.tool_name || '—')), q.summary ? el('span', 'verbatim', ' ' + q.summary) : null)];
+  return [el('p', 'verbatim', String(q.text ?? '')), q.scope ? el('p', 'muted', '范围：' + q.scope) : null];
+}
+function ixAnswer(x, a = Object(x.answer)) {
+  const text = [a.decision && label(L.perm, a.decision), ...Object.entries(a.answers || {}).map(([question, answer]) => question + '：' + answer), a.text].filter(Boolean).join('\n');
+  return text && (x.answered_by ? label(L.by, x.answered_by) + '：' : '') + text;
+}
+function attention(s) {
+  const xs = (Array.isArray(s.interactions) ? s.interactions : []).filter(x => x && typeof x === 'object');
+  const part = x => (x.status === 'pending' && (x.blocking || x.kind === 'question' || x.kind === 'permission') ? 0 : x.status === 'pending' || x.status === 'acknowledged' ? 1 : 2);
+  const [open, notes, done] = [0, 1, 2].map(n => xs.filter(x => part(x) === n));
+  const hint = (s.control_state === 'held' ? '执行已暂停 · ' : '') + '请在 Codex 里回复，工作台只读';
+  return [...open.map(x => el('section', 'ask attn', el('h2', null, x.kind === 'permission' ? '请求授权' : 'Claude 在等回答'), ...ixBody(x), el('p', 'muted', hint))),
+    notes.length ? el('section', 'ask', el('h2', null, 'Claude 的说明'), list(notes.map(x => el('div', null, el('span', 'muted', label(L.ix, x.kind)), ...ixBody(x))))) : null,
+    done.length ? el('details', 'done', el('summary', null, `已处理的问答（${done.length}）`), ...done.map(x => el('div', 'msg',
+      el('div', 'muted', label(L.ix, x.kind) + ' · ' + label(L.ixs, x.status)), ...ixBody(x), ixAnswer(x) ? el('div', 'verbatim', ixAnswer(x)) : null))) : null];
+}
 function renderWarnings(s, o) {
   const raw = o ? (o.warnings || []) : (s.warnings || []);
   const warnings = raw.map(w => (typeof w === 'string' ? {code: w} : w || {}));
   const asks = warnings.filter(w => w.code === ASK);
-  fill($('askBox'), ...asks.map(w => el('section', 'ask', el('h2', null, L.warn[ASK][0]),
+  fill($('askBox'), ...attention(s), ...asks.map(w => el('section', 'ask', el('h2', null, L.warn[ASK][0]),
     el('p', 'muted', L.warn[ASK][1] + '，在 Codex 对话里回答即可'), ...warnParts(w), techView(w))));
   const rest = warnings.filter(w => w.code !== ASK);
   const box = $('warnList');
@@ -687,7 +701,7 @@ function renderIds(s) {
     return el('div', 'idrow', el('span', 'muted', name), el('code', null, value), button('复制', null, () => copyText(value, note)), note);
   };
   fill($('idBody'), row('任务号', String(s.task_id ?? '—')), row('运行号', s.run_id),
-    s.continue_from ? row('上一轮', s.continue_from) : null);
+    s.continue_from ? row('上一轮', s.continue_from) : null, s.cwd ? row('项目目录', String(s.cwd)) : null, s.context && s.context.chat ? row('对话', String(s.context.chat)) : null);
 }
 function copyText(text, note) {
   const done = message => { note.textContent = message; };
@@ -839,7 +853,8 @@ function eventsView() {
     rows.push({e, n: 1, last: e});
   }
   for (const {e, n, last} of rows) {
-    const quiet = QUIET_EV.has(e.kind), extra = n > 1 ? `共 ${n} 条` : [quiet ? '' : e.status, quiet ? '' : e.tool, quiet ? '' : e.file].filter(Boolean).join(' · ');
+    const from = ['update', 'interrupt', 'answer'].includes(e.kind) && Object.hasOwn(L.origin, e.status || '') ? L.origin[e.status] : '';
+    const quiet = QUIET_EV.has(e.kind), extra = n > 1 ? `共 ${n} 条` : [quiet ? from : e.status, quiet ? '' : e.tool, quiet ? '' : e.file].filter(Boolean).join(' · ');
     box.append(el('div', 'ev', el('span', 'muted', fmtTime(last.received_at, true)), el('span', 'k muted', label(L.ev, e.kind, '')),
       el('div', null, el('span', null, evText(e)), extra ? el('span', 'muted', ' · ' + extra) : null,
         e.text && e.kind !== 'tool' ? el('div', 'muted verbatim', e.text) : null)));
@@ -863,9 +878,10 @@ function boot() {
   });
   window.addEventListener('hashchange', () => {
     const params = new URLSearchParams(location.hash.slice(1));
-    if ((params.get('token') || '') !== S.token) location.reload();
+    if ((params.get('token') || '') !== S.token || (params.get('chat') || '') !== CHAT || (params.get('ns') || '') !== NS) location.reload();
     else if (params.get('run')) selectRun(params.get('run'));
   });
+  $('listHead').textContent = CHAT ? '本对话的任务' : '全部任务';
   renderList();
   renderRun();
   if (!S.token) {

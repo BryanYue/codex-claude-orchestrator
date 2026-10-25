@@ -188,12 +188,16 @@ runtime.Runtime(Path(sys.argv[2])).cleanup(sys.argv[3])
             self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual((fx.source / "src" / "app.py").read_text(), "print('delegated change')\n")
 
-    def test_implement_never_falls_back_to_readonly_without_a_sandbox(self):
-        with mock.patch.object(runtime.cli_env, "sandbox_available", return_value=False):
-            with self.assertRaisesRegex(ValueError, "implement tasks need macOS sandbox-exec"):
+    def test_no_profile_falls_back_to_instruction_only_protection_without_a_working_sandbox(self):
+        with mock.patch.object(runtime.cli_env, "sandbox_works", return_value={"works": False, "reason": "refused"}):
+            with self.assertRaisesRegex(ValueError, "copy profile needs a working macOS sandbox-exec"):
                 self.fx.runtime._profile(packet_schema.normalize(self.fx.packet()))
             analyze = packet_schema.normalize(self.fx.packet(kind="analyze"))
-            self.assertEqual(self.fx.runtime._profile(analyze), "readonly")
+            with self.assertRaisesRegex(ValueError, "copy profile needs a working macOS sandbox-exec"):
+                self.fx.runtime._profile(analyze)
+            readonly = packet_schema.normalize(self.fx.packet(kind="analyze", profile="readonly"))
+            with self.assertRaisesRegex(ValueError, "readonly profile needs a working macOS sandbox-exec"):
+                self.fx.runtime._profile(readonly)
 
 
 class ResultSchemaRobustnessTests(unittest.TestCase):

@@ -1,4 +1,5 @@
 """Multi-round flows: which code the next round starts from, which decisions it inherits, which patch is delivered."""
+import json
 import os
 from pathlib import Path
 import shlex
@@ -89,6 +90,35 @@ class MultiRoundDeliveryTests(unittest.TestCase):
         self.assertEqual([item["path"] for item in three["outcome"]["changes"]["files"]], ["src/b.py"])
         self.assertEqual(self.delivered(three), ["src/a.py", "src/b.py"])
         self.apply(three)
+
+    def test_a_round_stopped_for_a_cli_capability_keeps_the_lineage_continuable(self):
+        for label, env in (("no question tool", {"FAKE_TOOLS": "Agent,Bash,Edit,Read,Write"}),
+                           ("not auto", {"FAKE_PERMISSION_MODE": "default"}),
+                           ("not ready before launch", {"FAKE_LOGGED_IN": "0"})):
+            with self.subTest(label):
+                self.fx = fx = harness.Fixture(self)
+                one = fx.run({"write": "src/feature.py", "text": "x = 1\n"}, {"deliver": True, "report": "r1", "result": GOOD})
+                self.assertEqual(self.delivered(one), ["src/feature.py"])
+                os.environ.update(env)
+                try:
+                    two = fx.run({"write": "src/never.py", "text": "never\n"}, {"deliver": True, "report": "r2", "result": GOOD},
+                                 continue_from=one["run_id"], user_messages=self.words("r2"))
+                finally:
+                    for key in env:
+                        os.environ.pop(key)
+                self.assertEqual(two["status"], "not_started", two["outcome"]["note"])
+                three = fx.run({"capture_brief": str(fx.root / "brief3.md")},
+                               {"write": "src/more.py", "text": "y = 2\n"}, {"deliver": True, "report": "r3", "result": GOOD},
+                               continue_from=two["run_id"], user_messages=self.words("r2", "r3"))
+                self.assertEqual(three["status"], "ok", three["outcome"]["note"])
+                self.assertEqual(three["outcome"]["carried"]["mode"], "replayed")
+                self.assertEqual((self.copy(three) / "src" / "feature.py").read_text(), "x = 1\n",
+                                 "round one's undelivered work is carried, not redone")
+                self.assertEqual([item["path"] for item in three["outcome"]["changes"]["files"]], ["src/more.py"])
+                self.assertEqual(self.delivered(three), ["src/feature.py", "src/more.py"])
+                command = json.loads((fx.run_dir(three) / "command.json").read_text())["argv"]
+                self.assertEqual(command[command.index("--resume") + 1], one["outcome"]["session_id"])
+                self.apply(three)
 
     def test_item_decisions_reach_the_next_brief_with_their_authority(self):
         fx = self.fx

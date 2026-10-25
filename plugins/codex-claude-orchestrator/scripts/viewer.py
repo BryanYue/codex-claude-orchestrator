@@ -9,7 +9,7 @@ from pathlib import Path
 import secrets
 import threading
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 ROOT = Path(__file__).resolve().parents[1]
 ARTIFACTS = {
@@ -126,7 +126,9 @@ class Viewer:
                         offset = int(query.get("offset", [0])[0])
                         if not 1 <= limit <= 200 or offset < 0:
                             raise ValueError("Invalid history page")
-                        rows = viewer.runtime.list_runs(limit=limit + 1, offset=offset)
+                        chat = query.get("chat", [""])[0]
+                        context = {"chat": chat, "namespace": query.get("namespace", [""])[0] or None} if chat else None
+                        rows = viewer.runtime.list_runs(limit=limit + 1, offset=offset, context=context)
                         return self.send(200, {"runs": rows[:limit], "next_offset": offset + min(limit, len(rows)),
                                                "has_more": len(rows) > limit})
                     if route.path == "/api/snapshot":
@@ -154,10 +156,11 @@ class Viewer:
         self.thread.start()
         return self
 
-    def url(self, run_id: str = "") -> str:
+    def url(self, run_id: str = "", context: dict[str, str] | None = None) -> str:
         if self.http is None:
             raise RuntimeError("Viewer not started")
-        return f"http://127.0.0.1:{self.http.server_port}/#token={self.token}&run={run_id}"
+        scope = f"&chat={quote(context['chat'], safe='')}&ns={quote(context['namespace'], safe='')}" if context else ""
+        return f"http://127.0.0.1:{self.http.server_port}/#token={self.token}&run={run_id}{scope}"
 
     def close(self) -> None:
         if self.http:

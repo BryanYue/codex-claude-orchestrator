@@ -71,10 +71,12 @@ def _environment(packet: dict[str, Any], plan: dict[str, Any]) -> list[str]:
         lines += [f"- 工作目录：`{plan['execution_cwd']}`。这是原仓库当前状态的独立 Git 副本（含未提交改动），可以自由编辑和运行命令。",
                   f"- 原仓库 `{plan['source_root']}`、它的 Git 元数据和插件运行目录受操作系统写保护；写入会失败，这是预期行为。",
                   "- 凭证、网络和其他本机路径没有隔离；不要读取或打印凭证。",
-                  "- 可用工具：Bash、文件读写、Agent、Skill、Workflow 等内置工具；外部 MCP 关闭。"]
+                  "- 工具：Claude Code 原生工具全部可用（权限模式 auto），用户和组织的设置、MCP 与技能照常生效。"]
     else:
-        lines += [f"- 工作目录：`{plan['execution_cwd']}`（原目录，只读）。",
-                  "- 只有 Read、Glob、Grep" + ("、WebFetch、WebSearch" if packet["web"] else "") + "；没有写文件和执行命令的工具。"]
+        lines += [f"- 工作目录：`{plan['execution_cwd']}`（原目录）。原目录和它的 Git 元数据受操作系统写保护，写入会失败；"
+                  "这是只读任务，不要尝试改动它。",
+                  "- 工具：Claude Code 原生工具全部可用（权限模式 auto），可以读文件、搜索和运行只读命令。",
+                  "- 凭证、网络和其他本机路径没有隔离；不要读取或打印凭证。"]
     lines.append("- 联网：已获用户授权。" if packet["web"] else "- 联网：未获授权。不要访问网络；需要外部资料时写进 not_verified 或 questions。")
     lines.append(f"- 截止时间：{_stamp(plan['deadline'])}。到点进程会被终止，"
                  + ("未写入交付文件的内容不会被收回。" if copy else "未提交的结构化结果不会被收回。"))
@@ -91,8 +93,31 @@ def _environment(packet: dict[str, Any], plan: dict[str, Any]) -> list[str]:
     return lines + [""]
 
 
+def _channel(packet: dict[str, Any], plan: dict[str, Any]) -> list[str]:
+    notes = plan.get("notes")
+    note_line = (f"- 不影响继续工作的说明或异议：向 `{notes}` 追加一行 JSON，例如 "
+                 '`{"type": "note", "text": "…", "scope": "…"}` 或 `{"type": "dispute", "text": "…"}`。'
+                 "写完立即继续，不等回复；插件会马上登记并转给 Codex。") if notes else None
+    if not packet.get("interactive", True):
+        return ["## 与 Codex 的沟通", "",
+                "- 本次没有实时沟通通道：需要用户决定的事写进 questions，异议写进 disputes，按能独立推进的部分继续。",
+                *([note_line] if note_line else []), ""]
+    return ["## 与 Codex 的沟通", "",
+            "Codex 在任务运行中可以回答你的问题和补充信息。普通实现选择你自己决定，不要为了确认而停下。",
+            "- 严重问题（不先确认就会做错、与用户原话或验收冲突、超出授权）：用 AskUserQuestion 提问，问题写清楚可选方案。"
+            "插件会暂停这次执行直到 Codex 回答：后台命令同时暂停；后台的 Workflow 和子代理会被停止，"
+            "收到回答后需要的话重新启动它们。个别情况下插件会停止整个执行，再在原会话里把回答发给你；"
+            "那时先检查工作目录和后台任务的状态。",
+            "- 回答会标明来自“Codex 协调者”还是“用户原话”。用户原话的效力高于协调者的回答。",
+            *([note_line] if note_line else []),
+            "- 运行中可能收到以【Codex 补充】开头的新消息：结合当前进度继续；与原任务冲突时写进 disputes。",
+            "- 只有用户能决定、又不影响当前工作的事，仍写进 result 的 questions。",
+            "- 需要后台命令、Workflow 或子代理的结果时，等它们结束并核实后再收尾。你收尾时仍在运行的后台命令会被插件停止，"
+            "停止不算作测试或构建通过。", ""]
+
+
 def _task(packet: dict[str, Any], plan: dict[str, Any]) -> list[str]:
-    lines = ["## 你的任务", ""]
+    lines = ["## 你的任务", "", "按任务的复杂度决定是否先列计划；不需要开工确认。"]
     if packet["kind"] == "implement":
         lines += ["在工作目录里实现上述需求：",
                   "- 自己运行相关的测试、构建和 lint，并记录真实命令与结果；没跑或跑不了的写进 not_verified。",
@@ -214,6 +239,7 @@ def render(packet: dict[str, Any], plan: dict[str, Any]) -> str:
     if continued:
         lines += _continuation(plan, continued)
     lines += _task(packet, plan)
+    lines += _channel(packet, plan)
     lines += _environment(packet, plan)
     lines += _deliver(plan)
     return "\n".join(lines)

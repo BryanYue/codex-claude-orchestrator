@@ -20,10 +20,10 @@ if str(PLUGIN_SCRIPTS) not in sys.path:
 from executable_locator import cli_environment, locate_claude
 from process_control import terminate_group
 
+# --permission-prompt-tool is not listed by --help; the run validates it from the CLI's init event instead.
 DISPATCH_FLAGS = frozenset({
-    "-p", "--model", "--effort", "--output-format", "--verbose", "--json-schema", "--session-id", "--resume",
-    "--permission-mode", "--tools", "--allowedTools", "--disallowedTools", "--strict-mcp-config", "--mcp-config",
-    "--disable-slash-commands",
+    "-p", "--model", "--effort", "--input-format", "--output-format", "--verbose", "--replay-user-messages",
+    "--json-schema", "--session-id", "--resume", "--permission-mode", "--tools",
 })
 BUDGET_FLAG = "--max-budget-usd"
 SANDBOX = Path("/usr/bin/sandbox-exec")
@@ -36,6 +36,27 @@ def flag_advertised(help_text: str, flag: str) -> bool:
 
 def sandbox_available() -> bool:
     return sys.platform == "darwin" and SANDBOX.is_file()
+
+
+_SANDBOX_PROBE: dict[str, Any] = {}
+
+
+def sandbox_works() -> dict[str, Any]:
+    """Apply a trivial profile once: an installed sandbox-exec can still be refused (e.g. inside another sandbox)."""
+    if "result" in _SANDBOX_PROBE:
+        return dict(_SANDBOX_PROBE["result"])
+    if not sandbox_available():
+        result: dict[str, Any] = {"works": False, "reason": "macOS sandbox-exec is not available on this host"}
+    else:
+        try:
+            probe = subprocess.run([str(SANDBOX), "-p", "(version 1)(allow default)", "/usr/bin/true"],
+                                   capture_output=True, text=True, timeout=10)
+            result = {"works": probe.returncode == 0,
+                      "reason": None if probe.returncode == 0 else excerpt(probe.stderr or f"exit {probe.returncode}", 200)}
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            result = {"works": False, "reason": f"{type(exc).__name__}: {exc}"}
+    _SANDBOX_PROBE["result"] = result
+    return dict(result)
 
 
 def check_command(command: list[str], cwd: Path, timeout: float, input_text: str | None = None,
@@ -133,7 +154,7 @@ def check(cwd: Path, *, verify: bool = False, model: str = "sonnet", timeout: fl
         "cli": {"path": path, "source": selection.get("source"), "installed": bool(path), "version": None,
                 "missing_flags": [], "budget_flag": False},
         "auth": {"status": "not_checked", "credential_validity": "not_verified"},
-        "sandbox": {"available": sandbox_available(), "used_by": "copy profile"},
+        "sandbox": {"available": sandbox_available(), **sandbox_works(), "used_by": "copy and readonly profiles"},
         "probe": {"status": "not_requested", "requested_model": model},
     }
 

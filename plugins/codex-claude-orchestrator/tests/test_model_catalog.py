@@ -91,6 +91,36 @@ print(json.dumps({'type':'control_response','response':{'subtype':'success','req
             with self.subTest(value=value), self.assertRaises(ValueError):
                 model_catalog._models(value)
 
+    def test_exit_between_group_probe_and_signal_is_confirmed(self):
+        proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True)
+        signal_group = os.killpg
+
+        def exit_before_signal(pid, sig):
+            if sig == signal.SIGTERM:
+                proc.terminate()
+                proc.wait(timeout=3)
+            return signal_group(pid, sig)
+
+        try:
+            with patch.object(model_catalog.os, "killpg", new=exit_before_signal):
+                self.assertEqual(model_catalog._stop(proc), "confirmed")
+            with self.assertRaises(ProcessLookupError):
+                os.kill(proc.pid, 0)
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait(timeout=3)
+
+    def test_permission_error_after_exit_needs_group_absence_evidence(self):
+        proc = subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True)
+        proc.wait(timeout=3)
+        with patch.object(model_catalog.os, "killpg", side_effect=PermissionError("fixture exited group")):
+            self.assertEqual(model_catalog._stop(proc), "confirmed")
+        # A reaped leader alone is insufficient if group membership cannot be confirmed absent.
+        with patch.object(model_catalog.os, "killpg", side_effect=PermissionError("fixture exited group")), \
+             patch.object(model_catalog, "group_absent", return_value=False):
+            self.assertEqual(model_catalog._stop(proc), "unconfirmed")
+
     def test_cleanup_permission_error_is_structured_and_does_not_claim_stopped(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

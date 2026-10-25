@@ -17,7 +17,8 @@ import server  # noqa: E402
 from mcp.server.mcpserver.exceptions import ToolError  # noqa: E402
 from viewer import Viewer, read_artifact  # noqa: E402
 
-TOOLS = ["claude_environment", "claude_models", "claude_start", "claude_status", "claude_wait", "claude_result",
+TOOLS = ["claude_environment", "claude_models", "claude_start", "claude_status", "claude_wait", "claude_reply",
+         "claude_workbench", "claude_result",
          "claude_cancel", "claude_decide", "claude_runs", "claude_cleanup"]
 REPORT = "## 需求对照\n" + "- 导出已改为异步，失败时提示原因。\n" * 400
 
@@ -37,7 +38,7 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
             if answer["snapshot"]["status"] != "running":
                 return answer["snapshot"]
 
-    async def test_tool_surface_is_ten_tools(self):
+    async def test_tool_surface_is_twelve_tools(self):
         self.assertEqual([tool.name for tool in await server.mcp.list_tools()], TOOLS)
 
     async def test_legacy_packets_fail_with_the_new_field_names(self):
@@ -76,6 +77,25 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([row["run_id"] for row in listed["runs"]], [started["run_id"]])
         with self.assertRaisesRegex(ToolError, "unknown artifact"):
             await server.claude_result(started["run_id"], "../registry")
+
+    async def test_chat_owned_runs_need_their_context_and_receipts_survive_the_run(self):
+        import test_control_surface
+        test_control_surface.seed(self.fx, "run-mcpowned01")
+        for call in (server.claude_status("run-mcpowned01"), server.claude_result("run-mcpowned01", "packet"),
+                     server.claude_reply("run-mcpowned01", "c1", "update", "x")):
+            with self.assertRaisesRegex(ToolError, "belongs to a Codex chat"):
+                await call
+        status = await server.claude_status("run-mcpowned01", context={"chat": "chat-a"})
+        self.assertIn("chat=chat-a", status["workbench"]["url"])
+        self.assertEqual(status["workbench"]["open"]["action"], "link_only")
+        first = await server.claude_reply("run-mcpowned01", "c1", "update", "x", context={"chat": "chat-a"})
+        self.fx.runtime.store.set_state("run-mcpowned01", "ended")
+        self.fx.runtime._update(lambda data: data["runs"]["run-mcpowned01"].update(status="ok"))
+        again = await server.claude_reply("run-mcpowned01", "c1", "update", "x", context={"chat": "chat-a"})
+        self.assertEqual((again["receipt"]["duplicate"], again["receipt"]["revision"]), (True, first["receipt"]["revision"]))
+        opened = await server.claude_workbench(context={"chat": "chat-a"})
+        self.assertEqual(opened["open"]["action"], "open_in_codex")
+        self.assertEqual((await server.claude_workbench(context={"chat": "chat-a"}))["open"]["action"], "link_only")
 
     async def test_viewer_requires_its_token_and_host(self):
         self.fx.script({"deliver": True, "report": "r", "result": {"status": "completed", "summary": "s"}})

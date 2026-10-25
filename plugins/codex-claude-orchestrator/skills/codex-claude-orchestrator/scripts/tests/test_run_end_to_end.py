@@ -65,9 +65,12 @@ class CopyProfileTests(unittest.TestCase):
         self.assertFalse(codes & {"report_missing", "result_missing", "result_malformed", "source_not_read"}, codes)
         command = json.loads((run_dir / "command.json").read_text())["argv"]
         self.assertEqual(command[0], "/usr/bin/sandbox-exec")
-        self.assertIn("Bash", command[command.index("--allowedTools") + 1])
-        self.assertIn("RemoteTrigger", command[command.index("--disallowedTools") + 1])
-        self.assertNotIn("--json-schema", command)
+        for flag, value in (("--tools", "default"), ("--permission-mode", "auto"), ("--permission-prompt-tool", "stdio"),
+                            ("--input-format", "stream-json")):
+            self.assertEqual(command[command.index(flag) + 1], value)
+        for removed in ("--allowedTools", "--disallowedTools", "--strict-mcp-config", "--disable-slash-commands",
+                        "--json-schema"):
+            self.assertNotIn(removed, command)
         self.assertEqual(outcome["instruction_layer"]["hooks"], 1)
         self.assertEqual(outcome["cost_usd"], 0.0123)
 
@@ -243,6 +246,29 @@ class CopyProfileTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "removed"):
             fx.runtime.start(fx.packet(continue_from=run_id))
 
+    def test_a_mid_run_question_is_answered_through_the_runtime_and_the_run_continues(self):
+        fx = self.fx
+        fx.script({"write": "src/app.py", "text": "before the answer\n"}, {"ask": "保留旧接口吗？", "options": ["保留", "删除"]},
+                  {"write": "src/app.py", "text": "after the answer\n"},
+                  {"deliver": True, "report": "r", "result": RESULT})
+        started = fx.runtime.start(fx.packet(context={"chat": "e2e"}, title="导出改异步", round_title="第一版"))
+        self.assertEqual((started["title"], started["round_title"]), ("导出改异步", "第一版"))
+        deadline = time.monotonic() + 30
+        pending = []
+        while not pending and time.monotonic() < deadline:
+            pending = fx.runtime.wait(started["run_id"], timeout=5, context={"chat": "e2e"})["pending"]
+        self.assertEqual(pending[0]["kind"], "question")
+        receipt = fx.runtime.reply(started["run_id"], "answer-1", "answer", "删除", interaction_id=pending[0]["interaction_id"],
+                                   origin="human", context={"chat": "e2e"})["receipt"]
+        self.assertEqual(receipt["delivery"]["state"], "queued")
+        snapshot = fx.wait(started["run_id"])
+        self.assertEqual(snapshot["outcome"]["run_outcome"], "ok")
+        answers = [json.loads(line) for line in (fx.probes / "answers.jsonl").read_text().splitlines()]
+        self.assertEqual(answers[0]["response"]["response"]["updatedInput"]["answers"], {"保留旧接口吗？": "[用户原话] 删除"})
+        self.assertEqual(fx.runtime.store.command(started["run_id"], "answer-1")["delivery"]["state"], "echoed")
+        self.assertEqual([item["status"] for item in snapshot["interactions"]], ["answered"])
+        self.assertEqual(snapshot["outcome"]["interactions"]["counts"], {"question": 1})
+
     def test_a_restarted_runtime_settles_a_dead_bridge_as_lost(self):
         fx = self.fx
         fx.script({"write": "src/app.py", "text": "partial"}, {"touch": str(fx.root / "started")}, {"sleep": 60})
@@ -266,6 +292,7 @@ class CopyProfileTests(unittest.TestCase):
         restarted.decide(run_id, "rejected", "next_round", "运行中断", ["read the partial patch"])
 
 
+@unittest.skipUnless(MAC, "the readonly profile needs macOS sandbox-exec")
 class ReadonlyProfileTests(unittest.TestCase):
     def setUp(self):
         self.fx = harness.Fixture(self)
@@ -273,11 +300,13 @@ class ReadonlyProfileTests(unittest.TestCase):
         self.plain.mkdir()
         (self.plain / "design.md").write_text("设计稿")
 
-    def test_readonly_analysis_delivers_through_structured_output(self):
+    def test_readonly_analysis_has_native_tools_and_an_os_write_boundary(self):
         fx = self.fx
         structured = {"status": "completed", "summary": "可行，但有两个风险", "report_markdown": "## 需求对照\n- 可行性：已回答\n",
                       "items": [{"id": "R1", "title": "风险", "confidence": "inferred"}]}
-        snapshot = fx.run({"structured": structured}, kind="analyze", cwd=str(self.plain), inputs=[],
+        snapshot = fx.run({"attempt_write": str(self.plain / "design.md")}, {"attempt_write": str(self.plain / "new.md")},
+                          {"note": {"type": "note", "text": "只读分析中的说明"}}, {"sleep": .5},
+                          {"structured": structured}, kind="analyze", cwd=str(self.plain), inputs=[],
                           user_messages=[{"text": "这个设计可行吗？", "source": "human"}], web=True)
         outcome = snapshot["outcome"]
         run_dir = fx.run_dir(snapshot)
@@ -285,9 +314,14 @@ class ReadonlyProfileTests(unittest.TestCase):
         self.assertEqual((run_dir / "report.md").read_text(), "## 需求对照\n- 可行性：已回答\n")
         self.assertNotIn("report_markdown", json.loads((run_dir / "result.json").read_text()))
         self.assertIsNone(outcome["changes"])
+        self.assertEqual(set(fx.probes_seen().values()), {"PermissionError"})
+        self.assertEqual((self.plain / "design.md").read_text(), "设计稿")
+        self.assertFalse((self.plain / "new.md").exists())
+        self.assertEqual(outcome["interactions"]["counts"], {"note": 1})
         command = json.loads((run_dir / "command.json").read_text())["argv"]
-        self.assertNotEqual(command[0], "/usr/bin/sandbox-exec")
-        self.assertEqual(command[command.index("--tools") + 1], "Read,Glob,Grep,WebFetch,WebSearch")
+        self.assertEqual(command[0], "/usr/bin/sandbox-exec")
+        self.assertEqual(command[command.index("--tools") + 1], "default")
+        self.assertEqual(command[command.index("--permission-mode") + 1], "auto")
         self.assertIn("--json-schema", command)
         self.assertEqual(outcome["items"], 1)
 

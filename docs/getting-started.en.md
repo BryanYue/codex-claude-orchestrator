@@ -14,9 +14,9 @@ Use a Mac and prepare the following:
 | Claude Code | Install it and sign in with your own account using the [official guide](https://code.claude.com/docs/en/quickstart). The plugin uses this local Claude Code directly and never downloads, updates or switches its version. The Claude desktop chat app does not replace Claude Code. |
 | uv | Run `uv --version` in a terminal. If it is missing, follow the [installation guide](https://docs.astral.sh/uv/getting-started/installation/). If you already use Homebrew, `brew install uv` is an option. |
 
-The plugin needs Python 3.11 or later. During dependency preparation, uv locates or downloads the required environment; the first download can take some time. Implementation tasks and the default analysis tasks in Git projects also use macOS's built-in `/usr/bin/sandbox-exec` to protect the original repository; normally there is nothing extra to install. Intel Macs have not been separately verified.
+The plugin needs Python 3.11 or later. During dependency preparation, uv locates or downloads the required environment; the first download can take some time. Every task also uses macOS's built-in `/usr/bin/sandbox-exec` to protect your project directory; normally there is nothing extra to install. When it is unavailable (for example, when Codex itself runs inside another sandbox), the plugin refuses to start the task and says why. Intel Macs have not been separately verified.
 
-> **About versions:** This page targets `v1.0.1`, full build `1.0.1+codex.20261015112934`. For release status and verified coverage, see the [verification record](../RELEASE-VERIFICATION.md). Older release tags stay frozen, and a fixed ref does not advance to another tag by itself; use the [version-switching steps](git-marketplace.md#change-a-fixed-ref-or-migrate-from-zip). If you are upgrading from 0.7.x, read [Upgrading from 0.7.x](install-and-recovery.md#upgrading-from-07x) first: 1.0 cannot continue old tasks.
+> **About versions:** This page targets `v1.1.0`, full build `1.1.0+codex.20261025234436`. For release status and verified coverage, see the [verification record](../RELEASE-VERIFICATION.md). Older release tags stay frozen, and a fixed ref does not advance to another tag by itself; use the [version-switching steps](git-marketplace.md#change-a-fixed-ref-or-migrate-from-zip). Upgrading from 1.0.x: existing tasks can be continued, and the Workbench may open automatically once per conversation, at the first 1.1 response. If you are upgrading from 0.7.x, read [Upgrading from 0.7.x](install-and-recovery.md#upgrading-from-07x) first: since 1.0, old tasks cannot be continued.
 
 ## Install with help from Codex
 
@@ -25,7 +25,7 @@ Paste this request into an existing Codex conversation:
 ```text
 Help me install the Codex–Claude collaboration plugin:
 https://github.com/BryanYue/codex-claude-orchestrator
-Use the fixed v1.0.1 release through a Git marketplace.
+Use the fixed v1.1.0 release through a Git marketplace.
 
 First check that I have a Codex desktop app with plugin commands and uv.
 If codex is not on PATH, check for the CLI bundled with the desktop app.
@@ -55,7 +55,7 @@ codex plugin --help
 Then run these commands one at a time:
 
 ```bash
-codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v1.0.1
+codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v1.1.0
 codex plugin add codex-claude-orchestrator@codex-claude-team
 ```
 
@@ -93,13 +93,14 @@ Choose a short document in your project, such as `README.md`, and ask:
 
 > Use the Codex–Claude collaboration plugin to have Claude look at the installation steps in README.md: where is a beginner most likely to get stuck? Don't change any files yet; check its conclusions and then tell me.
 
-This makes a real Claude request using your own allowance. In a Git project, Claude analyzes in an independent copy of the project by default and can run commands to reproduce problems; in a plain directory it only reads and searches. Either way, Claude does not write to your project directory.
+This makes a real Claude request using your own allowance. In a Git project, Claude analyzes in an independent copy of the project by default and can run commands to reproduce problems; in a plain directory it analyzes in place and can read, search and run read-only commands. Either way, macOS denies Claude writes to your project directory.
 
-Look for three things:
+Look for four things:
 
 1. **The task starts.** Codex explains what it handed to Claude, the task type (implement or analyze) and how it runs, and reports the actual state.
-2. **You can follow progress.** The Workbench link shows progress and recent activity.
-3. **The result is checked.** Claude answers your question first, then gives the evidence; Codex checks it and tells you what holds up and what is still uncertain.
+2. **You can follow progress.** At the conversation's first delegation, the Workbench page opens automatically once and shows progress and recent activity. After that, use the link Codex gives you or ask "Open the Workbench."
+3. **Claude can ask mid-run.** When Claude hits a question that would lead it astray if left unconfirmed, it stops and waits for an answer. Codex answers what it can and passes on what needs your decision.
+4. **The result is checked.** Claude answers your question first, then gives the evidence; Codex checks it and tells you what holds up and what is still uncertain.
 
 **A returned report is not completion; the work is done only after Codex has reviewed it.** "Environment check complete" alone does not mean Claude performed the task. If execution fails or is interrupted, ask Codex to query the original run ID before starting another one.
 
@@ -109,11 +110,15 @@ No project setting is required. When you want Claude involved, say so in the req
 
 - **Implement**: "Have Claude implement phase two of docs/plan.md; when it's done, check the changes and run the tests, and apply them only if everything holds up." Claude edits code and runs the tests itself in the copy, then returns its changes; Codex reviews them before applying them to your project. The plugin does not commit or push.
 - **Analyze**: "Have Claude assess … and give me the conclusion first", "Have Claude review the current uncommitted changes, looking only at error handling." Claude answers the question first, then gives the evidence.
+- **Add information or redirect mid-run**: say it while the task is still running, for example "Tell Claude while it's working: start the export file names with the date. Don't wait for it to finish." Codex passes the update to Claude, which reads it after its current step. To change direction right away, say "Interrupt it and do … instead."
+- **Say who answers**: you can tell Codex up front how to split the decisions, for example "If Claude asks something mid-run that doesn't affect the main flow, decide it yourself; ask me only when it involves a trade-off in the requirements."
 - **Correct or add to it**: say it in the same conversation, for example "That's not what I meant: keep the existing login flow and have Claude build on the previous round." The next round builds on the previous result, with your new words appended verbatim. If the direction changes completely, Codex starts a new task instead.
 - **Stop**: "Stop this Claude task." The report and changes already written are still collected.
 - **Wrap up**: when the task is done, you can say "This task is finished; delete Claude's copy." Changes, reports and Codex reviews are kept, but the task can no longer be continued.
 
-When Claude raises a question only you can decide, Codex passes it on verbatim instead of deciding for you.
+Codex answers Claude's questions itself when they fall within the authority you have already given. When a question involves core requirements, an acceptance conflict or a decision beyond that authority, Codex passes it on verbatim instead of deciding for you. Your answer goes to Claude word for word and is marked as yours. Claude stays paused while it waits for you.
+
+The task name is a short line Codex writes, and each round in the Workbench has a one-line description of what it does. Your original words are unaffected and still reach Claude verbatim. When continuing a task left from 1.0.x, its old title does not carry over: Codex should give a short title on the first continuation; without one, the new round shows the task ID.
 
 ## If something goes wrong
 
@@ -123,9 +128,11 @@ When Claude raises a question only you can decide, Codex passes it on verbatim i
 | The first startup hangs or times out | Ask Codex to inspect the startup error and confirm dependencies are ready. Avoid repeatedly starting Claude tasks. |
 | The plugin is installed, but Claude is unavailable | Ask Codex to check whether your local Claude Code is found, whether it lacks a required option, and whether it is signed in. If Claude Code was installed through nvm or similar and the desktop app cannot find it, see [pointing the plugin at Claude](install-and-recovery.md#first-time-preparation-both-paths). |
 | The copy cannot be created (submodules, sparse checkout, unresolved conflicts and similar) | Analysis tasks can switch to Read-only mode; implementation tasks need those repository states resolved first, and Codex explains why. |
-| A message says `sandbox-exec` is required | macOS write protection is not available on this machine. Analysis tasks can switch to Read-only mode; implementation tasks cannot run for now. |
+| A message says `sandbox-exec` is required | macOS write protection is not available here (not macOS, or Codex runs inside another sandbox). Every task needs it, so tasks cannot run for now. |
 | Tests in the copy are missing dependencies | Files ignored by `.gitignore` (such as `node_modules` or `.venv`) are not copied. If Claude may install dependencies over the network, say so explicitly in the request. |
-| The Workbench did not open | Ask "Open the Workbench for this task," or use the link Codex provides. Opening the page does not require rerunning the task. |
+| The Workbench did not open | It opens automatically only once per conversation. Ask "Open the Workbench," or use the link Codex provides. Opening the page does not require rerunning the task. |
+| The Workbench keeps showing "暂时连不上，正在重试" (cannot connect, retrying) | After Codex or the plugin restarts, the old page's link no longer works. Ask "Open the Workbench" in Codex, or use the new link in Codex's replies. After a brief disconnection, the page recovers by itself. |
+| The Workbench shows "Claude 在等回答" (waiting for an answer) | Claude is waiting for Codex to answer and the run is paused. Check whether Codex has passed the question on to you; answer in the Codex conversation. |
 | No recent activity appears | Ask Codex to check execution status. No new activity does not mean the task has stopped. |
 | You want to update or roll back | Follow the [version-switching steps](git-marketplace.md#change-a-fixed-ref-or-migrate-from-zip). A fixed ref (for example `v0.7.1`) does not automatically advance to another release. |
 | You have a ZIP file | Built installation packages and Git installation use separate paths. GitHub's "Download ZIP" is a source archive, not a built installer package. See [the two install paths](install-and-recovery.md#two-install-paths). |

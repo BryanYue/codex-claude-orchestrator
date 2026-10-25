@@ -376,12 +376,41 @@ def protected_command(argv: Sequence[str], metadata: dict[str, Any],
     tree, control parent, or the copy itself by renaming it.
     """
     if sys.platform != "darwin" or not Path("/usr/bin/sandbox-exec").is_file():
-        raise ProtectionUnavailable("The copy profile requires macOS sandbox-exec; use the readonly profile on this host")
+        raise ProtectionUnavailable("The copy profile requires macOS sandbox-exec to write-protect the original")
     if not argv or not argv[0] or not all(isinstance(item, str) for item in argv):
         raise CopyWorkspaceError("Command must be a non-empty argument array")
     trusted = load_copy(Path(metadata["metadata_path"]).parent)
     if trusted != metadata:
         raise CopyWorkspaceError("Command identity does not match persisted copy")
+    return _deny_command(argv, trusted["protected_paths"], extra_protected, writable_exceptions,
+                         owned_root=trusted["workspace_root"])
+
+
+def readonly_command(argv: Sequence[str], *, source_paths: Sequence[Path | str],
+                     extra_protected: Sequence[Path | str] = (),
+                     writable_exceptions: Sequence[Path | str] = ()) -> list[str]:
+    """Wrap a readonly-profile command: the source tree, its Git metadata and run state are write-denied.
+
+    The model keeps its native tools; this boundary, not a tool list, is what
+    keeps an analysis from changing the original.
+    """
+    if sys.platform != "darwin" or not Path("/usr/bin/sandbox-exec").is_file():
+        raise ProtectionUnavailable("The readonly profile requires macOS sandbox-exec to write-protect the source")
+    if not argv or not argv[0] or not all(isinstance(item, str) for item in argv):
+        raise CopyWorkspaceError("Command must be a non-empty argument array")
+    sources = []
+    for raw in source_paths:
+        if not Path(raw).is_absolute():
+            raise CopyWorkspaceError("Protected source paths must be absolute")
+        sources.append(str(_canonical(raw)))
+    if not sources:
+        raise CopyWorkspaceError("A readonly command needs at least one protected source path")
+    _validate_protected_trees([Path(raw) for raw in sources if Path(raw).is_dir()])
+    return _deny_command(argv, sorted(set(sources)), extra_protected, writable_exceptions, owned_root=None)
+
+
+def _deny_command(argv: Sequence[str], source_paths: Sequence[str], extra_protected: Sequence[Path | str],
+                  writable_exceptions: Sequence[Path | str], *, owned_root: str | None) -> list[str]:
     extra_paths: list[str] = []
     for raw in extra_protected:
         if not Path(raw).is_absolute():
@@ -397,7 +426,7 @@ def protected_command(argv: Sequence[str], metadata: dict[str, Any],
             raise CopyWorkspaceError("Writable exception must be an absolute, non-redirected path")
         if not any(_inside(path, Path(parent)) and path != Path(parent) for parent in extra_paths):
             raise CopyWorkspaceError("Writable exception must be strictly inside an additional protected directory")
-        if any(_inside(path, Path(item)) or _inside(Path(item), path) for item in trusted["protected_paths"]):
+        if any(_inside(path, Path(item)) or _inside(Path(item), path) for item in source_paths):
             raise CopyWorkspaceError("Writable exception overlaps original source or trusted identity")
         if path.exists() and not path.is_dir() and (not path.is_file() or path.stat().st_nlink != 1):
             raise CopyWorkspaceError("Writable file exception must be a non-hardlinked regular file")
@@ -408,15 +437,16 @@ def protected_command(argv: Sequence[str], metadata: dict[str, Any],
     _validate_protected_trees([Path(raw) for raw in extra_paths if Path(raw).is_dir()],
                               excluded_paths=[Path(raw) for _, raw in exceptions])
     filters: set[tuple[str, str]] = set()
-    for raw in trusted["protected_paths"] + extra_paths:
+    for raw in list(source_paths) + extra_paths:
         path = Path(raw)
         filters.add(("subpath", str(path)))
         # Parent rename/chmod would otherwise move a protected tree out of its
         # path filter. Literals deny changing parents without denying siblings.
         filters.update(("literal", str(parent)) for parent in path.parents if parent != Path("/"))
-    # Protect the owned root even when its descendants are writable; this also
-    # prevents post-run report capture or resume from following a replacement.
-    filters.add(("literal", trusted["workspace_root"]))
+    if owned_root is not None:
+        # Protect the owned root even when its descendants are writable; this also
+        # prevents post-run report capture or resume from following a replacement.
+        filters.add(("literal", owned_root))
     for kind, raw in exceptions:
         if kind == "subpath":
             filters.add(("literal", raw))
