@@ -151,7 +151,7 @@ Claude 会话照常加载用户与项目的 `CLAUDE.md`、`CLAUDE.local.md`、ru
 - **谁来回答**：Codex 在已有授权内能判断的直接回答；只有核心需求、验收冲突、超出授权或必须由用户拍板的事才转给用户，先回答不受影响的部分。
 - **回执**：命令、对应问题的状态和修订号在同一个事务里落盘。`delivery.state` 依次为 `queued`（已记录）→ `written`（整条已写入 CLI 的输入管道）→ `echoed`（CLI 回显，或把回答作为工具结果交给了会话）；`failed` 表示 run 在送达前结束。`echoed` 只说明送达，不说明 Claude 已理解或照做。
 - **幂等与并发**：`command_id` 由 Codex 生成且每条唯一。同一 `command_id` 同样内容重发，返回第一次的回执，run 结束后也能取回；内容不同会被拒绝。`expected_revision` 填读到的 `revision`；两个回答同时到达时只有一个生效，另一个收到“已回答”或“修订号过期”的错误。
-- **超时与结束**：等用户期间 Claude 一直暂停；到截止时间仍未回答就按超时结束，未回答的问题在结果里列为 `questions_unanswered`。插件让 CLI 报告会话状态（`CLAUDE_CODE_SDK_READS_SESSION_STATE=1`），在 CLI 报告 `idle`、没有排队或未送达的消息、没有待回答的问题时关闭输入，run 随之结束。CLI 在后台代理和 Workflow 结束、它们引出的后续回复结束之后才报告 `idle`。不报告会话状态的 CLI 则以本轮结果和插件记录的后台任务为准。Claude 收尾时仍在跑的后台命令，插件先用 `stop_task` 停掉（`background_commands_stopped` 警告），不让它们把 run 拖到截止时间。之后再要补充，用 `continue_from` 开下一轮。
+- **超时与结束**：等用户期间 Claude 一直暂停；到截止时间仍未回答就按超时结束，未回答的问题在结果里列为 `questions_unanswered`。插件让 CLI 报告会话状态（`CLAUDE_CODE_SDK_READS_SESSION_STATE=1`），在 CLI 报告 `idle`、没有排队或未送达的消息、没有待回答的问题时关闭输入，run 随之结束。CLI 在后台代理和 Workflow 结束、它们引出的后续回复结束之后才报告 `idle`。不报告会话状态的 CLI 则以本轮结果和插件记录的后台任务为准。CLI 在后台命令（Bash 后台、Monitor）还在跑时就报告 `idle`，它们结束后再起一轮回复读取结果；所以插件记录的后台命令未结束时 `idle` 不算结束，输入保持打开，直到它们结束、后续回复结束并再次 `idle`，或取消、截止。Claude 只剩不再需要的后台命令（如常驻服务）时，在 notes 文件写一行 `{"type": "final", "after": "<编号>"}`（after 是它读到的最新一条 Codex 补充/打断标题里的编号，恢复消息末尾写明的编号，或一条都没有时的 run_id），插件在下一次 `idle` 用 `stop_task` 停掉它们（`background_commands_stopped` 警告）再关闭输入；Codex 之后再写入任何消息，这个信号作废。之后再要补充，用 `continue_from` 开下一轮。
 - **非交互运行**：`interactive=false` 时没有实时通道，Claude 的提问被立即拒绝并提示写进 `questions`，授权请求被拒绝。1.0.x 开始的轮次同样没有实时通道，`claude_reply` 对它们报错。
 
 ### 结果

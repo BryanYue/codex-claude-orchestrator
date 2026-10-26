@@ -483,7 +483,10 @@ def supervise(run_dir: Path, command_for: Callable[[tuple[str, str]], list[str]]
         for message in messages:
             activity(run_dir, message["kind"], "Codex's message queued in the resumed session's first input",
                      status=message["origin"], text=str(message["payload"].get("text") or ""))
-        text = duplex.resumed_text(answered, messages, conversation.withdrawn)
+        # The resumed first message is the newest input of the next leg; a final line must name it.
+        identity = f"resume-{run_id}-{len(facts['legs'])}"
+        text = duplex.resumed_text(answered, messages, conversation.withdrawn, identity)
+        conversation.latest_input = identity
         conversation.withdrawn = []
         payload = user_line(text)
         written = conversation.expect_resume(text, [str(item["answer_command"]) for item in answered]
@@ -741,8 +744,8 @@ def _stream_warnings(packet: dict[str, Any], context: dict[str, Any], facts: dic
         warnings.append({"code": "resume_fallback", "detail": execution["resume_fallback"]})
     if execution.get("shells_stopped"):
         warnings.append({"code": "background_commands_stopped", "items": execution["shells_stopped"][:20],
-                         "detail": "Claude finished while background commands were still running; they were stopped "
-                                   "with the CLI's stop_task so the run could end"})
+                         "detail": "Claude declared its work final while background commands were still running; they "
+                                   "were stopped with the CLI's stop_task so the run could end"})
     turns = facts.get("turns") or []
     if final and len(turns) > 1 and any(turn.get("is_error") for turn in turns[:-1]):
         warnings.append({"code": "turn_interrupted", "detail": f"{sum(bool(t.get('is_error')) for t in turns[:-1])} earlier "

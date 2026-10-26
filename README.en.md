@@ -1,4 +1,6 @@
-# Codex–Claude Collaboration · 1.1.0
+# Codex–Claude Collaboration · 1.1.1
+
+This tree is the **1.1.1 candidate**, not yet released. Installation and native acceptance in the current Codex must finish first. The install commands below still target the published 1.1.0.
 
 [简体中文](README.md) · **English**
 

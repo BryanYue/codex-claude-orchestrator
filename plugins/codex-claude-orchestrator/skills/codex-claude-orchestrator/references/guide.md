@@ -78,7 +78,7 @@ Claude 用原生的 AskUserQuestion 提严重问题，插件把它记成待处�
 - `origin=coordinator` 是你自己的话；`origin=human` 只用于逐字转交的用户原话。Claude 看到的回答会标明来源。
 - `expected_revision` 填你读到的 `revision`。两个回答同时到达时只有一个生效，另一个收到“已回答”或“修订号过期”的错误。
 - 能在授权内判断的直接回答；只有核心需求、验收冲突、超出授权或必须用户拍板的事才转给用户。等用户期间 Claude 一直暂停，到截止时间仍未回答就按超时结束，未回答的问题在结果里列为 `questions_unanswered`。
-- 插件按 CLI 自己报告的会话状态关闭输入：CLI 报告 `idle`、没有排队或未送达的消息、没有待回答的问题时，关闭输入，run 随之结束。CLI 在后台代理或 Workflow 结束、它们引出的后续回复也结束之后才报告 `idle`，所以这些结果都会等到。后台命令不让 run 一直开着：Claude 收尾时仍在跑的后台命令，插件先用 `stop_task` 停掉再关闭输入，并给出 `background_commands_stopped` 警告。之后再要补充，用 `continue_from` 开下一轮。
+- 插件按 CLI 自己报告的会话状态关闭输入：CLI 报告 `idle`、没有排队或未送达的消息、没有待回答的问题时，关闭输入，run 随之结束。CLI 在后台代理或 Workflow 结束、它们引出的后续回复也结束之后才报告 `idle`，所以这些结果都会等到。后台命令（Bash 后台、Monitor）不同：CLI 在它们还在跑时就报告 `idle`，它们结束后 CLI 再起一轮回复来读取结果。所以只要插件记录的后台命令还在跑，`idle` 不算结束，输入保持打开，直到它们结束、之后的回复也结束并再次报告 `idle`；取消和截止时间照常结束 run。Claude 全部做完、只剩不再需要的后台命令（如常驻服务）时，在 notes 文件写一行 `{"type": "final", "after": "<编号>"}`（after 是它读到的最新一条 Codex 补充/打断标题里的编号，恢复消息末尾写明的编号，或一条都没有时的 run_id）；之后再次 `idle` 时，插件用 `stop_task` 停掉这些命令再关闭输入，并给出 `background_commands_stopped` 警告。Codex 此后再写入补充、带改向的打断或回答，先前的结束声明作废；不带正文的打断要求结束当前轮，CLI 成功确认后会清理仍运行的后台命令。若 Claude 忘记结束声明，插件会显示正在等待后台结果；Codex 可按任务授权用不带正文的打断结束当前轮，取消整个 run 仍用 `claude_cancel`。之后再要补充，用 `continue_from` 开下一轮。
 
 ## 6. 读结果
 
@@ -95,7 +95,7 @@ Claude 用原生的 AskUserQuestion 提严重问题，插件把它记成待处�
   - `carried_already_in_original`：上一轮尚未记录为已合入的改动其实已经原样在原仓库里；以后合入时记得写 `applied=true`。
   - `undelivered_files_now_ignored`：重新放上的待交付文件被原仓库新的忽略规则匹配；它们仍在 delivery.patch 里，确认是否还应交付。
   - `questions_unanswered`：run 结束时 Claude 的阻塞问题仍没有回答。
-  - `background_commands_stopped`：Claude 收尾时还有后台命令在跑，插件停掉了它们；核对它们的结果是否被需要。
+  - `background_commands_stopped`：Claude 声明完成（`final`）时还有后台命令在跑，插件停掉了它们；核对它们的结果是否被需要。
   - `turn_interrupted`：之前某一轮回复以错误或打断结束，最终结果取最后一轮。
   - `source_not_read`、`tool_denied`、`workflow_incomplete`、`report_missing`、`result_malformed` 等：核验时据此判断报告的可信度。
 - `interactions`：问答和说明的计数、未回答的问题、暂停记录；逐条内容在 `claude_status` 的 `interactions` 里。

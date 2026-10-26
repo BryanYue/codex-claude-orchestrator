@@ -75,7 +75,7 @@ bash scripts/launch.sh --prepare-dependencies
 
 ## 打开新任务，检查是否准备好
 
-安装和依赖准备完成后，**在 Codex 里打开你的项目，并新建一个任务**，让客户端加载插件。安装过程中已经打开的旧任务不会自动换成新工具。
+安装和依赖准备完成后，**在 Codex 里打开你的项目，并新建一个任务**。安装过程中已经打开的旧任务不会自动换成新工具。新建任务不一定会重新加载插件：Codex 可能继续用已经启动的插件进程。升级后先重启 Codex，再新建任务，让 Codex 用 `claude_environment`（`verify=false`）报告当前连接的 `plugin_version`；还是旧版本就再次完全退出并重启 Codex。
 
 发给 Codex：
 

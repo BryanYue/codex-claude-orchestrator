@@ -114,7 +114,7 @@ are four independent things to get ready, in this order:
 | --- | --- | --- |
 | `command -v uv` fails | uv is not installed | Install uv per the official instructions above |
 | `launch.sh --prepare-dependencies` fails on `uv sync` | Locked dependency resolution or download failed (network, index, disk) | Read the printed `uv sync` error; rerun after fixing it |
-| The MCP server does not come up within 120 s | A cold dependency download or another startup error | Run step 2, then open a new task. If preparation succeeds and startup still fails, read the actual server error; do not assume every timeout is a download problem |
+| The MCP server does not come up within 120 s | A cold dependency download or another startup error | Run step 2, restart Codex, then open a new task. If preparation succeeds and startup still fails, read the actual server error; do not assume every timeout is a download problem |
 | `claude_environment` status `cli_not_found` | No Claude executable is visible to the MCP process | Install Claude Code yourself, or set `CLAUDE_BIN` as in step 4 |
 | Status `cli_unavailable` | `claude --version` or `--help` failed | Check the installation and host execution permissions |
 | Status `cli_incompatible` | `--help` does not list an option dispatch needs (named in `missing_flags`) | Update your own Claude CLI; the plugin will not substitute another version |
@@ -123,7 +123,7 @@ are four independent things to get ready, in this order:
 | `sandbox.available` or `sandbox.works` is false, or starting a task says the profile needs a working `sandbox-exec` write boundary | No working macOS write protection on this host (not macOS, or `sandbox-exec` is refused, for example inside another sandbox) | No Claude task can run here. Neither profile falls back to instruction-only protection; use a macOS host where the check reports `sandbox.works` as true |
 | A run ends `not_started` saying the CLI did not start in native auto mode with a question channel | The CLI's initialization reported no native tools, no `AskUserQuestion` or a permission mode other than `auto` | Update your own Claude Code; the plugin does not fall back to `dontAsk` or a reduced tool set |
 | A run ends `not_started` with "copy preparation failed" | The repository has submodules, sparse/skip-worktree entries, an unresolved merge, Git alternates, links outside the repository, or the boundary scan timed out | Analysis tasks can use the read-only profile; for implementation, resolve that repository state first |
-| The old chat errors after a plugin switch, while a new task works | The old MCP process still refers to the removed installation | Use a new Codex task; do not infer the loaded version from the install inventory |
+| The old chat errors after a plugin switch, while a new task works | The old MCP process still refers to the removed installation | Restart Codex and open a new task; a new task alone can keep the old process. Confirm with `claude_environment` (`verify=false`) that `plugin_version` is the installed one; do not infer the loaded version from the install inventory |
 | A run ended as `lost` | Its supervising bridge exited without recording an outcome; the plugin stopped leftover Claude processes and collected what was written | Read the report and patch; once the process is confirmed stopped, decide or continue the run as usual |
 
 ## Upgrading from 1.0.x
@@ -166,7 +166,7 @@ What changes for existing work and setups:
   brief, not a removed tool.
 
 To roll back, use the same fixed-ref steps with `v1.0.1`, prepare its
-dependencies and open a new task. 1.0.x does not read the `v2` control store;
+dependencies, restart Codex, open a new task and confirm `plugin_version` with `claude_environment`. 1.0.x does not read the `v2` control store;
 decide runs started with 1.1 before rolling back, because 1.0.x reading or
 continuing them is not covered here.
 
@@ -210,7 +210,10 @@ What stays behind from 0.7.x:
   it; there is no project-level default.
 
 To roll back to `v0.7.1`, use the same fixed-ref steps with that tag, prepare
-its dependencies and open a new task. 1.0 does not modify the 0.7.x records;
+its dependencies, restart Codex and open a new task. Verify the installed ref and use
+the diagnostics that version actually exposes: 0.7.1 does not return the current
+`claude_environment(...).plugin_version` field, so do not claim that native
+version check passed on 0.7.1. 1.0 does not modify the 0.7.x records;
 0.7.1 does not see runs made by 1.0.
 
 ## Migrating from the local catalog to a Git source

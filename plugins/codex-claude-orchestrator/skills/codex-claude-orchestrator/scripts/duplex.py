@@ -24,10 +24,16 @@ pending.  CLI 2.1.310 holds ``idle`` back while a background agent or workflow
 is still running and reports it only after their follow-up turns, so a fresh
 idle is authoritative even when a task's own terminal event never arrived.
 Without session states, input closes once the turn's result arrived and no
-tracked background agent or workflow is in flight.
-Background shells do not hold the run open: the CLI would otherwise wait for
-them after its input ends, so shells Claude left running are stopped with
-``stop_task`` first and reported.
+tracked background task is in flight.
+Background shells (Bash ``run_in_background``, Monitor) differ: CLI 2.1.310
+reports ``idle`` while they still run, and their end wakes one more turn that
+consumes their output.  Idle with a shell still running is therefore not the
+end of the session; input stays open until every tracked shell has ended and a
+fresh idle follows.  Only Claude's structured ``{"type": "final"}`` notes line
+says shells still running are leftovers (a server, a watcher): after it, a
+fresh idle stops them with ``stop_task`` and closes input.  Any message Codex
+writes afterwards voids that line.  Cancellation and the deadline stop the run
+regardless.
 """
 from __future__ import annotations
 
@@ -48,6 +54,7 @@ TASK_DONE = frozenset({"completed", "failed", "error", "killed", "stopped", "can
 DEFERRING_TASK_TYPES = frozenset({"local_agent", "local_workflow"})
 SHELL_TASK_TYPES = frozenset({"local_bash"})
 NOTE_TYPES = ("note", "dispute")
+FINAL_TYPE = "final"
 NOTE_LIMIT = 4000
 NOTES_READ_LIMIT = 1024 * 1024
 STOP_TASK_CONFIRM_SECONDS = 15.0
@@ -93,7 +100,7 @@ def interrupt_text(command_id: str, origin: str, text: str) -> str:
 
 
 def resumed_text(answered: list[dict[str, Any]], messages: list[dict[str, Any]] | None = None,
-                 withdrawn: list[dict[str, Any]] | None = None) -> str:
+                 withdrawn: list[dict[str, Any]] | None = None, identity: str | None = None) -> str:
     """The resumed session's first message: answers, questions an interrupt withdrew, then Codex's messages in order."""
     messages, withdrawn = messages or [], withdrawn or []
     lines: list[str] = []
@@ -119,13 +126,15 @@ def resumed_text(answered: list[dict[str, Any]], messages: list[dict[str, Any]] 
             origin = str(command.get("origin"))
             lines.append("\n" + (update_text(command["command_id"], origin, text) if command.get("kind") == "update"
                                  else interrupt_text(command["command_id"], origin, text)))
+    mark = f"\n\n（这条恢复消息的编号：{identity}）" if identity else ""
     if not lines:
-        return "编排插件为暂停后台工作停止了上一段执行；等待的问题已被撤回或已处理。先检查工作目录和后台任务的当前状态，再继续原任务。"
+        return ("编排插件为暂停后台工作停止了上一段执行；等待的问题已被撤回或已处理。先检查工作目录和后台任务的当前状态，再继续原任务。"
+                + mark)
     lines.append("\n说明：等待回答期间，编排插件主动中断并停止了上一段执行，以暂停后台工作。会话里随后出现的"
                  "“用户不想继续这次工具调用、STOP”之类的提示和后台任务被停止的通知，都是这次暂停造成的，"
                  + ("哪些问题被撤回以上文为准。按上面的内容处理" if withdrawn else "不代表用户拒绝或撤回了问题。按上面的回答继续")
                  + "；被停止的后台工作需要的话重新启动，先检查工作目录的当前状态。")
-    return "\n".join(lines)
+    return "\n".join(lines) + mark
 
 
 class Conversation:
@@ -159,7 +168,17 @@ class Conversation:
         self.interrupts: dict[str, str] = {}
         self.stop_tasks: dict[str, str] = {}
         self.shell_stops: dict[str, str] = {}
+        # Shells the close stopped, kept until their terminal event whether the CLI's ack came first or not.
+        self.stopping_shells: set[str] = set()
         self.shells_stopped: list[str] = []
+        # Claude's structured final line names the latest Codex message it has read ("after": the command id in that
+        # message's header, or the run id before any).  Only a final naming the latest message Codex wrote counts, so
+        # the check does not depend on when the host happens to observe the CLI taking that message in.
+        self.finalized = False
+        self.latest_input = run_id
+        self.latest_command: str | None = None
+        self.bare_interrupts: set[str] = set()
+        self.background_wait_reported = False
         self.stop_deadline = 0.0
         self.stop_requested = False
         self.notes_offset = 0
@@ -182,9 +201,16 @@ class Conversation:
         self.idle_stale = False
         self.infrastructure = set()
         self.session_ready = False
+        self.background_wait_reported = False
+        self.latest_command = None
+        self._input_taken()
 
     def deferring_tasks(self) -> list[str]:
         return [task_id for task_id, (task_type, _) in self.tasks.items() if task_type not in SHELL_TASK_TYPES]
+
+    def _input_taken(self) -> None:
+        """New Codex input voids a final line read so far; only a final naming that input counts again."""
+        self.finalized = False
 
     def _send(self, value: dict[str, Any], on_written: Any = None) -> bool:
         return self.transport is not None and bool(
@@ -238,9 +264,16 @@ class Conversation:
 
     def _task_ended(self, task_id: str) -> None:
         ended = self.tasks.pop(task_id, None)
-        if ended is not None and ended[0] not in SHELL_TASK_TYPES and self.session_state == "idle":
-            # An agent or workflow ending can start one more turn; only the CLI's next idle says the session is done.
+        if task_id in self.stopping_shells:
+            # Stopped by the close below: no follow-up turn is owed for a shell Claude declared a leftover.
+            self.stopping_shells.discard(task_id)
+            return
+        if ended is not None and self.session_state == "idle":
+            # Any background task ending can start one more turn; only the CLI's next idle says the session is done.
             self.idle_stale = True
+        elif ended is not None and self.session_state is None and not self.awaiting_result:
+            # Without session states only the follow-up turn's result says that turn is done.
+            self.awaiting_result = True
 
     def _init(self, event: dict[str, Any]) -> None:
         self.inits += 1
@@ -335,6 +368,15 @@ class Conversation:
                          status="stop_task_refused", text=task_id)
             return
         command_id = self.interrupts.pop(request_id, None)
+        if command_id and request_id in self.bare_interrupts and command_id == self.latest_command:
+            if response.get("subtype") == "success":
+                # Only the latest bare interrupt can end the current work.
+                self.finalized = True
+            else:
+                # This control request has no user-message header: Claude never saw its command id.
+                activity(self.run_dir, "interrupt", "the CLI refused the interrupt; the previous input remains current",
+                         status="refused", text=_short(response.get("error") or "interrupt refused"))
+        self.bare_interrupts.discard(request_id)
         if command_id and command_id not in self.update_texts.values():
             self.in_flight.pop(command_id, None)
             self.store.mark_delivery(self.run_id, command_id, "echoed",
@@ -482,6 +524,13 @@ class Conversation:
 
     def _deliver(self, command: dict[str, Any]) -> None:
         command_id, payload, origin = command["command_id"], command["payload"], command["origin"]
+        if command["kind"] == "answer":
+            self._read_notes_before_answer()
+        # New input reopens the work Claude declared finished; only a final naming the newest message counts again.
+        self._input_taken()
+        self.latest_command = command_id
+        if command["kind"] == "update" or (command["kind"] == "interrupt" and str(payload.get("text") or "").strip()):
+            self.latest_input = command_id
         if command["kind"] == "update":
             text = update_text(command_id, origin, payload["text"])
             self.sending.add(command_id)
@@ -497,9 +546,11 @@ class Conversation:
             raw_follow = str(payload.get("text") or "")
             follow = raw_follow if raw_follow.strip() else ""
             frames = [{"type": "control_request", "request_id": request_id, "request": {"subtype": "interrupt"}}]
+            if not follow:
+                self.bare_interrupts.add(request_id)
             if follow:
                 # The redirect is the interrupted session's next message; its replay is the delivery evidence.
-                text = update_text(command_id, origin, follow)
+                text = interrupt_text(command_id, origin, follow)
                 frames.append({"type": "user", "message": {"role": "user", "content": text}})
                 self.update_texts[text] = command_id
                 self.awaiting_result = True
@@ -551,7 +602,7 @@ class Conversation:
         if not self.transport.flushed:
             return
         if self.session_state is None:
-            if self.awaiting_result or self.deferring_tasks():
+            if self.awaiting_result or self.deferring_tasks() or (self.tasks and not self.finalized):
                 return
         elif self.session_state != "idle" or self.idle_stale:
             return
@@ -562,15 +613,24 @@ class Conversation:
             return
         if self.shell_stops:
             return
-        shells = [task_id for task_id in self.tasks if task_id not in self.shell_stops.values()]
+        if self.tasks and not self.finalized:
+            # A background shell still running: CLI idle does not wait for it, but its end wakes the turn that
+            # reads its output.  Stopping it here would drop the result Claude is waiting for.
+            if not self.background_wait_reported:
+                activity(self.run_dir, "turn", "Claude is idle while background commands are still running; waiting for their results",
+                         status="waiting_background")
+                self.background_wait_reported = True
+            return
+        shells = [task_id for task_id in self.tasks if task_id not in self.stopping_shells]
         if shells:
             for task_id in shells:
                 request_id = f"stop-shell-{task_id}"
                 if self._send({"type": "control_request", "request_id": request_id,
                                "request": {"subtype": "stop_task", "task_id": task_id}}):
                     self.shell_stops[request_id] = task_id
+                    self.stopping_shells.add(task_id)
                     self.shells_stopped.append(self.tasks[task_id][1] or task_id)
-            activity(self.run_dir, "turn", "stopping background commands Claude left running before closing its input",
+            activity(self.run_dir, "turn", "stopping background commands Claude declared leftovers before closing its input",
                      status="stop_task", text="; ".join(self.shells_stopped[-len(shells):])[:400])
             return
         if self.store.set_state(self.run_id, "closing", expect=("running",)):
@@ -617,6 +677,24 @@ class Conversation:
             if raw.strip():
                 self._note(raw)
 
+    def _read_notes_before_answer(self) -> None:
+        """Read the existing backlog before unblocking the CLI; an old final must not survive in a later chunk."""
+        if self.notes_path is None:
+            return
+        try:
+            info = self.notes_path.stat(follow_symlinks=False)
+        except OSError:
+            return
+        if not stat.S_ISREG(info.st_mode):
+            return
+        # The CLI is blocked on its control request and its other processes are held.  Bound this drain to the
+        # bytes already present, retaining the per-read memory limit and stopping on a partial line or read error.
+        while self.notes_offset < info.st_size:
+            previous = self.notes_offset
+            self._read_notes()
+            if self.notes_offset <= previous:
+                break
+
     def _note(self, raw: bytes) -> None:
         try:
             note = json.loads(raw.decode("utf-8"))
@@ -625,6 +703,15 @@ class Conversation:
                 text.encode("utf-8")
         except (ValueError, UnicodeError):
             activity(self.run_dir, "note", "ignored a notes line that is not valid UTF-8 JSON", status="invalid")
+            return
+        if isinstance(note, dict) and note.get("type") == FINAL_TYPE:
+            if note.get("after") != self.latest_input:
+                activity(self.run_dir, "note", "ignored a final line that does not name Codex's latest message",
+                         status="stale", text=_short(note.get("after"), 80))
+                return
+            self.finalized = True
+            activity(self.run_dir, "note", "Claude declared its work final; background commands still running are leftovers",
+                     status="final")
             return
         if not isinstance(note, dict) or note.get("type") not in NOTE_TYPES or not isinstance(text, str) or not text.strip():
             activity(self.run_dir, "note", "ignored a notes line without type note|dispute and text", status="invalid")

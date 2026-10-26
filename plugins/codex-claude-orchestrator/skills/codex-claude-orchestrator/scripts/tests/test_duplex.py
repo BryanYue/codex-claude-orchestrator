@@ -441,6 +441,9 @@ class DuplexTests(unittest.TestCase):
         facts = self.finish()
         self.assertEqual(self.probe("interrupts.jsonl"), [{"interrupted": True}])
         self.assertIn(redirect, self.probe("turns.jsonl")[0]["content"])
+        # Live and resumed redirects carry the same interrupt label, so Claude does not read the CLI's generic
+        # interruption as a human cancelling the run.
+        self.assertTrue(self.probe("turns.jsonl")[0]["content"].startswith("【Codex 打断 · Codex 协调者 · int-1】\n"))
         parsed = bridge.stream_parser.parse_stream(self.run_dir / "stream.jsonl")
         self.assertEqual([turn["subtype"] for turn in parsed["turns"]], ["error_during_execution", "success"])
         self.assertEqual(parsed["inits"], 2)
@@ -495,18 +498,331 @@ class DuplexTests(unittest.TestCase):
         self.assertEqual(turns, ["Claude finished a turn", "Claude finished a turn",
                                  "no further input is pending; closing Claude's input"])
 
-    def test_a_background_shell_does_not_hold_input_open_after_the_turn(self):
-        started = time.monotonic()
+    def test_a_background_shell_still_running_at_idle_keeps_input_open_for_its_follow_up_turn(self):
+        # BG_IDLE_EARLY_CLOSE: CLI 2.1.310 reports idle while a Bash/Monitor task runs; its end wakes the turn
+        # that reads its output.  The old close stopped the shell at that idle and the follow-up turn never came.
         self.start({"bg_task": "sh-2", "type": "local_bash"}, {"ask": "Proceed?"},
-                   {"bg_later": "sh-2", "delay": 30, "turn": False}, timeout=60)
+                   {"bg_later": "sh-2", "delay": 2}, timeout=60)
         question = self.pending()[0]
-        self.store.submit(self.run_dir.name, "cmd-stop", "answer", {"text": "yes"}, "coordinator",
+        self.store.submit(self.run_dir.name, "cmd-go", "answer", {"text": "yes"}, "coordinator",
                           interaction_id=question["interaction_id"])
+        facts = self.finish(timeout=30)
+        self.assertEqual(facts["legs"][0]["reason"], "exited")
+        self.assertNotIn("shells_stopped", facts)
+        events = [json.loads(line) for line in (self.run_dir / "activity.jsonl").read_text().splitlines()]
+        turns = [event["summary"] for event in events if event["kind"] == "turn"
+                 and event.get("status") != "waiting_background"]
+        self.assertEqual(turns, ["Claude finished a turn", "Claude finished a turn",
+                                 "no further input is pending; closing Claude's input"])
+        self.assertFalse(any(event.get("status") == "stop_task" and event["kind"] == "turn" for event in events))
+
+    def test_idle_seen_before_a_shell_ends_is_stale_until_the_next_idle(self):
+        conversation = duplex.Conversation(self.run_dir, self.store, self.run_dir.name, interactive=True, notes_path=None)
+        conversation.on_event({"type": "system", "subtype": "task_started", "task_id": "sh", "task_type": "local_bash"})
+        conversation.on_event({"type": "system", "subtype": "session_state_changed", "state": "idle"})
+        conversation.on_event({"type": "system", "subtype": "task_notification", "task_id": "sh", "status": "completed"})
+        self.assertEqual(conversation.tasks, {})
+        self.assertTrue(conversation.idle_stale, "the shell's end wakes one more turn; the earlier idle is not final")
+        conversation.on_event({"type": "system", "subtype": "session_state_changed", "state": "running"})
+        conversation.on_event({"type": "system", "subtype": "session_state_changed", "state": "idle"})
+        self.assertFalse(conversation.idle_stale)
+
+    def test_a_shell_ending_inside_a_running_turn_does_not_wait_for_another_idle(self):
+        conversation = duplex.Conversation(self.run_dir, self.store, self.run_dir.name, interactive=True, notes_path=None)
+        conversation.on_event({"type": "system", "subtype": "session_state_changed", "state": "running"})
+        conversation.on_event({"type": "system", "subtype": "task_started", "task_id": "sh", "task_type": "local_bash"})
+        conversation.on_event({"type": "system", "subtype": "task_updated", "task_id": "sh", "patch": {"status": "killed"}})
+        conversation.on_event({"type": "system", "subtype": "session_state_changed", "state": "idle"})
+        self.assertEqual(conversation.tasks, {})
+        self.assertFalse(conversation.idle_stale)
+
+    def test_a_shell_that_never_ends_holds_input_until_the_deadline(self):
+        started = time.monotonic()
+        self.start({"bg_task": "sh-3", "type": "local_bash"}, {"bg_later": "sh-3", "delay": 30}, timeout=3)
+        facts = self.finish(timeout=30)
+        self.assertGreaterEqual(time.monotonic() - started, 2.5)
+        self.assertTrue(facts["timed_out"])
+
+    def test_a_final_line_lets_a_leftover_service_be_stopped_without_waiting(self):
+        started = time.monotonic()
+        self.start({"bg_task": "svc", "type": "local_bash"}, {"note": {"type": "final", "after": "run-duplextest01"}}, {"sleep": .5},
+                   {"bg_later": "svc", "delay": 30, "turn": False}, timeout=60)
         self.until(lambda: self.store.run(self.run_dir.name)["state"] == "closing", timeout=10, message="input to close")
-        self.assertLess(time.monotonic() - started, 10, "a running background shell must not keep the run open")
+        self.assertLess(time.monotonic() - started, 10, "a declared leftover must not keep the run open")
         facts = self.finish(timeout=20)
         self.assertEqual(facts["legs"][0]["reason"], "exited")
         self.assertEqual(facts["shells_stopped"], ["background"])
+        self.assertEqual(self.store.interactions(self.run_dir.name), [], "final is a signal, not a note for Codex")
+
+    def test_an_update_after_final_voids_it(self):
+        conversation = duplex.Conversation(self.run_dir, self.store, self.run_dir.name, interactive=True, notes_path=None)
+        conversation.transport = type("T", (), {"send": lambda self, data, cb=None: True, "flushed": True})()
+        conversation._note(b'{"type": "final", "after": "run-duplextest01"}')
+        self.assertTrue(conversation.finalized)
+        conversation._deliver({"command_id": "cmd-u", "kind": "update", "payload": {"text": "one more"},
+                               "origin": "coordinator"})
+        self.assertFalse(conversation.finalized)
+
+    def live(self):
+        """A Conversation on a recording transport; frames it writes are kept in sent."""
+        conversation = duplex.Conversation(self.run_dir, self.store, self.run_dir.name, interactive=True,
+                                           notes_path=self.notes)
+        sent, closed = [], []
+
+        class Transport:
+            flushed = True
+
+            def send(self, data, on_written=None):
+                sent.append(json.loads(data))
+                if on_written:
+                    on_written(True, len(data))
+                return True
+
+            def finish_input(self):
+                closed.append(True)
+
+        transport = Transport()
+        conversation.transport = transport
+        conversation.results = 1
+        conversation.awaiting_result = False
+        return conversation, sent, closed
+
+    def append_note(self, value):
+        with self.notes.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(value) + "\n")
+
+    def shell_stops_sent(self, sent):
+        return [frame["request"]["task_id"] for frame in sent
+                if frame.get("type") == "control_request" and frame["request"].get("subtype") == "stop_task"]
+
+    def test_without_session_states_a_final_line_still_stops_a_leftover_shell(self):
+        conversation, sent, closed = self.live()
+        conversation.on_event({"type": "system", "subtype": "task_started", "task_id": "svc", "task_type": "local_bash"})
+        conversation.pump()
+        self.assertEqual(self.shell_stops_sent(sent), [], "a running shell is waited for without a final line")
+        self.append_note({"type": "final", "after": self.run_dir.name})
+        conversation.pump()
+        self.assertEqual(self.shell_stops_sent(sent), ["svc"])
+
+    def test_without_session_states_a_shell_ending_after_the_result_waits_for_the_follow_up_result(self):
+        conversation, sent, closed = self.live()
+        conversation.on_event({"type": "system", "subtype": "task_started", "task_id": "sh", "task_type": "local_bash"})
+        conversation.on_event({"type": "system", "subtype": "task_notification", "task_id": "sh", "status": "completed"})
+        conversation.pump()
+        self.assertEqual(closed, [], "the shell's follow-up turn has not produced its result yet")
+        conversation.on_event({"type": "result", "subtype": "success"})
+        conversation.pump()
+        self.assertEqual(closed, [True])
+
+    def update_and_replay(self, conversation, sent, command_id, *, replay=True):
+        self.store.submit(self.run_dir.name, command_id, "update", {"text": "one more"}, "coordinator")
+        conversation.pump()
+        update = [frame for frame in sent if frame.get("type") == "user"][-1]
+        return {"type": "user", "isReplay": True, "message": {"content": update["message"]["content"]}}
+
+    def test_a_final_naming_an_older_message_is_stale_even_if_read_late(self):
+        conversation, sent, closed = self.live()
+        conversation.session_state = "idle"
+        conversation.on_event({"type": "system", "subtype": "task_started", "task_id": "svc", "task_type": "local_bash"})
+        replay = self.update_and_replay(conversation, sent, "upd-1")
+        self.append_note({"type": "final", "after": self.run_dir.name})  # old turn, before it saw upd-1
+        conversation.on_event(replay)
+        conversation.on_event({"type": "result", "subtype": "success"})
+        conversation.on_event({"type": "system", "subtype": "session_state_changed", "state": "idle"})
+        conversation.pump()
+        self.assertFalse(conversation.finalized)
+        self.assertEqual(self.shell_stops_sent(sent), [])
+        self.append_note({"type": "final", "after": "upd-1"})
+        conversation.pump()
+        self.assertEqual(self.shell_stops_sent(sent), ["svc"])
+
+    def test_a_final_for_the_new_message_counts_even_before_the_host_sees_its_replay(self):
+        # R1 counterexample A: the CLI replayed the update and Claude wrote its final before the host drained the
+        # replay; a notes-size floor taken at replay time rejected this legitimate final.
+        conversation, sent, closed = self.live()
+        conversation.session_state = "idle"
+        conversation.on_event({"type": "system", "subtype": "task_started", "task_id": "svc", "task_type": "local_bash"})
+        replay = self.update_and_replay(conversation, sent, "upd-2")
+        self.append_note({"type": "final", "after": "upd-2"})
+        conversation.pump()
+        conversation.on_event(replay)
+        conversation.on_event({"type": "result", "subtype": "success"})
+        conversation.on_event({"type": "system", "subtype": "session_state_changed", "state": "idle"})
+        conversation.pump()
+        self.assertTrue(conversation.finalized)
+        self.assertEqual(self.shell_stops_sent(sent), ["svc"])
+
+    def test_a_late_bare_interrupt_ack_does_not_end_a_newer_update(self):
+        # R1 counterexample B.
+        conversation, sent, closed = self.live()
+        conversation.session_state = "idle"
+        conversation.on_event({"type": "system", "subtype": "task_started", "task_id": "mon", "task_type": "local_bash"})
+        self.store.submit(self.run_dir.name, "int-old", "interrupt", {"text": ""}, "coordinator")
+        conversation.pump()
+        request_id = next(frame["request_id"] for frame in sent if frame["request"].get("subtype") == "interrupt")
+        replay = self.update_and_replay(conversation, sent, "upd-3")
+        conversation.on_event(replay)
+        conversation.on_event({"type": "control_response", "response": {"subtype": "success", "request_id": request_id}})
+        conversation.on_event({"type": "result", "subtype": "success"})
+        conversation.on_event({"type": "system", "subtype": "session_state_changed", "state": "idle"})
+        conversation.pump()
+        self.assertFalse(conversation.finalized)
+        self.assertEqual(self.shell_stops_sent(sent), [])
+
+    def test_an_unread_final_from_the_previous_leg_is_stale_after_the_resumed_message(self):
+        conversation, sent, closed = self.live()
+        self.append_note({"type": "final", "after": self.run_dir.name})  # written by the stopped leg, not yet read
+        text = duplex.resumed_text([], [], [], "resume-x-1")
+        self.assertTrue(text.endswith("（这条恢复消息的编号：resume-x-1）"))
+        conversation.latest_input = "resume-x-1"  # what the bridge sets with the resumed first message
+        conversation.attach(conversation.transport, 0, None)
+        conversation.pump()
+        self.assertFalse(conversation.finalized)
+        self.append_note({"type": "final", "after": "resume-x-1"})
+        conversation.pump()
+        self.assertTrue(conversation.finalized)
+
+    def test_a_refused_bare_interrupt_keeps_the_input_id_claude_already_knows(self):
+        conversation, sent, closed = self.live()
+        conversation.session_state = "idle"
+        conversation.on_event({"type": "system", "subtype": "task_started", "task_id": "svc", "task_type": "local_bash"})
+        self.store.submit(self.run_dir.name, "int-refused", "interrupt", {"text": ""}, "coordinator")
+        conversation.pump()
+        request_id = next(frame["request_id"] for frame in sent if frame.get("request", {}).get("subtype") == "interrupt")
+        conversation.on_event({"type": "control_response", "response": {
+            "subtype": "error", "request_id": request_id, "error": "cannot interrupt"}})
+        self.assertEqual(conversation.latest_input, self.run_dir.name)
+        self.assertFalse(conversation.finalized)
+        self.append_note({"type": "final", "after": self.run_dir.name})
+        conversation.pump()
+        self.assertTrue(conversation.finalized)
+        self.assertEqual(self.shell_stops_sent(sent), ["svc"])
+
+    def test_waiting_for_background_results_is_reported_without_repeating_every_pump(self):
+        conversation, sent, closed = self.live()
+        conversation.session_state = "idle"
+        conversation.on_event({"type": "system", "subtype": "task_started", "task_id": "mon", "task_type": "local_bash"})
+        for _ in range(3):
+            conversation.pump()
+        activity_path = self.run_dir / "activity.jsonl"
+        records = [json.loads(line) for line in activity_path.read_text().splitlines()]
+        self.assertEqual(sum(item.get("status") == "waiting_background" for item in records), 1)
+        self.assertEqual(self.shell_stops_sent(sent), [])
+        self.assertFalse(closed)
+
+    def test_two_refused_bare_interrupts_never_replace_the_visible_input_id(self):
+        conversation, sent, closed = self.live()
+        for command_id in ("stop-a", "stop-b"):
+            self.store.submit(self.run_dir.name, command_id, "interrupt", {"text": ""}, "coordinator")
+            conversation.pump()
+        requests = [frame["request_id"] for frame in sent if frame.get("request", {}).get("subtype") == "interrupt"]
+        for request_id in requests:
+            conversation.on_event({"type": "control_response", "response": {
+                "subtype": "error", "request_id": request_id, "error": "cannot interrupt"}})
+        self.assertEqual(conversation.latest_input, self.run_dir.name)
+        self.append_note({"type": "final", "after": self.run_dir.name})
+        conversation.pump()
+        self.assertTrue(conversation.finalized)
+
+    def test_a_bare_interrupt_ack_after_an_answer_does_not_finalize_that_answer(self):
+        conversation, sent, closed = self.live()
+        conversation.on_event({"type": "control_request", "request_id": "q1", "request": {
+            "subtype": "can_use_tool", "tool_name": "AskUserQuestion", "tool_use_id": "tu1",
+            "input": {"questions": [{"question": "Go?"}]}}})
+        self.store.submit(self.run_dir.name, "old-stop", "interrupt", {"text": ""}, "coordinator")
+        conversation.pump()
+        request_id = next(frame["request_id"] for frame in sent if frame.get("request", {}).get("subtype") == "interrupt")
+        question = self.pending()[0]
+        self.store.submit(self.run_dir.name, "new-answer", "answer", {"text": "yes"}, "coordinator",
+                          interaction_id=question["interaction_id"])
+        conversation.pump()
+        conversation.on_event({"type": "control_response", "response": {"subtype": "success", "request_id": request_id}})
+        self.assertFalse(conversation.finalized)
+
+    def test_a_final_written_before_a_question_is_voided_by_the_answer(self):
+        # Pump reads notes before it delivers queued answers, so a final already on disk is read and then voided.
+        conversation, sent, closed = self.live()
+        conversation.on_event({"type": "control_request", "request_id": "q1", "request": {
+            "subtype": "can_use_tool", "tool_name": "AskUserQuestion", "tool_use_id": "tu1",
+            "input": {"questions": [{"question": "Go?"}]}}})
+        self.append_note({"type": "final", "after": self.run_dir.name})
+        question = self.pending()[0]
+        self.store.submit(self.run_dir.name, "ans-1", "answer", {"text": "yes"}, "coordinator",
+                          interaction_id=question["interaction_id"])
+        conversation.pump()
+        self.assertFalse(conversation.finalized)
+
+    def test_an_answer_voids_a_final_beyond_the_first_notes_chunk(self):
+        conversation, sent, closed = self.live()
+        conversation.session_state = "idle"
+        conversation.on_event({"type": "system", "subtype": "task_started", "task_id": "mon", "task_type": "local_bash"})
+        conversation.on_event({"type": "control_request", "request_id": "q1", "request": {
+            "subtype": "can_use_tool", "tool_name": "AskUserQuestion", "tool_use_id": "tu1",
+            "input": {"questions": [{"question": "Go?"}]}}})
+        line = json.dumps({"type": "note", "text": "x" * 4000}) + "\n"
+        backlog = line * (duplex.NOTES_READ_LIMIT // len(line) + 1)
+        self.notes.write_text(backlog + json.dumps({"type": "final", "after": self.run_dir.name}) + "\n")
+        question = self.pending()[0]
+        self.store.submit(self.run_dir.name, "ans-backlog", "answer", {"text": "yes"}, "coordinator",
+                          interaction_id=question["interaction_id"])
+        conversation.pump()
+        conversation.on_event({"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "tu1", "content": "yes"}]}})
+        conversation.on_event({"type": "result", "subtype": "success"})
+        conversation.on_event({"type": "system", "subtype": "session_state_changed", "state": "idle"})
+        conversation.pump()
+        self.assertFalse(conversation.finalized)
+        self.assertEqual(self.shell_stops_sent(sent), [])
+        self.assertFalse(closed)
+        self.append_note({"type": "final", "after": self.run_dir.name})
+        conversation.pump()
+        self.assertEqual(self.shell_stops_sent(sent), ["mon"], "a new final after the answer still permits cleanup")
+
+    def test_a_final_line_without_the_message_id_is_ignored(self):
+        conversation, sent, closed = self.live()
+        self.append_note({"type": "final"})
+        conversation.pump()
+        self.assertFalse(conversation.finalized)
+
+    def test_a_new_leg_does_not_inherit_the_previous_final_line(self):
+        conversation, sent, closed = self.live()
+        self.append_note({"type": "final", "after": self.run_dir.name})
+        conversation.pump()
+        self.assertTrue(conversation.finalized)
+        conversation.attach(conversation.transport, 0, None)
+        self.assertFalse(conversation.finalized)
+
+    def test_a_bare_interrupt_while_waiting_for_a_shell_stops_it_and_closes(self):
+        conversation, sent, closed = self.live()
+        conversation.session_state = "idle"
+        conversation.on_event({"type": "system", "subtype": "task_started", "task_id": "mon", "task_type": "local_bash"})
+        self.store.submit(self.run_dir.name, "int-bare", "interrupt", {"text": ""}, "coordinator")
+        conversation.pump()
+        request_id = next(frame["request_id"] for frame in sent if frame["request"].get("subtype") == "interrupt")
+        conversation.on_event({"type": "control_response", "response": {"subtype": "success", "request_id": request_id}})
+        conversation.on_event({"type": "result", "subtype": "error_during_execution"})
+        conversation.on_event({"type": "system", "subtype": "session_state_changed", "state": "idle"})
+        conversation.pump()
+        self.assertEqual(self.shell_stops_sent(sent), ["mon"])
+
+    def test_a_declared_leftover_stop_never_waits_for_a_follow_up_turn_in_either_order(self):
+        for ack_first in (True, False):
+            with self.subTest(ack_first=ack_first):
+                conversation, sent, closed = self.live()
+                conversation.session_state = "idle"
+                conversation.on_event({"type": "system", "subtype": "task_started", "task_id": "svc", "task_type": "local_bash"})
+                conversation.finalized = True
+                conversation.pump()
+                request_id = next(frame["request_id"] for frame in sent if frame["request"].get("subtype") == "stop_task")
+                ack = {"type": "control_response", "response": {"subtype": "success", "request_id": request_id}}
+                terminal = {"type": "system", "subtype": "task_notification", "task_id": "svc", "status": "stopped"}
+                for event in ((ack, terminal) if ack_first else (terminal, ack)):
+                    conversation.on_event(event)
+                self.assertFalse(conversation.idle_stale)
+                self.store.set_state(self.run_dir.name, "running", expect=("closing",))
+                conversation.pump()
+                self.assertEqual(closed, [True])
+                self.assertEqual(self.shell_stops_sent(sent), ["svc"], "the shell is stopped once")
 
     def test_a_question_after_input_closed_creates_no_hold(self):
         conversation = duplex.Conversation(self.run_dir, self.store, self.run_dir.name, interactive=True, notes_path=None)

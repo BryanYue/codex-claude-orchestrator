@@ -98,10 +98,17 @@ def _channel(packet: dict[str, Any], plan: dict[str, Any]) -> list[str]:
     note_line = (f"- 不影响继续工作的说明或异议：向 `{notes}` 追加一行 JSON，例如 "
                  '`{"type": "note", "text": "…", "scope": "…"}` 或 `{"type": "dispute", "text": "…"}`。'
                  "写完立即继续，不等回复；插件会马上登记并转给 Codex。") if notes else None
+    final_line = (f"- 全部工作完成、只剩不再需要的后台命令（如常驻服务）时，向 `{notes}` 追加一行 "
+                  f'`{{"type": "final", "after": "…"}}`。按最近收到的顶层消息取 after：恢复消息用末尾明确写出的编号，'
+                  "它优先于恢复正文内嵌的旧补充/打断编号；恢复之后又收到的【Codex 补充】或【Codex 打断】用新标题末尾编号。"
+                  f"没有这些消息时填 `{plan['run_id']}`。插件随后停止这些命令并结束本次执行，"
+                  "停止不算作测试或构建通过。之后收到新的消息就继续处理，需要时按新编号再写一次。") if notes else None
+    background = ["- 需要后台命令、Workflow 或子代理的结果时，等它们结束并核实后再收尾。仍在运行的后台命令（Bash 后台、Monitor）"
+                  "会让插件继续等它们结束；它们结束后你会收到通知并继续这一轮。", *([final_line] if final_line else [])]
     if not packet.get("interactive", True):
         return ["## 与 Codex 的沟通", "",
                 "- 本次没有实时沟通通道：需要用户决定的事写进 questions，异议写进 disputes，按能独立推进的部分继续。",
-                *([note_line] if note_line else []), ""]
+                *([note_line] if note_line else []), *background, ""]
     return ["## 与 Codex 的沟通", "",
             "Codex 在任务运行中可以回答你的问题和补充信息。普通实现选择你自己决定，不要为了确认而停下。",
             "- 严重问题（不先确认就会做错、与用户原话或验收冲突、超出授权）：用 AskUserQuestion 提问，问题写清楚可选方案。"
@@ -112,8 +119,7 @@ def _channel(packet: dict[str, Any], plan: dict[str, Any]) -> list[str]:
             *([note_line] if note_line else []),
             "- 运行中可能收到以【Codex 补充】开头的新消息：结合当前进度继续；与原任务冲突时写进 disputes。",
             "- 只有用户能决定、又不影响当前工作的事，仍写进 result 的 questions。",
-            "- 需要后台命令、Workflow 或子代理的结果时，等它们结束并核实后再收尾。你收尾时仍在运行的后台命令会被插件停止，"
-            "停止不算作测试或构建通过。", ""]
+            *background, ""]
 
 
 def _task(packet: dict[str, Any], plan: dict[str, Any]) -> list[str]:

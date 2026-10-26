@@ -49,7 +49,7 @@ async def lifespan(_: Any):
 
 
 mcp = MCPServer(
-    "claude-orchestrator", version="1.1.0", lifespan=lifespan,
+    "claude-orchestrator", version="1.1.1", lifespan=lifespan,
     instructions=("Delegate implement or analyze tasks to the local Claude CLI. Read the bundled "
                   "codex-claude-orchestrator skill first. Copy the user's words verbatim into user_messages and label "
                   "everything Codex adds with origin=coordinator. Pass the same context={chat} on every call of one "

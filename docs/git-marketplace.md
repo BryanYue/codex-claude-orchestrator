@@ -71,7 +71,9 @@ bash /path/from-market-inventory/plugins/codex-claude-orchestrator/scripts/launc
 ```
 
 A checkout of the same fixed ref prepares the same per-version environment.
-Then open a new Codex task. Follow
+Then restart Codex, open a new task and confirm with `claude_environment`
+(`verify=false`) that the reported `plugin_version` is the installed one; a new
+task alone can keep the old MCP process. Follow
 [install-and-recovery.md](install-and-recovery.md#first-time-preparation-both-paths)
 for local Claude CLI discovery and authentication; the plugin uses your own
 Claude CLI and never downloads or switches one. Registration alone does not
@@ -104,8 +106,9 @@ and restore the recorded source before retrying. Do not remove any other
 marketplace. The full recovery procedure is in
 [install-and-recovery.md](install-and-recovery.md#migrating-from-the-local-catalog-to-a-git-source).
 After switching, prepare dependencies for the new version (each full plugin
-version has its own environment) and open a new Codex task; an existing MCP
-process keeps the code it loaded.
+version has its own environment), restart Codex and open a new task, then
+confirm `plugin_version` with `claude_environment`; an existing MCP process
+keeps the code it loaded, and a new task alone does not guarantee a new one.
 
 For rollback, use the same sequence with the previously verified ref, for
 example `v1.0.1`. For recovery to a prior ZIP catalog, add its recorded local

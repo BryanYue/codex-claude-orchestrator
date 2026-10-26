@@ -1,5 +1,74 @@
 # Release verification
 
+## Release order (from 1.1.x on)
+
+Every update is installed and tested in the user's current Codex before it is
+released:
+
+1. Source checks: the plugin test suite and the native Workflow review.
+2. Build one candidate and install it into both Codex profiles, keeping a backup
+   of the previous version's files and settings.
+3. Prepare dependencies, restart the current Codex desktop app and open a new
+   chat. In that chat, `claude_environment(cwd, verify=false)` must report the
+   candidate `plugin_version`, and the connection must list all 12 tools. The
+   install inventory, a separately started stdio process and the version in
+   historical runs (`claude_status`) do not identify the current connection.
+4. Run the native acceptance in that chat: real Bash and Monitor background
+   waits, questions, update/interrupt, explicit final cleanup of a persistent
+   command, cancellation/deadline cleanup and the workbench single page.
+5. Only then finalize the external release notes and remove the candidate
+   README banner. Rebuild and verify the release plugin files and
+   `plugin_code_digest` still match the installed candidate; a runtime change
+   requires a new complete build version and another installed native test.
+   Tag, publish and verify the downloaded release only after this comparison.
+   If the current connection cannot be reloaded, stop at the installed
+   candidate and wait.
+
+For a profile currently pinned to Git, save its URL, fixed ref and plugin
+settings first. Copy the verified candidate package to a persistent local
+source, then use that profile's explicit `CODEX_HOME` with the desktop-bundled
+CLI: remove only `codex-claude-team`, add that candidate local marketplace, and
+add `codex-claude-orchestrator@codex-claude-team`. Preserve the old version cache,
+prepare the candidate dependencies and compare every installed plugin file
+with the candidate manifest. On failure restore the saved Git source/ref.
+After release, switch both profiles back to the published fixed ref and repeat
+the byte comparison; do not infer the second profile's live connection from
+the first profile's result.
+
+## Unreleased 1.1.1 candidate
+
+Full candidate version: `1.1.1+codex.20261026114625`. No release tag or public release exists yet.
+
+Background shell lifecycle (`BG_IDLE_EARLY_CLOSE`): in three native 1.1.0 runs
+the CLI reported `idle` while a Bash or Monitor background task still ran, and
+the supervisor stopped it and closed input before the follow-up turn that would
+have read its result; report and result were never written. The candidate keeps
+input open while a tracked background shell runs, treats an `idle` seen before
+that shell ended as stale, and stops leftover shells only after Claude's
+structured `{"type": "final", "after": "<id>"}` notes line. `after` must name
+the newest Codex update or redirect written to the session: the id in the latest
+update/interrupt header, the id stated at the end of a resumed message, or the
+run id before any. A bare interrupt ends the wait only while it is still the
+newest message.
+Cancellation and the deadline still end the run. Live interrupt redirects now
+carry the same `Codex 打断` label as resumed ones.
+
+Before forwarding a live answer, the candidate reads the existing notes backlog
+in bounded chunks while execution is held, so a pre-answer final in a later
+chunk cannot become effective after the answer. The same regression fails on
+the preceding R2 candidate and passes after this correction.
+
+Verified before installation: 211 Bridge tests without skips, 28 distribution
+tests, Ruff and strict Mypy for 14 modules passed on the host. The 80 plugin
+cases had one localhost test receive a system-proxy 502; that same case passed
+with a process-only NO_PROXY override. The original failure is retained.
+The native codex-analyze Workflow completed all seven stages; its findings
+were independently adjudicated. Targeted final checks cover the subsequent
+interrupt-refusal, visible-background-wait and documentation corrections.
+Not yet verified as of this candidate build: real CLI
+runs of the original scenarios, installation in either profile and native
+acceptance in the current Codex app.
+
 ## 1.1.0
 
 Full plugin version: `1.1.0+codex.20261025234436`. Release date: **2026-10-26**.
@@ -167,8 +236,11 @@ server version **1.1.0** and exactly **12 tools**, including `claude_reply` and
 state roots, made no model requests and did not create delegated tasks.
 
 Neither desktop app nor an already-open chat was restarted. Existing chats keep
-their loaded MCP connection; the user should open a new chat in each Codex to
-exercise the upgraded plugin. Actual user workflow acceptance is left to the
+their loaded MCP connection. A new chat is not guaranteed to load the upgraded
+plugin either: the desktop app can keep the MCP process it already started. In
+the later hands-on test the user restarted the app before rechecking; always
+confirm the `plugin_version` that `claude_environment` reports in the current
+chat before accepting. Actual user workflow acceptance is left to the
 user's requested hands-on testing.
 
 ## 1.0.1

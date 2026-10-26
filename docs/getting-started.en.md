@@ -77,7 +77,7 @@ If you already have a marketplace with this name, follow the [migration and roll
 
 ## Open a new task and check readiness
 
-After installation and dependency preparation, **open your project in Codex and start a new task** so the client loads the plugin. A task that was already open during installation does not switch to the new tools.
+After installation and dependency preparation, **open your project in Codex and start a new task**. A task that was already open during installation does not switch to the new tools. A new task does not always reload the plugin: Codex can keep using the plugin process it already started. After an upgrade, restart Codex, start a new task and ask Codex to run `claude_environment` with `verify=false`; check the `plugin_version` it reports for the current connection. If it is still the old version, quit Codex completely and restart it again.
 
 Ask Codex:
 

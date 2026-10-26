@@ -6,6 +6,7 @@ Run on the host (not inside another sandbox); it makes several small paid Claude
       python tools/host_acceptance.py --model haiku --out /tmp/cco-acceptance.json
 Every scenario uses a throwaway Git fixture and state root under a new temporary directory and
 records facts; model behaviour can vary, so a scenario reports what happened rather than retrying.
+This standalone source probe does not identify the plugin loaded in the current desktop chat.
 """
 from __future__ import annotations
 
@@ -44,7 +45,8 @@ def fixture(base: Path) -> Path:
 
 def packet(source: Path, task_id: str, text: str, chat: str, model: str, **extra: Any) -> dict[str, Any]:
     return {"task_id": task_id, "kind": "implement", "cwd": str(source), "model": model, "effort": "low",
-            "timeout_seconds": 600, "user_messages": [{"text": text, "source": "human"}],
+            "timeout_seconds": 600, "user_messages": [], "brief": text,
+            "no_user_words_reason": "Standalone synthetic host probe; scenario instructions are coordinator-authored.",
             "title": task_id.replace("-", " ").lower(), "context": {"chat": chat}, **extra}
 
 
@@ -121,7 +123,7 @@ def background_hold(runtime: Runtime, source: Path, model: str) -> dict[str, Any
 
 def agent_stop(runtime: Runtime, source: Path, model: str) -> dict[str, Any]:
     text = ("Do these in order. 1) Use the Agent tool with run_in_background=true and a general-purpose subagent whose task is: "
-            "'Run the Bash command `sleep 60` in the foreground, and only after it finishes write finished into agent.txt'. "
+            "'Use Monitor to wait until agent-release.signal exists, then write finished into agent.txt'. "
             "2) Without waiting for it, use AskUserQuestion to ask 'Proceed?' with options yes and no. 3) After the answer, write "
             "the answer into proceed.txt and reply DONE without waiting for the agent.")
     started = runtime.start(packet(source, "ACCEPT-AGENT", text, "accept-d", model))
@@ -138,7 +140,10 @@ def agent_stop(runtime: Runtime, source: Path, model: str) -> dict[str, Any]:
 
 
 def leftover_shell(runtime: Runtime, source: Path, model: str) -> dict[str, Any]:
-    text = "Use the Bash tool with run_in_background=true to run exactly: `sleep 900`. Do not wait for it. Then reply DONE."
+    text = ("Start a real loopback HTTP server with Bash run_in_background=true: "
+            "`python3 -m http.server 0 --bind 127.0.0.1`. Confirm that it started, then write the required "
+            "report and result. Leave the server for the supervisor to clean up: append the task brief's "
+            "structured final line using the current input id, then reply DONE.")
     began = time.monotonic()
     started = runtime.start(packet(source, "ACCEPT-SHELL", text, "accept-e", model))
     snapshot = drive(runtime, started["run_id"], "accept-e", lambda item: None)
