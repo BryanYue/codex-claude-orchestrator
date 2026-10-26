@@ -117,6 +117,32 @@ Existing abnormal-input limitations remain: a stop_task without acknowledgement
 can run until the overall deadline, and a notes JSONL line larger than 1 MiB blocks
 later lines. These were recorded as limitations, not counted as passing normal cases.
 
+
+### Published artifact and fixed-ref verification
+
+The released archive was built from commit
+`21e4d0cc155fe8017f30ae8197c7df72ef59de80`; the immutable `v1.1.1` tag points
+to that commit. The post-publication record on main does not move the tag.
+
+- Archive: `codex-claude-orchestrator-macos-1.1.1.zip`, 1,634,668 bytes.
+- Archive SHA-256:
+  `08391e866f461c4fbd3896a9823fadeab012fbb85d54f4ae5ff0807af2dfe433`.
+- Plugin code digest:
+  `22de45d139122a7f5026a929fa616b3ae2a44c383f61e6f390fd4224502a15d8`.
+- The ZIP, ZIP checksum, release manifest and file-hash manifest were downloaded
+  from the published GitHub release and matched the local build byte for byte.
+  Every ZIP entry was checked, including both generated manifests; private
+  research and raw session evidence are excluded.
+- Both Codex profiles were switched from the local candidate to the fixed Git
+  ref `v1.1.1`. Each fetched marketplace HEAD matched the tagged source commit;
+  each profile's 61 installed plugin files matched the tested candidate and
+  release. Dependencies were prepared, other plugin/settings values preserved,
+  and previous-version cache backups verified.
+- After the switch, the current chat's native environment still reported
+  `1.1.1+codex.20261026114625` and ready=true with all 12 tools. The second
+  profile's installation is verified separately from this current-chat runtime
+  result. There are no active runs left from this acceptance.
+
 ## 1.1.0
 
 Full plugin version: `1.1.0+codex.20261025234436`. Release date: **2026-10-26**.
