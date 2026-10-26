@@ -143,7 +143,33 @@ Assets: [macOS ZIP](https://github.com/BryanYue/codex-claude-orchestrator/releas
 The fixed tag and archive retain the pre-publication verification checkpoint.
 This documentation-only main-branch update records the subsequent build and
 remote-download evidence. It does not move the tag or replace its assets.
-Installation into the two existing live Codex profiles remains a separate stage.
+Installation acceptance for the two existing profiles is recorded below.
+
+### Installed-build acceptance in both Codex profiles (2026-10-26)
+
+At the user's request, both existing profiles (`~/.codex` and
+`~/.codex-company`) were upgraded from the Git ref `v1.0.1` to the fixed
+`v1.1.0` release. Each inventory reports the plugin installed and enabled at
+`1.1.0+codex.20261025234436`; each marketplace checkout resolves to release
+source `bfda3e885a18151edddaa1c57e86360add08caed`.
+
+All **61 installed plugin files in each profile** match the downloaded release
+manifest byte for byte. Existing plugin settings, 24 unrelated installed plugins
+in the default profile and 18 in the second profile were checked unchanged.
+Historical run registries were retained and checked unchanged. The previous
+version's code cache was retained for already-open connections.
+
+The new locked dependency environment was prepared separately for each profile.
+Fresh stdio MCP connections through each installed `scripts/launch.sh` reported
+server version **1.1.0** and exactly **12 tools**, including `claude_reply` and
+`claude_workbench`. Local Claude CLI readiness passed in both, using CLI
+**2.1.310** with working host execution checks. These probes used isolated
+state roots, made no model requests and did not create delegated tasks.
+
+Neither desktop app nor an already-open chat was restarted. Existing chats keep
+their loaded MCP connection; the user should open a new chat in each Codex to
+exercise the upgraded plugin. Actual user workflow acceptance is left to the
+user's requested hands-on testing.
 
 ## 1.0.1
 
