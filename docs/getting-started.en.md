@@ -16,7 +16,7 @@ Use a Mac and prepare the following:
 
 The plugin needs Python 3.11 or later. During dependency preparation, uv locates or downloads the required environment; the first download can take some time. Every task also uses macOS's built-in `/usr/bin/sandbox-exec` to protect your project directory; normally there is nothing extra to install. When it is unavailable (for example, when Codex itself runs inside another sandbox), the plugin refuses to start the task and says why. Intel Macs have not been separately verified.
 
-> **About versions:** This page targets `v1.1.0`, full build `1.1.0+codex.20261025234436`. For release status and verified coverage, see the [verification record](../RELEASE-VERIFICATION.md). Older release tags stay frozen, and a fixed ref does not advance to another tag by itself; use the [version-switching steps](git-marketplace.md#change-a-fixed-ref-or-migrate-from-zip). Upgrading from 1.0.x: existing tasks can be continued, and the Workbench may open automatically once per conversation, at the first 1.1 response. If you are upgrading from 0.7.x, read [Upgrading from 0.7.x](install-and-recovery.md#upgrading-from-07x) first: since 1.0, old tasks cannot be continued.
+> **About versions:** This page targets `v1.1.1`, full build `1.1.1+codex.20261026114625`. For release status and verified coverage, see the [verification record](../RELEASE-VERIFICATION.md). Older release tags stay frozen, and a fixed ref does not advance to another tag by itself; use the [version-switching steps](git-marketplace.md#change-a-fixed-ref-or-migrate-from-zip). Upgrading from 1.0.x: existing tasks can be continued, and the Workbench may open automatically once per conversation, at the first 1.1 response. If you are upgrading from 0.7.x, read [Upgrading from 0.7.x](install-and-recovery.md#upgrading-from-07x) first: since 1.0, old tasks cannot be continued.
 
 ## Install with help from Codex
 
@@ -25,7 +25,7 @@ Paste this request into an existing Codex conversation:
 ```text
 Help me install the Codex–Claude collaboration plugin:
 https://github.com/BryanYue/codex-claude-orchestrator
-Use the fixed v1.1.0 release through a Git marketplace.
+Use the fixed v1.1.1 release through a Git marketplace.
 
 First check that I have a Codex desktop app with plugin commands and uv.
 If codex is not on PATH, check for the CLI bundled with the desktop app.
@@ -55,7 +55,7 @@ codex plugin --help
 Then run these commands one at a time:
 
 ```bash
-codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v1.1.0
+codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v1.1.1
 codex plugin add codex-claude-orchestrator@codex-claude-team
 ```
 

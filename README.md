@@ -1,7 +1,5 @@
 # Codex–Claude 协作 · 1.1.1
 
-当前工作树为 **1.1.1 候选版**，尚未发布；先完成当前 Codex 的安装与原生验收。下列安装命令仍指向已发布的 1.1.0。
-
 **简体中文** · [English](README.en.md)
 
 <p align="center">
@@ -35,7 +33,7 @@
 | 看进度 | 工作台里随时看做到哪 |
 | 接着改 | 在原对话补充，下一轮接着做 |
 
-当前版本：[`v1.1.0`](https://github.com/BryanYue/codex-claude-orchestrator/releases/tag/v1.1.0) · [更新记录](CHANGELOG.md) · [验证记录](RELEASE-VERIFICATION.md)
+当前版本：[`v1.1.1`](https://github.com/BryanYue/codex-claude-orchestrator/releases/tag/v1.1.1) · [更新记录](CHANGELOG.md) · [验证记录](RELEASE-VERIFICATION.md)
 
 ## 开始使用
 
@@ -52,7 +50,7 @@
 在终端里依次执行：
 
 ```bash
-codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v1.1.0
+codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v1.1.1
 codex plugin add codex-claude-orchestrator@codex-claude-team
 ```
 
@@ -179,9 +177,9 @@ Claude 停下来等回答，这次执行的其他进程也一起暂停。Codex �
 
 ## 版本
 
-当前版本：[`v1.1.0`](https://github.com/BryanYue/codex-claude-orchestrator/releases/tag/v1.1.0)。
+当前版本：[`v1.1.1`](https://github.com/BryanYue/codex-claude-orchestrator/releases/tag/v1.1.1)。
 
-1.1.0 让 Codex 和 Claude 在任务进行中就能沟通：
+1.1.1 修复了等待后台 Bash/Monitor 结果时过早收口的问题，并已在当前 Codex 安装后通过原生验收。1.1 系列支持：
 
 - Claude 有严重问题时当场问，执行暂停到 Codex 回答。Codex 能答的直接答，涉及核心需求或超出授权的才问你。
 - 任务还在跑时，Codex 可以补充信息，或打断当前这一步改方向。每条回复都有回执。
@@ -190,7 +188,7 @@ Claude 停下来等回答，这次执行的其他进程也一起暂停。Codex �
 - Claude 使用 Claude Code 自带的全部工具，两种模式都靠 macOS 写保护保护你的项目。
 - 是否先列计划按任务复杂度决定，不再一律确认。
 
-1.1.0 能接着做 1.0.x 开始的任务。本版不包括 Go 重写、迁移到 Agent SDK、新的认证或计费方式和分布式调度。
+1.1.1 能接着做 1.0.x 开始的任务。本版不包括 Go 重写、迁移到 Agent SDK、新的认证或计费方式和分布式调度。
 
 [`v1.0.1`](https://github.com/BryanYue/codex-claude-orchestrator/releases/tag/v1.0.1)（2026-10-15）改进了工作台：
 

@@ -16,7 +16,7 @@
 
 插件需要 Python 3.11 或更新版本；稍后的依赖准备会由 uv 查找或下载所需环境，首次下载可能需要一些时间。每个任务都要用到 macOS 自带的 `/usr/bin/sandbox-exec` 来保护你的项目目录，一般无需另装。它不可用时（例如 Codex 运行在另一层沙箱里），插件会拒绝开工并说明原因。Intel Mac 尚未单独验证。
 
-> **关于版本：** 本页面向 `v1.1.0`，完整构建 `1.1.0+codex.20261025234436`；发布状态和已验证范围见[验证记录](../RELEASE-VERIFICATION.md)。旧版本标签保持冻结，固定 ref 不会自动跨标签升级，切换按[版本切换步骤](git-marketplace.md#change-a-fixed-ref-or-migrate-from-zip)操作。从 1.0.x 升级：已有任务可以接着做；每个对话第一次收到 1.1 的回复时，工作台可能自动打开一次。从 0.7.x 升级先看[升级说明（英文）](install-and-recovery.md#upgrading-from-07x)：1.0 起不能续接旧任务。
+> **关于版本：** 本页面向 `v1.1.1`，完整构建 `1.1.1+codex.20261026114625`；发布状态和已验证范围见[验证记录](../RELEASE-VERIFICATION.md)。旧版本标签保持冻结，固定 ref 不会自动跨标签升级，切换按[版本切换步骤](git-marketplace.md#change-a-fixed-ref-or-migrate-from-zip)操作。从 1.0.x 升级：已有任务可以接着做；每个对话第一次收到 1.1 的回复时，工作台可能自动打开一次。从 0.7.x 升级先看[升级说明（英文）](install-and-recovery.md#upgrading-from-07x)：1.0 起不能续接旧任务。
 
 ## 安装：可以让 Codex 帮你完成
 
@@ -25,7 +25,7 @@
 ```text
 请帮我安装 Codex–Claude 协作插件：
 https://github.com/BryanYue/codex-claude-orchestrator
-使用固定版本 v1.1.0，通过 Git marketplace 安装。
+使用固定版本 v1.1.1，通过 Git marketplace 安装。
 
 先检查本机是否有支持 plugin 命令的 Codex 桌面客户端，以及 uv。
 如果 PATH 中找不到 codex，请检查桌面应用内置的 CLI。
@@ -53,7 +53,7 @@ codex plugin --help
 然后依次执行：
 
 ```bash
-codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v1.1.0
+codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v1.1.1
 codex plugin add codex-claude-orchestrator@codex-claude-team
 ```
 

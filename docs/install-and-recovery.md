@@ -5,9 +5,11 @@ first-use preparation both share, upgrading from 1.0.x and 0.7.x and
 recovering from a failed source switch. See [git-marketplace.md](git-marketplace.md)
 for the Git-specific commands and identity, and
 [RELEASE-VERIFICATION.md](../RELEASE-VERIFICATION.md) for which of the steps
-below have actually been exercised. This documentation targets `v1.1.0`, build
-`1.1.0+codex.20261025234436`. Any install, upgrade or rollback takes effect
-only in a new MCP connection, i.e. a new Codex task.
+below have actually been exercised. This documentation targets `v1.1.1`, build
+`1.1.1+codex.20261026114625`. Any install, upgrade or rollback takes effect
+only in a fresh MCP connection. Fully quit and reopen Codex desktop after an update,
+then confirm the exact loaded version with `claude_environment(verify=false)`;
+creating a new task alone does not prove the old server was reloaded.
 
 Use the same `CODEX_HOME` as the desktop profile you intend to upgrade. Separate
 Codex profiles can keep independent marketplace refs and plugin caches; changing
@@ -132,7 +134,7 @@ are four independent things to get ready, in this order:
 
 1. **Let tasks still running under 1.0.x finish first.** This guide does not
    cover switching while a 1.0.x run is active.
-2. **Switch the source** to `v1.1.0` with the fixed-ref steps in
+2. **Switch the source** to `v1.1.1` with the fixed-ref steps in
    [git-marketplace.md](git-marketplace.md#change-a-fixed-ref-or-migrate-from-zip),
    or run the new package's `Install.command` for a ZIP install.
 3. **Prepare dependencies** for the new version (step 2 of the first-time

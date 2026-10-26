@@ -1,7 +1,5 @@
 # Codex–Claude Collaboration · 1.1.1
 
-This tree is the **1.1.1 candidate**, not yet released. Installation and native acceptance in the current Codex must finish first. The install commands below still target the published 1.1.0.
-
 [简体中文](README.md) · **English**
 
 <p align="center">
@@ -35,7 +33,7 @@ If you use both Codex and Claude, you probably move requirements, code and revie
 | Track progress | See where it stands in the Workbench |
 | Keep going | Add to the chat; the next round continues |
 
-Current release: [`v1.1.0`](https://github.com/BryanYue/codex-claude-orchestrator/releases/tag/v1.1.0) · [Changelog](CHANGELOG.md) · [Verification record](RELEASE-VERIFICATION.md)
+Current release: [`v1.1.1`](https://github.com/BryanYue/codex-claude-orchestrator/releases/tag/v1.1.1) · [Changelog](CHANGELOG.md) · [Verification record](RELEASE-VERIFICATION.md)
 
 ## Get started
 
@@ -52,7 +50,7 @@ The plugin targets macOS. Every task needs macOS's built-in `sandbox-exec` to pr
 Run these commands in your terminal, one at a time:
 
 ```bash
-codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v1.1.0
+codex plugin marketplace add https://github.com/BryanYue/codex-claude-orchestrator.git --ref v1.1.1
 codex plugin add codex-claude-orchestrator@codex-claude-team
 ```
 
@@ -179,9 +177,9 @@ Since 1.0, old 0.7 tasks are not compatible. Old run records stay in their origi
 
 ## Release
 
-Current release: [`v1.1.0`](https://github.com/BryanYue/codex-claude-orchestrator/releases/tag/v1.1.0).
+Current release: [`v1.1.1`](https://github.com/BryanYue/codex-claude-orchestrator/releases/tag/v1.1.1).
 
-1.1.0 lets Codex and Claude talk while a task is running:
+1.1.1 fixes premature closure while waiting for Bash/Monitor background results and passed native acceptance after installation in the current Codex. The 1.1 series supports:
 
 - Claude asks serious questions as they come up, and the run pauses until Codex answers. Codex answers what it can and asks you only about core requirements or decisions beyond its authority.
 - While the task runs, Codex can add information or interrupt the current step to redirect it. Every reply gets a receipt.
@@ -190,7 +188,7 @@ Current release: [`v1.1.0`](https://github.com/BryanYue/codex-claude-orchestrato
 - Claude uses Claude Code's full native tool set; both modes rely on macOS write protection to protect your project.
 - Planning first depends on the task's complexity instead of a confirmation every time.
 
-1.1.0 can continue tasks started with 1.0.x. This release does not include a Go rewrite, a move to the Agent SDK, new authentication or billing arrangements, or a distributed scheduler.
+1.1.1 can continue tasks started with 1.0.x. This release does not include a Go rewrite, a move to the Agent SDK, new authentication or billing arrangements, or a distributed scheduler.
 
 [`v1.0.1`](https://github.com/BryanYue/codex-claude-orchestrator/releases/tag/v1.0.1) (2026-10-15) improved the Workbench:
 

@@ -8,8 +8,8 @@ released:
 1. Source checks: the plugin test suite and the native Workflow review.
 2. Build one candidate and install it into both Codex profiles, keeping a backup
    of the previous version's files and settings.
-3. Prepare dependencies, restart the current Codex desktop app and open a new
-   chat. In that chat, `claude_environment(cwd, verify=false)` must report the
+3. Prepare dependencies, fully quit and reopen the current Codex desktop app, then return to the
+   acceptance chat. In that chat, `claude_environment(cwd, verify=false)` must report the
    candidate `plugin_version`, and the connection must list all 12 tools. The
    install inventory, a separately started stdio process and the version in
    historical runs (`claude_status`) do not identify the current connection.
@@ -35,9 +35,12 @@ After release, switch both profiles back to the published fixed ref and repeat
 the byte comparison; do not infer the second profile's live connection from
 the first profile's result.
 
-## Unreleased 1.1.1 candidate
+## 1.1.1
 
-Full candidate version: `1.1.1+codex.20261026114625`. No release tag or public release exists yet.
+Full plugin version: `1.1.1+codex.20261026114625`. Release date: **2026-10-26**.
+Fixed release ref: `v1.1.1`. The archive manifest records its exact source commit.
+The runtime tested below is the installed candidate; release promotion changes
+only external documentation and verifies every plugin file remains identical.
 
 Background shell lifecycle (`BG_IDLE_EARLY_CLOSE`): in three native 1.1.0 runs
 the CLI reported `idle` while a Bash or Monitor background task still ran, and
@@ -65,9 +68,54 @@ with a process-only NO_PROXY override. The original failure is retained.
 The native codex-analyze Workflow completed all seven stages; its findings
 were independently adjudicated. Targeted final checks cover the subsequent
 interrupt-refusal, visible-background-wait and documentation corrections.
-Not yet verified as of this candidate build: real CLI
-runs of the original scenarios, installation in either profile and native
-acceptance in the current Codex app.
+### Installed current-desktop native acceptance (2026-10-26)
+
+Both Codex profiles were installed before publication. After the current desktop
+was fully restarted, its own native `claude_environment(verify=false)` reported
+the exact version above; all 12 tools were present. The tests used that connection,
+Claude CLI 2.1.310, actual `claude-haiku-5-5`, native tools and `auto` permissions.
+A separately launched MCP process was not used as a substitute.
+
+| Scenario | Independently checked evidence |
+| --- | --- |
+| Monitor background wait | Partial report/result existed before the wait. The CLI returned a result and `idle`, while the run stayed active with `waiting_background`; natural completion was consumed into a real file containing the new plan and an unpredictable worker output |
+| Blocking question and Bash background wait | Codex answered the actual native question with B; the real answer file contained B. An update changed the plan while Bash was still running; after Claude's update-applied note, the coordinator released the condition. Claude read stdout and wrote both new values into actual files before input closed |
+| Interrupt redirect | A real long-running search was stopped by native interrupt; the same run continued with the coordinator's redirect and wrote the requested acknowledgement. The CLI confirmed the old task stopped |
+| Persistent service cleanup | A real loopback HTTP service returned HTTP 200 and the expected body. Claude declared final; the supervisor called native stop_task, the process disappeared, and the port refused connections. The run ended before its deadline |
+| Cancellation | A real Monitor stayed active after idle until Codex cancelled it. The outcome was cancelled, partial artifacts were retained, and the worker process was confirmed absent |
+| Deadline | A real Monitor stayed alive after idle and before the deadline. At the deadline the outcome became timeout, partial artifacts were retained, and the worker process was confirmed absent |
+| Page-opening persistence | Six starts across four tasks in the same chat all returned link_only using the existing opening reservation after the MCP restart. No new host open was called; actual IAB tab count stayed 0 after the desktop restart. Earlier 1.1.0 acceptance separately observed one actual page across seven starts |
+
+The five launched scenarios matched their expected outcomes; one earlier attempt
+was not started because a completed historical Workflow copy contained external
+Git hardlinks. The completed copy was removed through the official cleanup tool,
+retaining its reports, patches, stream and decisions; the retry launched normally.
+No runtime change or write-boundary relaxation was made for that environment repair.
+
+For every launched run, report, result, delivery patch, outcome and execution were
+read to EOF and SHA-256 checked against disk. Actual output files, unchanged fixture
+source, nonempty patch applicability, command receipts and process termination were
+checked separately. Empty patches require no apply operation. Every run was decided.
+No fixture patch was applied to the product repository.
+
+The Monitor controller released its condition after the update was written, but
+before Claude's update-applied note: its initial text match had also matched the
+coordinator's own message. That deviation is retained; the Bash case used a precise
+Claude-note match and verified the intended note-before-release sequence. Receipts
+for answer, update and interrupt were echoed; replaying each command ID returned
+duplicate=true without resending.
+
+Both profiles' 61 installed plugin files matched the built candidate. Live native
+behavior was tested in the current profile; this does not claim a simultaneous UI
+run in the second profile. The previously published release cache was preserved in
+a persistent backup and restored after host CLI cache pruning. This safeguard was
+part of the operational update procedure, not a new behavior of Install.command.
+The full native Workflow review and bounded independent state reviews described
+above were completed before this installation; no runtime edits followed them.
+
+Existing abnormal-input limitations remain: a stop_task without acknowledgement
+can run until the overall deadline, and a notes JSONL line larger than 1 MiB blocks
+later lines. These were recorded as limitations, not counted as passing normal cases.
 
 ## 1.1.0
 
